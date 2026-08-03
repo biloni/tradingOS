@@ -21,7 +21,7 @@ every phase follows.
 - [x] Verification workflow run end-to-end, docs/TEST_EVIDENCE.md filled in
 - [x] Phase 1 checkpoint commit (`0a2644d`)
 
-## Phase 2 — Data Ingestion & Indicators (current)
+## Phase 2 — Data Ingestion & Indicators
 
 - [x] Concrete `AlpacaMarketDataProvider` implementing `MarketDataProvider`
 - [x] `Symbol`, `PriceBar`, `Indicator` SQLAlchemy models + first Alembic
@@ -39,14 +39,30 @@ every phase follows.
 - [x] Live verification: real Alpaca keys provided, ingestion run against
       real data (30 symbols, 14,970 price bars, 171,270 indicator rows),
       endpoints hit and confirmed returning real data
-- [ ] Phase 2 checkpoint commit
+- [x] Phase 2 checkpoint commit (`c2caa4c`)
 
-## Phase 3 — Paper Portfolio & Trade Tracking
+## Phase 3 — Paper Portfolio & Trade Tracking (current)
 
-- [ ] Concrete `AlpacaPaperBrokerProvider`
-- [ ] `PaperPortfolio`, `PaperPosition`, `PaperOrder` models + migration
-- [ ] Order submission flow with human confirmation before any order fires
-- [ ] Reconciliation against Alpaca's own paper-account position report
+- [x] Concrete `AlpacaPaperBrokerProvider` (submit, status refresh, cancel,
+      get positions — the status-refresh method was added mid-phase after
+      live testing showed fills are asynchronous, ADR-016)
+- [x] `PaperPortfolio`, `PaperOrder` models + migration (`6fa6b9fd2ff4`).
+      `PaperPosition` is a derived view, not a table (ADR-013)
+- [x] Two-step propose → confirm order flow with human confirmation before
+      anything reaches Alpaca (ADR-014); capital/position sufficiency
+      validated at both steps (principle 1)
+- [x] `AuditEvent` audit trail introduced (ADR-015), written on every
+      propose/confirm/refresh/cancel
+- [x] Reconciliation endpoint (`GET /api/v1/portfolio/reconciliation`)
+      against Alpaca's own paper-account position report
+- [x] 17 new tests (provider mapping, order-flow validation, propose→confirm
+      happy path, double-confirm rejection, async-fill catch-up, cancel,
+      reconciliation match/mismatch) — 40/40 passing, no live API required
+- [x] Live verification: proposed + confirmed a real 1-share SPY paper
+      order, caught its asynchronous fill via `/refresh`, confirmed
+      portfolio cash/position and reconciliation reflect the real Alpaca
+      paper account exactly (see docs/TEST_EVIDENCE.md)
+- [ ] Phase 3 checkpoint commit
 
 ## Phase 4 — Scoring Engine & LLM Synthesis
 

@@ -249,3 +249,107 @@ already handled by bumping `FORMULA_VERSION`).
 **Consequences.** Re-running the ingestion script against unchanged price
 history is a safe no-op for indicators (verified: second run reported 0 new
 rows) — the same run does still insert new `PriceBar` rows per ADR-011.
+
+---
+
+## ADR-013: `PaperPosition` is a derived view, not a table; cost basis is a
+simple weighted average, not FIFO/LIFO tax lots
+
+**Context.** Phase 3 needed to decide how "current holdings" are represented
+— a persisted table updated alongside orders, or computed on read.
+
+**Decision.** No `PaperPosition` table. `services/portfolio.py`'s
+`get_derived_positions()` computes net quantity and a weighted-average entry
+price from filled `PaperOrder` rows, on every read. Same reasoning as
+`PriceBar`/`get_latest_price_bars()` (ADR-011): a derived value can't drift
+out of sync with the events that produce it, because it's never stored
+independently of them.
+
+**Alternatives considered.** A `PaperPosition` table updated transactionally
+alongside each fill (rejected: two sources of truth that can diverge is
+exactly the bug class `get_latest_price_bars()` was designed to avoid).
+FIFO/LIFO tax-lot cost-basis accounting (rejected for MVP scope: a simple
+weighted average across BUY fills is enough to show P&L direction; lot-level
+accounting matters for tax reporting, which is out of scope for a paper-
+trading decision-support tool).
+
+**Consequences.** `docs/DATA_DICTIONARY.md`'s `PaperPosition` entry is
+annotated as derived, not dropped — it's still a real concept in the system,
+just not its own storage. No short selling is allowed in this MVP (a SELL
+can't exceed the derived held quantity) — simpler than modeling margin/short
+positions, and matches typical retail cash-account behavior.
+
+---
+
+## ADR-014: Two-step propose-then-confirm order flow
+
+**Context.** Principle 11 requires human confirmation immediately before any
+order-placing action — not just for live trading (which doesn't exist in
+this app) but as this app's whole design philosophy: decision-support, not
+autonomous action.
+
+**Decision.** `POST /api/v1/paper-orders` only validates and records a
+`DRAFT` row — nothing reaches Alpaca. `POST /api/v1/paper-orders/{id}/confirm`
+is the sole action that calls `AlpacaPaperBrokerProvider.submit_paper_order()`,
+and only operates on a `DRAFT` order (not retriable once it has moved past
+that state).
+
+**Alternatives considered.** A single `POST` that both validates and submits
+(rejected: collapses proposal and action into one step, which is exactly
+what principle 11 says not to do).
+
+**Consequences.** A future UI's "Buy"/"Sell" button maps to `propose`; its
+"Confirm" button maps to `confirm`. Capital/position sufficiency is
+re-validated at both steps (prices/positions can move between propose and
+confirm).
+
+---
+
+## ADR-015: `AuditEvent` — generic, untyped `ref_id`, introduced this phase
+
+**Context.** Principle 9 requires an audit trail for every user action,
+order, and override. Phase 3 is the first phase with real user actions to
+audit (propose/confirm/refresh/cancel a paper order).
+
+**Decision.** One `audit_events` table: `record_type` (string) + `ref_id`
+(plain integer, no FK) + `snapshot` (JSON) + `created_at`, written only
+through `services/audit.py`'s `record_audit_event()`. `ref_id` is untyped
+because a single audit log spans many different entity types over the
+life of the app — a column can't FK to more than one target table.
+
+**Alternatives considered.** A separate audit table per entity type
+(rejected: multiplies migrations/models for a cross-cutting concern that's
+conceptually one thing — "what happened and when").
+
+**Consequences.** Querying "all audit events for order 42" is
+`WHERE record_type = 'PAPER_ORDER_...' AND ref_id = 42` rather than a typed
+join — an accepted tradeoff for a generic audit log.
+
+---
+
+## ADR-016: Explicit order-status refresh, not a webhook/polling daemon
+
+**Context.** Live-verified against the real Alpaca paper API (see
+docs/TEST_EVIDENCE.md): a submitted market order's immediate response
+reported status `new` (not yet filled); the actual fill landed about 0.8s
+later. `submit_paper_order()`'s response alone is therefore not reliable
+for capturing the final fill — this is normal broker behavior, not an edge
+case, and the original Phase 3 plan hadn't accounted for it.
+
+**Decision.** `PaperBrokerProvider` gained a fourth method,
+`get_paper_order_status()`. `confirm` does one immediate re-check right
+after submission (catches the common same-cycle fill case observed in
+testing). A new `POST /api/v1/paper-orders/{id}/refresh` endpoint re-syncs
+status/fill fields for any order still `SUBMITTED`/`PARTIALLY_FILLED` later.
+
+**Alternatives considered.** A background poller or Alpaca's websocket
+trade-updates stream (rejected for this phase: real scheduler/background-job
+infrastructure, deferred per the same reasoning as ADR-006 — no demonstrated
+need for automatic polling yet when an explicit refresh action covers the
+MVP's manual/API-driven usage). Blocking `confirm` with a longer retry loop
+(rejected: an HTTP request shouldn't block for an unbounded, market-dependent
+amount of time — a limit order might not fill for hours).
+
+**Consequences.** A future UI polling `/refresh` for open orders (or a
+proper websocket subscription) is the natural next step once there's a
+UI to drive it — not built now, since there's no UI yet (Phase 7).

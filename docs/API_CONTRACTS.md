@@ -76,13 +76,94 @@ computed for that one date (up to 12 rows — one per `IndicatorName`).
 `[]` (not 404) if the symbol exists but has no indicators computed yet for
 the requested/default date.
 
-## Phase 3+ (not yet implemented)
+## `POST /api/v1/paper-orders`
 
-This section will grow with each phase. Planned surface, for forward
-reference only (none of this exists yet, no schemas defined):
+Step 1 of 2 (ADR-014, principle 11) — proposes a `DRAFT` order. **Nothing is
+sent to Alpaca.** Validates capital sufficiency (BUY) or held-quantity
+sufficiency (SELL, no shorting).
+
+**Request body**
+```json
+{"ticker": "SPY", "side": "BUY", "quantity": 1, "order_type": "MARKET", "limit_price": null}
+```
+
+**Response `201`** — a `DRAFT` order (see `GET .../{id}` below for the full shape).
+
+**Response `400`** — insufficient cash/position, with a plain-English `detail`.
+**Response `404`** — unknown `ticker`.
+
+## `POST /api/v1/paper-orders/{id}/confirm`
+
+Step 2 of 2 (ADR-014) — the explicit human-confirmation action. Only a
+`DRAFT` order can be confirmed. Re-validates capital/position immediately
+before submitting (prices/positions may have moved since propose), then
+calls `AlpacaPaperBrokerProvider.submit_paper_order()`. Since fills are
+asynchronous (ADR-016 — confirmed live against a real order), this also
+does one immediate re-check if the submit response isn't yet terminal.
+
+**Response `200`**
+```json
+{
+  "id": 1, "portfolio_id": 1, "ticker": "SPY", "side": "BUY", "quantity": 1,
+  "filled_quantity": 1, "order_type": "MARKET", "limit_price": null,
+  "status": "FILLED", "broker_order_id": "cc95fe9c-...",
+  "filled_avg_price": "754.920000", "filled_at": "2026-08-03T07:54:56.905294-07:00",
+  "submitted_at": "2026-08-03T07:54:56.101910-07:00", "created_at": "2026-08-03T07:54:43.912262-07:00"
+}
+```
+
+**Response `400`** — order isn't `DRAFT` (already confirmed, or canceled),
+or capital/position no longer sufficient.
+
+## `POST /api/v1/paper-orders/{id}/refresh`
+
+Re-syncs status/fill fields from Alpaca for an order still
+`SUBMITTED`/`PARTIALLY_FILLED` (ADR-016). A future UI would poll this for
+any open order.
+
+**Response `200`** — the updated order (same shape as `confirm`).
+**Response `400`** — order is already terminal (`FILLED`/`CANCELED`/`REJECTED`),
+or has no `broker_order_id` yet.
+
+## `POST /api/v1/paper-orders/{id}/cancel`
+
+Cancels a `DRAFT` locally, or a `SUBMITTED` order via Alpaca's cancel
+endpoint. **Response `400`** if the order is already terminal.
+
+## `GET /api/v1/paper-orders` / `GET /api/v1/paper-orders/{id}`
+
+List / detail. Same shape as `confirm`'s response.
+
+## `GET /api/v1/portfolio`
+
+**Response `200`**
+```json
+{
+  "cash_usd": "9245.080000",
+  "positions": [
+    {"ticker": "SPY", "quantity": 1, "avg_entry_price": "754.920000",
+     "current_price": "747.030000", "market_value": "747.030000", "unrealized_pl": "-7.890000"}
+  ],
+  "total_market_value": "747.030000", "total_equity": "9992.110000"
+}
+```
+`current_price` comes from Phase 2's `get_latest_price_bars()` — the most
+recent daily close, not a live quote (this app doesn't do intraday).
+
+## `GET /api/v1/portfolio/reconciliation`
+
+Phase 3's explicit reconciliation deliverable — our derived positions vs.
+Alpaca's own paper-account position report.
+
+**Response `200`**
+```json
+[{"ticker": "SPY", "our_quantity": 1, "alpaca_quantity": "1", "discrepancy": "0"}]
+```
+A nonzero `discrepancy` means something diverged between our fill records
+and Alpaca's book — worth investigating, not expected in normal operation.
+
+## Phase 4+ (not yet implemented)
 
 - `POST /api/v1/recommendations/query` — the tool-use NL query entrypoint
   (Phase 4)
-- `POST /api/v1/paper-orders` — submit a paper order (Phase 3)
-- `GET /api/v1/portfolio` — current paper portfolio snapshot (Phase 3)
 - `POST /api/v1/backtests` — run a backtest (Phase 5)

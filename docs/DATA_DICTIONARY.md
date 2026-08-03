@@ -63,30 +63,42 @@ explicit approval before a new version activates (principle 16).
 `requestPayload`, `responsePayload`, `createdAt`. Every LLM call is logged
 here for cost tracking and auditability (principle 8/9) — no exceptions.
 
-## Transactions (user decisions — Phase 3)
+## Transactions (user decisions — **implemented, Phase 3**)
 
 ### PaperPortfolio
-One row per configurable paper portfolio. `startingCashUsd` (default 10,000),
-`currentCashUsd` (derived), `createdAt`.
+`apps/api/src/tradingos_api/models/paper_portfolio.py`. One row (the MVP has
+exactly one, lazily created — ADR-013). `starting_cash_usd`
+(`Numeric(18,2)`, default 10,000.00), `created_at`. Current cash is **never**
+stored — `services/portfolio.py`'s `get_derived_cash()` computes it from
+`starting_cash_usd` plus/minus every filled `PaperOrder`.
 
 ### PaperPosition
-Current holdings, derived from the sum of filled `PaperOrder` rows for a
-symbol — never hand-edited, always recomputable (mirrors the "current state
-is a derived view over immutable events" pattern used elsewhere in this
-project's design language).
+**Not a table** (ADR-013). `services/portfolio.py`'s `get_derived_positions()`
+computes net quantity and a weighted-average entry price (not FIFO/LIFO tax
+lots — a documented MVP simplification) from filled `PaperOrder` rows, on
+every read — mirrors the "current state is a derived view" pattern already
+used for `PriceBar` (ADR-011).
 
-### PaperOrder / Trade
-The user's actual paper-trading activity. `symbol`, `side`, `quantity`,
-`orderType`, `limitPrice?`, `brokerOrderId` (from Alpaca's paper API),
-`status`, `filledAvgPrice?`, `filledAt?`, `linkedRecommendationId?` (so
-performance can be traced back to the recommendation that prompted it, or
-null if the user placed it independently).
+### PaperOrder
+`apps/api/src/tradingos_api/models/paper_order.py`. The user's actual
+paper-trading activity. `portfolio_id`, `symbol_id`, `side` (BUY|SELL),
+`quantity`, `order_type` (MARKET|LIMIT), `limit_price?`, `status` (DRAFT →
+SUBMITTED → FILLED/PARTIALLY_FILLED/CANCELED/REJECTED — ADR-014),
+`filled_quantity` (separate from `quantity` to correctly represent a
+partial fill), `broker_order_id` (Alpaca's own order id, set only after
+`confirm`), `filled_avg_price?`, `filled_at?`, `submitted_at?`,
+`created_at`. `linked_recommendation_id` is intentionally **not** a column
+yet — `Recommendation` doesn't exist until Phase 4; it lands then, alongside
+the entity it actually references.
 
-### AuditEvent (the audit trail — principle 9)
-`recordType`, `refId`, `snapshot (JSON)`, `createdAt`. Written for every
-recommendation, score, input snapshot, prompt version, model response, user
-action, order, and override. Append-only; nothing here is ever updated or
-deleted.
+### AuditEvent (the audit trail — principle 9 — **implemented, Phase 3**)
+`apps/api/src/tradingos_api/models/audit_event.py`. `record_type`, `ref_id`
+(plain integer, not a FK — ADR-015), `snapshot` (JSON — native `JSONB` on
+Postgres, portable `JSON` elsewhere via SQLAlchemy's dialect-variant
+pattern, so in-memory SQLite tests still work), `created_at`. Written only
+through `services/audit.py`'s `record_audit_event()`, for every paper-order
+propose/confirm/refresh/cancel so far. Append-only; nothing here is ever
+updated or deleted.
 
 ## Backtesting (Phase 5)
 
