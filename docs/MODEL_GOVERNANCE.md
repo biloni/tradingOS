@@ -1,37 +1,44 @@
 # Model Governance
 
-No LLM code exists yet (that's Phase 4). This document is written now, as
-binding policy, so the rules exist before the first line of LLM integration
-code is written — not retrofitted after the fact.
+This document was written as binding policy before the first line of LLM
+integration code existed (Phase 1), and is updated here (Phase 4) to record
+how each policy actually landed in code — nothing below was retrofitted
+after the fact to match whatever got built.
 
 ## Tool-use, not text-to-SQL
 
-The `LLMProvider` interface (apps/api/src/tradingos_api/providers/llm.py)
-returns typed `LLMToolCall` objects with a `tool_name` and validated
-`arguments`, never a raw string the caller would parse as a query. When
-Phase 4 implements this against Anthropic's API, the model will be given a
-small, fixed set of typed tools (query workers/positions/scores — the
-trading-domain equivalent of `query_workers`/`get_headcount_summary` style
-tools from comparable systems) and will never have direct database access or
-the ability to execute arbitrary SQL.
+**Implemented.** The `LLMProvider` interface
+(`apps/api/src/tradingos_api/providers/llm.py`) returns typed `LLMToolCall`
+objects with a `tool_name` and validated `arguments`, never a raw string the
+caller would parse as a query. `services/llm_tools.py` defines 5 typed
+tools (`query_symbols`, `get_price_summary`, `get_indicators`,
+`get_recommendations`, `compute_recommendation`) as an explicit allow-list
+(`_ARG_MODELS`/`_HANDLERS`) — a tool name outside that list raises
+`UnknownToolError`, and every tool's arguments are validated against a
+pydantic model before any DB access happens (`execute_tool()`). The model
+has no direct database access and no path to execute arbitrary SQL.
 
 ## Grounding
 
-The system prompt instructs the model to answer only from tool results
-returned to it and to explicitly say when data is missing, stale, or
-conflicting rather than filling the gap — mirroring principle 4/5 at the
-prompt level, not just the code level.
+**Implemented.** `services/ask.py`'s `SYSTEM_PROMPT` instructs the model:
+never estimate/recall/guess a number, always call a tool for any figure it
+states, say plainly when a tool returns an error or no data rather than
+filling the gap, and never state its own confidence level. This mirrors
+principle 4/5 at the prompt level, not just the code level.
 
 ## Confidence is not a probability until it's calibrated
 
-Per principle 15: an LLM's self-reported confidence (e.g., "I'm 80% sure")
-is never presented to the user as a calibrated probability. Before any
-confidence number is surfaced as if it were one, it must be derived from
-historical outcome tracking (did recommendations at a given confidence level
-actually perform as that confidence implied, over a real sample of
-completed trades). Until enough history exists to calibrate against, the
-UI shows qualitative confidence bands or the raw rationale, not a percentage
-framed as a probability.
+**Implemented.** Per principle 15: an LLM's self-reported confidence (e.g.,
+"I'm 80% sure") is never presented to the user as a calibrated probability.
+`services/scoring.py`'s `_confidence_from_signals()` computes a qualitative
+`LOW`/`MEDIUM`/`HIGH` band purely from how many of the 4 signals agree in
+direction (net agreement, no LLM call involved) — this is what
+`Recommendation.confidence` stores. `services/ask.py`'s system prompt
+explicitly instructs the model never to state its own confidence level.
+Historical-outcome-based calibration (did a given confidence band's
+recommendations actually pan out) needs completed trade history, which
+doesn't exist yet — deferred to Phase 5+ (backtesting) before any number is
+ever framed as a calibrated probability.
 
 ## Strategy changes require review, not auto-activation
 
@@ -44,11 +51,14 @@ approval step.
 
 ## Cost and prompt versioning
 
-Every LLM call is logged (`LLMCallLog` — docs/DATA_DICTIONARY.md) with the
-exact prompt version used, token counts, and cost. Prompt text itself is
-versioned (not just referenced by a mutable "latest"), so a past
-recommendation can always be traced back to the exact prompt that produced
-it.
+**Implemented.** Every LLM call is logged (`LLMCallLog` —
+docs/DATA_DICTIONARY.md) via `services/ask.py`'s `_log_call()`, with the
+exact `prompt_version` (`services/ask.py`'s `PROMPT_VERSION = "ask-v1"`),
+token counts, and cost (`services/llm_cost.py`'s `estimate_cost_usd()`,
+using a documented per-token pricing constant verified against the
+`claude-api` skill — see ADR-017). `Recommendation.prompt_version` is
+likewise versioned, so a past recommendation can always be traced back to
+the exact prompt that produced it.
 
 ## Responsible use for HR/individual-risk-style inferences
 
@@ -61,5 +71,14 @@ about the user.
 
 ## Rate limiting
 
-The NL query endpoint (Phase 4) will be rate-limited server-side to bound
-both cost and the blast radius of any single runaway client loop.
+**Implemented.** `POST /api/v1/ask` (`routers/ask.py`) is rate-limited via
+`core/rate_limit.py`'s in-process `TokenBucketRateLimiter` (ADR-021) — a
+5-request burst, 5/min steady-state refill — to bound both Anthropic spend
+and the blast radius of a runaway client loop. Exceeding it returns `429`.
+
+## Tool-call budget
+
+**Implemented.** `services/ask.py`'s tool-use orchestration loop is capped
+at `MAX_ITERATIONS = 5` Anthropic calls per `/api/v1/ask` request (ADR-019)
+— an unbounded or adversarial tool-call sequence can't run indefinitely or
+burn unbounded spend on a single request.

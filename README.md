@@ -11,7 +11,7 @@ unreviewed autonomous trading bot.** See [PROJECT_INSTRUCTIONS.md](PROJECT_INSTR
 for the full set of non-negotiable product principles, and
 [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md) for MVP scope.
 
-**Current status:** Phase 1 (Foundations & Architecture) — see
+**Current status:** Phase 4 (Scoring Engine & LLM Synthesis) — see
 [docs/STATUS.md](docs/STATUS.md).
 
 ## Stack
@@ -94,12 +94,19 @@ pnpm lint && pnpm typecheck && pnpm test
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | How to use the app (grows each phase) |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | Pinned versions, verified against live registries |
 
-## Known limitations (Phase 1)
+## Known limitations (as of Phase 4)
 
-- No trading features yet — this phase is scaffolding only.
+- No UI yet — every feature through Phase 4 (ingestion, indicators, paper
+  trading, scoring, NL query) is API-only; the Next.js frontend is
+  scaffolding pending Phase 7.
 - No live-order capability exists anywhere in the codebase, by design
   (principle 10) — this isn't a flag waiting to be flipped, it doesn't exist.
 - No auth/multi-user support ([ADR-007](docs/DECISIONS.md)) — single-user
   personal tool.
 - Docker Compose path for Postgres is documented but not the primary path on
   the current dev machine ([ADR-008](docs/DECISIONS.md)).
+- No historical-outcome-based confidence calibration yet — needs completed
+  trade history from backtesting (Phase 5) before any confidence number is
+  framed as a probability ([docs/MODEL_GOVERNANCE.md](docs/MODEL_GOVERNANCE.md)).
+- `/api/v1/ask` is stateless per request — no persisted multi-turn
+  conversation history yet ([ADR-019](docs/DECISIONS.md)).

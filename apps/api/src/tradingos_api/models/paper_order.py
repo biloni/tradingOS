@@ -35,9 +35,7 @@ class PaperOrderStatus(StrEnum):
 
 class PaperOrder(Base):
     """The user's actual paper-trading activity (principle 9: an audited
-    user action). Note the absence of a "linked_recommendation_id" column —
-    `Recommendation` doesn't exist until Phase 4; that FK lands then, not as
-    a column with no referent today.
+    user action).
 
     `PaperPosition` is *not* a table (see docs/DATA_DICTIONARY.md /
     ADR-013) — current holdings are derived from the sum of this table's
@@ -71,3 +69,9 @@ class PaperOrder(Base):
     filled_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+
+    # Added Phase 4, now that Recommendation exists. Null when the user
+    # placed the order independently of any /api/v1/ask-generated analysis.
+    linked_recommendation_id: Mapped[int | None] = mapped_column(
+        sa.ForeignKey("recommendations.id"), nullable=True
+    )

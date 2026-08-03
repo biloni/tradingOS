@@ -46,10 +46,12 @@
 
 - Server-side only; the model never receives raw DB credentials or executes
   SQL directly (tool-use pattern, not text-to-SQL).
-- Tool allow-list with schema-validated parameters (Phase 4).
+- Tool allow-list with schema-validated parameters — **implemented,
+  Phase 4** (`services/llm_tools.py`).
 - Responses grounded in tool results only — the system prompt instructs the
   model to refuse to speculate beyond what tools returned (principle 4/7).
-- Rate-limited endpoint (Phase 4, when the endpoint exists).
+- Rate-limited endpoint — **implemented, Phase 4**
+  (`POST /api/v1/ask`, `core/rate_limit.py`).
 
 ## Local dev environment note
 

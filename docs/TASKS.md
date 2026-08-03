@@ -41,7 +41,7 @@ every phase follows.
       endpoints hit and confirmed returning real data
 - [x] Phase 2 checkpoint commit (`c2caa4c`)
 
-## Phase 3 — Paper Portfolio & Trade Tracking (current)
+## Phase 3 — Paper Portfolio & Trade Tracking
 
 - [x] Concrete `AlpacaPaperBrokerProvider` (submit, status refresh, cancel,
       get positions — the status-refresh method was added mid-phase after
@@ -62,17 +62,34 @@ every phase follows.
       order, caught its asynchronous fill via `/refresh`, confirmed
       portfolio cash/position and reconciliation reflect the real Alpaca
       paper account exactly (see docs/TEST_EVIDENCE.md)
-- [ ] Phase 3 checkpoint commit
+- [x] Phase 3 checkpoint commit (`811c5bd`)
 
-## Phase 4 — Scoring Engine & LLM Synthesis
+## Phase 4 — Scoring Engine & LLM Synthesis (current)
 
-- [ ] Concrete `AnthropicLLMProvider`
-- [ ] Deterministic scoring formulas (configurable, versioned per principle 8)
-- [ ] `Recommendation`, `StrategyVersion`, `LLMCallLog` models + migration
-- [ ] Tool-use NL query endpoint with a schema-validated tool allow-list
-- [ ] Prompt versioning + cost tracking wired to `LLMCallLog`
-- [ ] Confidence calibration approach documented before any confidence number
-      is surfaced as if it were a probability (principle 15)
+- [x] Concrete `AnthropicLLMProvider` (`claude-sonnet-5`, verified via the
+      `claude-api` skill — ADR-017)
+- [x] Deterministic scoring formulas (configurable via `StrategyVersion.config`,
+      versioned per principle 8 — `services/scoring.py`)
+- [x] `StrategyVersion`, `Recommendation`, `LLMCallLog` models + migration
+      (`cd811cf4102b`), plus `PaperOrder.linked_recommendation_id`
+- [x] Tool-use NL query endpoint (`POST /api/v1/ask`) with a
+      schema-validated tool allow-list (`services/llm_tools.py`, 5 typed
+      tools) — `compute_recommendation` is the one deliberate exception to
+      side-effect-free (ADR-018)
+- [x] Prompt versioning + cost tracking wired to `LLMCallLog`
+      (`services/ask.py`, `services/llm_cost.py`)
+- [x] Confidence calibration approach documented (docs/MODEL_GOVERNANCE.md)
+      before any confidence number is surfaced as if it were a probability
+      (principle 15) — bands are deterministic signal-agreement counts, not
+      the LLM's self-report
+- [x] In-process rate limiting (`core/rate_limit.py`, ADR-021) and a 5-call
+      tool-use iteration cap (ADR-019)
+- [x] 31 new tests this phase (scoring invariants, provider mapping,
+      dispatcher validation, orchestration loop, endpoint rate-limit/
+      validation) — 71/71 passing, no live API required
+- [x] Live verification: real `/api/v1/ask` call against the real Anthropic
+      API, `LLMCallLog` row inspected (see docs/TEST_EVIDENCE.md)
+- [ ] Phase 4 checkpoint commit
 
 ## Phase 5 — Backtesting
 

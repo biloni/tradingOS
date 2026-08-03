@@ -44,24 +44,50 @@ a versioned, plain-Python formula (`services/indicators.py`): `SMA_20`,
 constraint on `(symbol_id, as_of, indicator_name, version)` — since it's a
 pure function of existing facts, not a new observation (ADR-012).
 
-## Model inferences (Phase 4)
-
-### Recommendation
-`symbol`, `generatedAt`, `promptVersion`, `modelResponseRaw`,
-`deterministicScoreInputs` (a snapshot of the Indicator values that fed the
-score, for audit), `rationale` (grounded in tool results only), `confidence`
-(a calibrated value — see docs/MODEL_GOVERNANCE.md — not the LLM's
-self-reported number), `status`.
+## Model inferences (**implemented, Phase 4** — migration `cd811cf4102b`)
 
 ### StrategyVersion
-A versioned, user-approved configuration of scoring formulas/thresholds
-(principle 8). Strategy changes are proposed, backtested, and require
-explicit approval before a new version activates (principle 16).
+`apps/api/src/tradingos_api/models/strategy_version.py`. A versioned
+configuration of scoring weights/thresholds (principle 8 — never
+hardcoded): `id`, `name`, `config` (JSON —
+`{"weights": {...}, "rsi_bullish_low", "rsi_bullish_high", "rsi_oversold"}`),
+`is_active`, `created_at`. The MVP has exactly one active version, lazily
+created by `services/strategy.py`'s
+`get_or_create_default_strategy_version()` — this is the *first* version,
+not a proposed change, so it doesn't go through Phase 6's not-yet-built
+strategy-change approval gate (principle 16).
+
+### Recommendation
+`apps/api/src/tradingos_api/models/recommendation.py`. `id`, `symbol_id`
+(FK), `strategy_version_id` (FK), `generated_at`, `prompt_version`,
+`model_response_raw` (Text), `score` (`Numeric(6,2)`, computed by
+`services/scoring.py` — never by the LLM, principle 6),
+`deterministic_score_inputs` (JSON snapshot of the 4 signal values that fed
+the score, for audit), `confidence` (native enum `LOW|MEDIUM|HIGH` — a
+deterministic band computed in code from signal agreement, never the LLM's
+self-reported number — principle 15, docs/MODEL_GOVERNANCE.md), `rationale`
+(Text — the LLM's synthesis, grounded only in tool results), `status`
+(native enum `ACTIVE|SUPERSEDED` — a recompute for the same symbol
+supersedes the prior row rather than deleting it, same append-history
+philosophy as `PaperOrder`'s status transitions).
 
 ### LLMCallLog
-`promptVersion`, `model`, `inputTokens`, `outputTokens`, `costUsd`,
-`requestPayload`, `responsePayload`, `createdAt`. Every LLM call is logged
-here for cost tracking and auditability (principle 8/9) — no exceptions.
+`apps/api/src/tradingos_api/models/llm_call_log.py`. `id`, `prompt_version`,
+`model`, `input_tokens`, `output_tokens`, `cost_usd` (`Numeric(10,6)`,
+computed by `services/llm_cost.py`'s `estimate_cost_usd()` from a
+documented, versioned per-token pricing constant), `request_payload` /
+`response_payload` (JSON — the full messages/tools sent and the raw content
+blocks + stop_reason received), `created_at`. Written once per Anthropic API
+call from `services/ask.py`'s orchestration loop — a single
+`/api/v1/ask` request can produce several rows if the tool-use loop takes
+multiple turns (capped at 5, ADR-019) — no exceptions (principle 8/9).
+
+`PaperOrder.linked_recommendation_id` (nullable FK to `Recommendation`) was
+added this phase now that `Recommendation` exists — see
+`apps/api/src/tradingos_api/models/paper_order.py`. Not yet set by any
+code path (no UI exists to link a paper order back to the recommendation
+that prompted it); the column exists so a future phase can wire it without
+another migration.
 
 ## Transactions (user decisions — **implemented, Phase 3**)
 

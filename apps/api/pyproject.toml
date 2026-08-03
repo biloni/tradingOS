@@ -16,6 +16,7 @@ dependencies = [
     "alembic==1.18.5",
     "psycopg[binary]==3.3.4",
     "alpaca-py==0.43.5",
+    "anthropic==0.120.2",
 ]
 
 [project.scripts]

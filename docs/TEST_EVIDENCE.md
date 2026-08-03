@@ -301,3 +301,146 @@ verified against live data end-to-end.
 No new secrets introduced this phase (same Alpaca keys as Phase 2, already
 in the gitignored `apps/api/.env`). Confirmed `.env` still absent from
 `git status --porcelain` before staging.
+
+## Phase 4 — Scoring Engine & LLM Synthesis (2026-08-03)
+
+### Migration round-trip
+
+```
+$ uv run alembic upgrade head
+INFO  Running upgrade 6fa6b9fd2ff4 -> cd811cf4102b, create strategy_versions, recommendations, llm_call_logs
+
+$ uv run alembic downgrade 6fa6b9fd2ff4
+INFO  Running downgrade cd811cf4102b -> 6fa6b9fd2ff4, create strategy_versions, recommendations, llm_call_logs
+
+$ uv run alembic upgrade head
+INFO  Running upgrade 6fa6b9fd2ff4 -> cd811cf4102b, create strategy_versions, recommendations, llm_call_logs
+```
+Clean round-trip, including the FK from `paper_orders.linked_recommendation_id`
+to `recommendations.id` and the two new native enum types
+(`recommendation_confidence`, `recommendation_status`) — both explicitly
+dropped in `downgrade()` (the ADR-011-era enum-drop fix, applied
+proactively this time, not discovered the hard way again). `psql \dt`
+confirmed all 10 tables exist after the final upgrade.
+
+### `apps/api` full suite
+
+```
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+73 files already formatted
+
+$ uv run mypy .
+Success: no issues found in 72 source files
+
+$ uv run pytest -v
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+collected 71 items
+
+tests/test_alpaca_market_data.py .....                                   [ ...]
+tests/test_alpaca_paper_broker.py ......                                 [ ...]
+tests/test_anthropic_llm.py ....                                         [ ...]
+tests/test_ask.py ...                                                    [ ...]
+tests/test_ask_endpoint.py ....                                          [ ...]
+tests/test_health.py .                                                   [ ...]
+tests/test_indicators.py .............                                  [ ...]
+tests/test_llm_tools.py .............                                    [ ...]
+tests/test_paper_orders_endpoints.py .............                       [ ...]
+tests/test_scoring.py ......                                             [ ...]
+tests/test_symbols_endpoints.py ....                                    [100%]
+
+======================== 71 passed, 1 warning in 4.10s =========================
+```
+31 new tests this phase: 6 hand-computed scoring invariants (all-bullish
+→100/HIGH, all-bearish→0/HIGH, 2v2 tie→50/LOW, 3v1→MEDIUM not HIGH, 3v1-
+neutral→HIGH, no-data→50/LOW), 4 for `AnthropicLLMProvider` (mocked
+`anthropic.Anthropic` client — text-only, tool-use, and multi-block
+responses), 13 for `services/llm_tools.py`'s dispatcher (each tool's happy
+path, unknown-ticker/invalid-enum error handling, unknown-tool and missing-
+argument validation), 3 for `services/ask.py`'s orchestration loop (a
+scripted 2-turn tool-call-then-answer flow with `LLMCallLog` rows verified,
+an unknown-tool-name error handled without crashing, and the 5-iteration
+cap), 4 for the `/api/v1/ask` and `/api/v1/paper-orders`-style dependency-
+override endpoint tests (happy path, blank-question 422, rate-limit 429,
+missing-API-key 503). All fixtures-only — no live Anthropic call required
+to pass `pytest`.
+
+### Live verification (real Anthropic API)
+
+Real Anthropic API key provided by the user, dropped into the gitignored
+`apps/api/.env`. Started the API against the real Postgres database (30
+symbols, real price history/indicators from Phase 2's live ingestion) and
+made a real `/api/v1/ask` call:
+
+```
+$ curl -X POST localhost:8000/api/v1/ask -H "Content-Type: application/json" \
+    -d '{"question": "What does AAPL current setup look like, and what is your recommendation?"}'
+{
+  "answer": "**AAPL Setup — as of 2026-07-31** ... SMA_20: $324.37 | SMA_50: $309.50 ...
+             RSI_14: 43.2 ... MACD line (6.89) below signal (8.26) ... Bollinger Bands:
+             price near the lower band ($304.73) ... **Computed Recommendation
+             (recommendation_id 1):** Score: 37.50 / 100, Confidence: LOW, Signal
+             breakdown: trend +1, momentum 0, macd -1, bollinger -1 ...
+             This is decision support only — not investment advice, and no order
+             has been or will be placed.",
+  "recommendations": [
+    {"recommendation_id": 1, "symbol_ticker": "AAPL", "score": "37.50",
+     "confidence": "LOW", "signal_breakdown": {"trend": 1, "momentum": 0, "macd": -1, "bollinger": -1}}
+  ],
+  "llm_call_log_ids": [1, 2],
+  "iterations": 2
+}
+```
+
+This is a genuine two-turn tool-use round trip: turn 1 the model called
+`get_price_summary`, `get_indicators`, and `compute_recommendation` for
+AAPL; turn 2 it synthesized the final answer from those tool results only
+(the rationale text visibly matches the tool-returned numbers exactly —
+SMA_20/SMA_50/RSI_14/MACD/Bollinger/score all trace back to real DB values,
+not invented ones). The model also correctly stayed in its "not investment
+advice, no order placed" lane per the system prompt guardrail, unprompted.
+
+Real `LLMCallLog` rows, confirmed via `psql`:
+```
+$ psql -U tradingos_app -h localhost -d tradingos -c \
+    "SELECT id, prompt_version, model, input_tokens, output_tokens, cost_usd FROM llm_call_logs ORDER BY id;"
+ id | prompt_version |      model      | input_tokens | output_tokens | cost_usd
+----+----------------+-----------------+--------------+---------------+----------
+  1 | ask-v1         | claude-sonnet-5 |         1487 |           191 | 0.004884
+  2 | ask-v1         | claude-sonnet-5 |         2163 |           575 | 0.010076
+(2 rows)
+```
+Total cost for this one request: **$0.01496** — consistent with
+`services/llm_cost.py`'s documented intro pricing ($2.00/$10.00 per million
+input/output tokens).
+
+Real `Recommendation` row, confirmed via `psql`:
+```
+$ psql -U tradingos_app -h localhost -d tradingos -c \
+    "SELECT id, symbol_id, score, confidence, status FROM recommendations ORDER BY id;"
+ id | symbol_id | score | confidence | status
+----+-----------+-------+------------+--------
+  1 |         1 | 37.50 | LOW        | ACTIVE
+```
+
+Also spot-checked at the live server: an empty `question` still returns
+`422` (request-validation guardrail unaffected by the live-key path).
+
+### Stale dev-server note
+
+A `uvicorn` process left running from earlier in this session (before this
+phase's code existed) was still bound to port 8000 and initially caused the
+first live request to hit stale code (`404` on `/api/v1/ask`, confirmed via
+`GET /openapi.json` missing the path). Killed that process and started a
+fresh one from current code before the live call above — not a bug in the
+Phase 4 code itself, just a leftover local process.
+
+### Secrets check before commit
+
+No new secrets introduced by code changes this phase beyond the Anthropic
+API key already added to the gitignored `apps/api/.env` earlier in the
+phase. Confirmed `.env` still absent from `git status --porcelain` before
+staging.

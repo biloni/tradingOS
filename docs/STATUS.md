@@ -1,68 +1,68 @@
 # Status
 
-**Current phase:** Phase 3 — Paper Portfolio & Trade Tracking
+**Current phase:** Phase 4 — Scoring Engine & LLM Synthesis
 **Last updated:** 2026-08-03
 
 ## Done
 
 - **Phase 1** (Foundations & Architecture) — checkpoint `0a2644d`.
 - **Phase 2** (Data Ingestion & Indicators) — checkpoint `c2caa4c`.
-- **Phase 3:**
-  - `PaperPortfolio`, `PaperOrder` models + migration `6fa6b9fd2ff4`
-    (downgrade/upgrade round-trip verified clean). `PaperPosition` is a
-    derived view, not a table (ADR-013).
-  - `AlpacaPaperBrokerProvider`: submit order, get positions, cancel order,
-    and (added mid-phase after live testing — see below)
-    `get_paper_order_status` for asynchronous-fill catch-up.
-  - Two-step propose → confirm order flow (ADR-014): nothing reaches
-    Alpaca until explicit human confirmation; capital/position
-    sufficiency validated at both steps (principle 1 — no overdraw, no
-    short selling).
-  - `AuditEvent` audit trail introduced (ADR-015) for every
-    propose/confirm/refresh/cancel action.
-  - Reconciliation endpoint (`GET /api/v1/portfolio/reconciliation`)
-    against Alpaca's own paper-account position report.
-  - 40/40 tests passing (17 new this phase), `ruff`/`mypy --strict` clean.
-  - **Live-verified**: proposed and confirmed a real 1-share SPY market
-    order against the real Alpaca paper account. Portfolio cash/position
-    and reconciliation exactly match Alpaca's own account state. See
+- **Phase 3** (Paper Portfolio & Trade Tracking) — checkpoint `811c5bd`.
+- **Phase 4:**
+  - Deterministic scoring engine (`services/scoring.py`): combines 4
+    existing Phase 2 indicators (trend, momentum, MACD crossover,
+    Bollinger position) into a 0–100 score plus a `LOW`/`MEDIUM`/`HIGH`
+    confidence band computed from signal agreement — never the LLM's
+    self-report (principle 15). Weights/thresholds read from
+    `StrategyVersion.config`, never hardcoded (principle 8).
+  - `StrategyVersion`, `Recommendation`, `LLMCallLog` models + migration
+    `cd811cf4102b` (downgrade/upgrade round-trip verified clean), plus
+    `PaperOrder.linked_recommendation_id`.
+  - Concrete `AnthropicLLMProvider` (`claude-sonnet-5`, model/pricing
+    verified via the `claude-api` skill — ADR-017).
+  - `services/llm_tools.py`: 5 typed, schema-validated tools
+    (`query_symbols`, `get_price_summary`, `get_indicators`,
+    `get_recommendations`, `compute_recommendation`) — an explicit
+    allow-list, pydantic-validated arguments, no model access to SQL or
+    arbitrary code (principle 7). `compute_recommendation` is the one
+    tool allowed a side effect: it persists a `Recommendation` row
+    (ADR-018).
+  - `services/ask.py`: the tool-use orchestration loop — call, execute
+    requested tools, feed results back, repeat, capped at 5 iterations
+    (ADR-019); every Anthropic call logged to `LLMCallLog`
+    (`services/llm_cost.py`'s `estimate_cost_usd()`), no exceptions.
+  - `POST /api/v1/ask` (`routers/ask.py`), rate-limited via an in-process
+    token-bucket limiter (`core/rate_limit.py`, ADR-021) — 5-request
+    burst, 5/min steady state.
+  - 71/71 tests passing (31 new this phase: scoring invariants, mocked
+    `AnthropicLLMProvider`, tool dispatcher validation/dispatch,
+    orchestration-loop with a fake `LLMProvider` including the iteration
+    cap, endpoint rate-limit/validation), `ruff`/`mypy --strict` clean.
+  - **Live-verified**: a real `/api/v1/ask` call ("What does AAPL current
+    setup look like...") produced a genuine 2-turn tool-use round trip
+    (`get_price_summary` → `get_indicators` → `compute_recommendation`,
+    then synthesis), a real `Recommendation` row (score 37.50, LOW
+    confidence), and 2 real `LLMCallLog` rows (total cost $0.01496). See
     docs/TEST_EVIDENCE.md for full numbers.
 
 ## In progress / next
 
-- Create the Phase 3 checkpoint commit.
-- **Then stop and wait** — Phase 4 (scoring engine & LLM synthesis) does
-  not start until explicitly requested.
+- Create the Phase 4 checkpoint commit.
+- **Then stop and wait** — Phase 5 (backtesting) does not start until
+  explicitly requested.
 
 ## Known blockers
 
 None.
 
-## Notable bug caught and fixed this phase
-
-The original Phase 3 plan assumed `submit_paper_order()`'s response would
-reflect the order's outcome. Live-tested against the real Alpaca paper API:
-a submitted market order's immediate response reported status `new` — the
-actual fill (`filled`, at a real market price) landed about 0.8 seconds
-later. This is normal broker behavior (fills are asynchronous), not an
-edge case, and the original design would have left confirmed orders stuck
-showing `SUBMITTED` even after they'd actually filled — which would have
-made the reconciliation deliverable meaningless (comparing an unfilled
-local record against Alpaca's real filled position).
-
-Fixed by adding `PaperBrokerProvider.get_paper_order_status()`: `confirm`
-does one immediate re-check (catches the common same-cycle-fill case,
-demonstrated live), and a new `POST /api/v1/paper-orders/{id}/refresh`
-endpoint re-syncs any order still open later (ADR-016). Verified live: the
-real order was stuck at `SUBMITTED` in our DB until `/refresh` was called,
-which then correctly showed `FILLED` at $754.92/share, matching Alpaca's
-own record exactly.
-
 ## Deferred (not blockers, intentional)
 
-- Docker-based local dev (ADR-008), Playwright e2e, Redis (ADR-006).
-- Automatic order-status polling / websocket trade-updates subscription —
-  explicit `/refresh` covers the MVP's manual/API-driven usage; a
-  background poller is deferred until a UI exists to justify it (ADR-016).
-- FIFO/LIFO tax-lot cost-basis accounting — simple weighted-average cost
-  basis is enough for MVP P&L direction (ADR-013).
+- Docker-based local dev (ADR-008), Playwright e2e, Redis (ADR-006/021).
+- Automatic order-status polling / websocket trade-updates subscription
+  (ADR-016). FIFO/LIFO tax-lot cost-basis accounting (ADR-013).
+- Persisted multi-turn `/api/v1/ask` conversation history — stateless
+  per-request for now (ADR-019); a future chat UI can resend history
+  itself if needed.
+- Historical-outcome-based confidence calibration — needs completed trade
+  history from backtesting (Phase 5) before any number is framed as a
+  calibrated probability (docs/MODEL_GOVERNANCE.md).

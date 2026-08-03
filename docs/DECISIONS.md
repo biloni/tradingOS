@@ -353,3 +353,141 @@ amount of time — a limit order might not fill for hours).
 **Consequences.** A future UI polling `/refresh` for open orders (or a
 proper websocket subscription) is the natural next step once there's a
 UI to drive it — not built now, since there's no UI yet (Phase 7).
+
+---
+
+## ADR-017: LLM model — `claude-sonnet-5`, verified via the `claude-api` skill
+at implementation time
+
+**Context.** Phase 4 needed a concrete `AnthropicLLMProvider`. Model IDs and
+pricing drift over time and must never be guessed from training data
+(PROJECT_INSTRUCTIONS.md's engineering rules / the `claude-api` skill's own
+warning about stale priors).
+
+**Decision.** `claude-sonnet-5`, confirmed current via the `claude-api` skill
+on 2026-08-03 (intro pricing $2.00/$10.00 per million input/output tokens
+through 2026-08-31). `thinking` is left unset (adaptive by default) rather
+than explicitly disabled, and no sampling params (`temperature`/`top_p`/
+`top_k`) are set — this model rejects non-default values for those.
+
+**Alternatives considered.** `claude-opus-5` (rejected: this is a
+synthesis/explanation task over already-computed deterministic data, not a
+task requiring frontier reasoning depth — Sonnet-tier is the right cost/
+capability point for a personal app's NL query feature). Pinning to a
+dated snapshot ID (rejected: the skill's guidance is to use the bare
+model-family ID, never a training-data-recalled dated suffix).
+
+**Consequences.** `providers/anthropic_llm.py`'s `MODEL` constant is the one
+place this pins to a specific model; re-verify via the skill before ever
+bumping it.
+
+---
+
+## ADR-018: `compute_recommendation` is the one tool allowed to have a side
+effect (persisting a `Recommendation`)
+
+**Context.** Every other Phase 4 tool (`query_symbols`, `get_price_summary`,
+`get_indicators`, `get_recommendations`) is a pure read. Principle 7 says
+the model never executes anything directly — but generating a
+recommendation is the actual point of the feature, not an incidental side
+effect the model triggers as a side-quest.
+
+**Decision.** `compute_recommendation` both computes the deterministic score
+(`services/scoring.py`, no LLM involvement in the number itself — principle
+6) and persists exactly one `Recommendation` row, superseding any prior
+`ACTIVE` row for the same symbol rather than deleting it. This is
+fundamentally different from a real side effect like placing an order: it's
+fully deterministic given its inputs, versioned (`strategy_version_id`,
+`prompt_version`), and auditable — there is no external system it commits
+to, unlike Alpaca order placement (which stays behind Phase 3's separate
+propose/confirm gate, entirely untouched by this endpoint).
+
+**Alternatives considered.** Splitting into a pure `compute_score` tool plus
+a separate, explicit "save this recommendation" step (rejected for MVP: adds
+a confirmation step for an action that carries none of the real-world risk
+principle 11 is protecting against — no money moves, no order is placed;
+revisit only if recommendation history needs its own review gate later).
+
+**Consequences.** `services/llm_tools.py`'s docstring calls this out
+explicitly so a future reader doesn't assume every tool is side-effect-free
+by default.
+
+---
+
+## ADR-019: Stateless per-request `/api/v1/ask`, tool-use loop capped at 5
+iterations
+
+**Context.** Phase 4's NL query endpoint needs to let the model call
+several tools before answering (e.g., look up a symbol, pull indicators,
+then compute a recommendation) without risking an unbounded request or
+unbounded Anthropic spend per call.
+
+**Decision.** `services/ask.py`'s `answer_question()` runs the full
+call → execute tools → feed results back → call again cycle within one
+HTTP request/response, capped at `MAX_ITERATIONS = 5`. No `Conversation`
+table exists — a caller wanting multi-turn context resends prior turns
+itself. Every single Anthropic call (not just the final one) is logged to
+`LLMCallLog`, so a multi-tool-call request produces multiple log rows.
+
+**Alternatives considered.** Persisted server-side conversation history
+(rejected for MVP: no confirmed multi-turn UI need yet — Phase 7 owns the
+chat UI and can resend history itself if needed). An unbounded loop
+(rejected: an adversarial or confused tool-call sequence could otherwise
+run indefinitely and burn Anthropic spend with no ceiling).
+
+**Consequences.** A question needing more than 5 tool-call rounds gets a
+plain "try a more specific question" fallback message rather than hanging
+or erroring — tested explicitly (`tests/test_ask.py::TestIterationCap`).
+
+---
+
+## ADR-020: `LLMProvider.complete()` widened for genuine tool-use (messages,
+tools, stop_reason, raw_content)
+
+**Context.** The Phase 1 `LLMProvider` interface (never yet implemented)
+assumed flat string messages. Anthropic's real tool-use protocol needs
+nested content blocks (text/tool_use/tool_result) round-tripped verbatim
+across turns — a caller that reconstructed messages from `text`/`tool_calls`
+alone would drop thinking blocks or malform the conversation.
+
+**Decision.** `messages` widened from `list[dict[str, str]]` to
+`list[dict[str, Any]]`; `complete()` gained an optional `tools` parameter;
+`LLMResponse` gained `stop_reason: str` and `raw_content: list[dict[str,
+Any]]` — the exact content blocks the model returned, serialized as plain
+dicts. Callers must echo `raw_content` back on the next turn, not a
+reconstruction.
+
+**Alternatives considered.** Keeping the narrow Phase 1 shape and having
+`AnthropicLLMProvider` translate internally (rejected: would require the
+provider to fabricate a lossy round-trip representation, defeating the
+purpose of a provider-neutral interface that's supposed to expose what
+actually happened).
+
+**Consequences.** This is a breaking change to an interface with no prior
+callers (nothing implemented it before Phase 4), so no migration cost
+anywhere else in the codebase.
+
+---
+
+## ADR-021: In-process token-bucket rate limiter for `/api/v1/ask`, no Redis
+
+**Context.** `docs/MODEL_GOVERNANCE.md` commits to rate-limiting the NL
+query endpoint to bound Anthropic spend against a runaway client. This is a
+single-user, single-process personal app (same premise as ADR-006's Redis
+deferral).
+
+**Decision.** `core/rate_limit.py`'s `TokenBucketRateLimiter` — an
+in-memory, thread-safe token bucket (5-request burst, 1 token per 12
+seconds refill = 5/min steady state), instantiated once at module scope and
+shared across requests within the running process. Exceeding it returns
+`429`.
+
+**Alternatives considered.** Redis-backed rate limiting (rejected: no
+multi-process/multi-instance deployment exists to require shared state
+across processes — same reasoning as ADR-006). A per-IP or per-API-key
+limiter (rejected: no auth/multi-tenancy exists, ADR-007 — there is exactly
+one caller).
+
+**Consequences.** The limiter resets on process restart, which is
+acceptable for a personal tool bounding accidental spend, not defending
+against determined multi-tenant abuse.

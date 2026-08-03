@@ -14,7 +14,7 @@
 
 | Provider | Role | Notes | Status |
 |---|---|---|---|
-| **Anthropic (Claude, `claude-sonnet-*`)** | Synthesis, explanation, scenario analysis, tool-use | Matches the development environment (Claude Code); provider-neutral `LLMProvider` interface means a swap wouldn't require rewriting callers | **Chosen** |
+| **Anthropic (Claude, `claude-sonnet-5`)** | Synthesis, explanation, scenario analysis, tool-use | Matches the development environment (Claude Code); provider-neutral `LLMProvider` interface means a swap wouldn't require rewriting callers; model verified current via the `claude-api` skill at implementation time (ADR-017) | **Chosen, implemented Phase 4** |
 
 ## Deferred / not needed yet
 
@@ -25,6 +25,6 @@
 
 ## Cost tracking
 
-Every LLM call is logged with token counts and cost
-(`LLMCallLog`, docs/DATA_DICTIONARY.md) starting in Phase 4, when the first
-LLM call is made. No LLM calls exist in Phase 1.
+**Implemented, Phase 4.** Every LLM call is logged with token counts and
+cost (`LLMCallLog`, docs/DATA_DICTIONARY.md), written once per Anthropic API
+call by `services/ask.py`'s orchestration loop.

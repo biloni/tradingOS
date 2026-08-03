@@ -18,6 +18,7 @@ CPython 3.14.6 locally)
 | alembic | 1.18.5 | Migrations |
 | psycopg[binary] | 3.3.4 | Postgres driver (v3) |
 | alpaca-py | 0.43.5 (verified again 2026-08-03, Phase 2; still current, Phase 3) | Official Alpaca SDK (ADR-009) — Phase 2 used `alpaca.data` (market data), Phase 3 added `alpaca.trading` (paper broker) from the same package, no new dependency. Pulls in `pandas`, `numpy`, `websockets`, `requests`, `msgpack`, `sseclient-py` as transitive deps |
+| anthropic | 0.120.2 | Official Anthropic Python SDK (ADR-017) — `AnthropicLLMProvider`'s tool-use `messages.create()` calls, model `claude-sonnet-5` |
 
 Dev-only:
 

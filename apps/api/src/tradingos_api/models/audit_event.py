@@ -2,15 +2,10 @@ from datetime import datetime
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tradingos_api.db.base import Base
-
-# Native JSONB on Postgres (production); portable JSON everywhere else
-# (in-memory SQLite in tests/test_symbols_endpoints.py-style fixtures)
-# — SQLAlchemy's standard cross-dialect JSON pattern.
-_JSON_TYPE = sa.JSON().with_variant(JSONB(), "postgresql")
+from tradingos_api.db.json_type import PORTABLE_JSON
 
 
 class AuditEvent(Base):
@@ -31,5 +26,5 @@ class AuditEvent(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     record_type: Mapped[str] = mapped_column(sa.String(50), index=True)
     ref_id: Mapped[int] = mapped_column(sa.Integer)
-    snapshot: Mapped[dict[str, Any]] = mapped_column(_JSON_TYPE)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON)
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))

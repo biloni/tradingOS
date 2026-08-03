@@ -162,8 +162,51 @@ Alpaca's own paper-account position report.
 A nonzero `discrepancy` means something diverged between our fill records
 and Alpaca's book — worth investigating, not expected in normal operation.
 
-## Phase 4+ (not yet implemented)
+## `POST /api/v1/ask`
 
-- `POST /api/v1/recommendations/query` — the tool-use NL query entrypoint
-  (Phase 4)
+The Phase 4 NL query entrypoint (ADR-019). Synthesis/explanation only —
+grounded in tool results executed against the deterministic data model
+(`services/llm_tools.py`), never text-to-SQL, never the source of numeric
+truth (principles 6/7). Rate-limited server-side: a 5-request burst, 5/min
+steady-state refill, shared across the whole (single-user) process
+(ADR-021).
+
+**Request body**
+```json
+{"question": "What does AAPL's current setup look like?"}
+```
+`question` must be 1–2000 characters.
+
+**Response `200`**
+```json
+{
+  "answer": "AAPL's SMA_20 is above its SMA_50 and RSI_14 is in the bullish 50-70 band...",
+  "recommendations": [
+    {
+      "recommendation_id": 1,
+      "symbol_ticker": "AAPL",
+      "score": "75.00",
+      "confidence": "MEDIUM",
+      "signal_breakdown": {"trend": 1, "momentum": 1, "macd": 1, "bollinger": -1}
+    }
+  ],
+  "llm_call_log_ids": [1, 2],
+  "iterations": 2
+}
+```
+`recommendations` is only non-empty if the model called
+`compute_recommendation` during this request (ADR-018) — a purely
+informational question (e.g. "what's AAPL's RSI?") returns an empty list.
+`llm_call_log_ids` lets a caller look up the exact token counts/cost for
+every underlying Anthropic call this request made.
+
+**Response `422`** — `question` is empty or over 2000 characters.
+
+**Response `429`** — rate limit exceeded; retry after a few seconds.
+
+**Response `503`** — `ANTHROPIC_API_KEY` is not configured (principle 5:
+graceful degradation, not a crash).
+
+## Phase 5+ (not yet implemented)
+
 - `POST /api/v1/backtests` — run a backtest (Phase 5)
