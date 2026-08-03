@@ -207,6 +207,73 @@ every underlying Anthropic call this request made.
 **Response `503`** — `ANTHROPIC_API_KEY` is not configured (principle 5:
 graceful degradation, not a crash).
 
-## Phase 5+ (not yet implemented)
+## `POST /api/v1/backtests`
 
-- `POST /api/v1/backtests` — run a backtest (Phase 5)
+Runs a historical replay of the scoring engine synchronously (ADR-022..025)
+and returns the full report — no polling, no background job. Every field
+is optional.
+
+**Request body**
+```json
+{
+  "date_range_start": "2024-08-01",
+  "date_range_end": "2026-08-01",
+  "strategy_version_id": null,
+  "entry_score_threshold": "65",
+  "exit_score_threshold": "40",
+  "max_holding_days": 10,
+  "position_size_pct": "0.10",
+  "starting_cash": "10000.00",
+  "benchmark_ticker": "SPY"
+}
+```
+`date_range_start`/`date_range_end` default to the full ~2-year ingested
+history when omitted. `strategy_version_id` defaults to the currently
+active `StrategyVersion` — passing an explicit id lets Phase 6 backtest a
+not-yet-approved candidate version without a schema change.
+
+**Response `201`**
+```json
+{
+  "id": 1,
+  "strategy_version_id": 1,
+  "date_range_start": "2024-08-01",
+  "date_range_end": "2026-08-01",
+  "parameters": {
+    "entry_score_threshold": "65", "exit_score_threshold": "40",
+    "max_holding_days": 10, "position_size_pct": "0.10",
+    "starting_cash": "10000.00", "benchmark_ticker": "SPY"
+  },
+  "results_summary": {
+    "ending_equity": "11250.400000", "total_return_pct": "12.50",
+    "max_drawdown_pct": "8.30", "win_rate_pct": "55.00", "num_trades": 42,
+    "avg_win_pct": "6.20", "avg_loss_pct": "-3.10",
+    "benchmark_return_pct": "9.80",
+    "equity_curve": [{"as_of": "2024-08-01", "equity": "10000.000000"}],
+    "trades": [
+      {"ticker": "AAPL", "entry_date": "2024-09-03", "entry_price": "180.500000",
+       "exit_date": "2024-09-13", "exit_price": "191.200000", "quantity": 5,
+       "pnl_usd": "53.500000", "pnl_pct": "5.93", "exit_reason": "SIGNAL_EXIT"}
+    ]
+  },
+  "created_at": "2026-08-03T12:00:00+00:00"
+}
+```
+`benchmark_return_pct` is `null` if `benchmark_ticker` has no price history
+in range (never an error — the benchmark is a nullable bonus in the
+report, not a required input). `exit_reason` is one of `SIGNAL_EXIT`,
+`MAX_HOLDING_DAYS`, `END_OF_BACKTEST` (a position still open when the
+window ends, force-closed at the last known close — not a real signal).
+
+**Response `400`** — `strategy_version_id` doesn't exist, the date range is
+invalid, or no symbol has any price history in the requested range.
+
+## `GET /api/v1/backtests` / `GET /api/v1/backtests/{id}`
+
+List (newest-first) / detail. Same shape as the `POST` response.
+
+## Phase 6+ (not yet implemented)
+
+Comparing a candidate `StrategyVersion`'s backtest report against the
+active version's, with an explicit approval gate before activation
+(principle 16) — Phase 5 only produces one report at a time.

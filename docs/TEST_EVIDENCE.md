@@ -444,3 +444,166 @@ No new secrets introduced by code changes this phase beyond the Anthropic
 API key already added to the gitignored `apps/api/.env` earlier in the
 phase. Confirmed `.env` still absent from `git status --porcelain` before
 staging.
+
+## Phase 5 — Backtesting (2026-08-03)
+
+### Migration round-trip
+
+```
+$ uv run alembic upgrade head
+INFO  Running upgrade cd811cf4102b -> 130bfdd45919, create backtest_runs
+
+$ uv run alembic downgrade cd811cf4102b
+INFO  Running downgrade 130bfdd45919 -> cd811cf4102b, create backtest_runs
+
+$ uv run alembic upgrade head
+INFO  Running upgrade cd811cf4102b -> 130bfdd45919, create backtest_runs
+
+$ uv run alembic check
+No new upgrade operations detected.
+```
+Clean round-trip. No native enum types in this migration at all (unlike
+every prior one) — `BacktestRun` runs synchronously and only ever persists
+in a complete state, so there's no status column to model and no
+enum-drop fixup needed in `downgrade()`.
+
+### `apps/api` full suite
+
+```
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+80 files already formatted
+
+$ uv run mypy .
+Success: no issues found in 79 source files
+
+$ uv run pytest -v
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+collected 92 items
+
+tests/test_alpaca_market_data.py .....                                   [ ...]
+tests/test_alpaca_paper_broker.py ......                                 [ ...]
+tests/test_anthropic_llm.py ....                                         [ ...]
+tests/test_ask.py ...                                                    [ ...]
+tests/test_ask_endpoint.py ....                                          [ ...]
+tests/test_backtest_endpoint.py .........                                [ ...]
+tests/test_backtest_simulation.py ............                          [ ...]
+tests/test_health.py .                                                   [ ...]
+tests/test_indicators.py .............                                  [ ...]
+tests/test_llm_tools.py .............                                    [ ...]
+tests/test_paper_orders_endpoints.py .............                       [ ...]
+tests/test_scoring.py ......                                             [ ...]
+tests/test_symbols_endpoints.py ....                                    [100%]
+
+======================== 92 passed, 1 warning in 5.79s =========================
+```
+21 new tests this phase, all fixtures-only (no live API required to pass):
+
+`tests/test_backtest_simulation.py` (12, pure core — no DB): next-open
+fill timing (proving an entry decided on day T fills at day T+1's open,
+not T's own close); a signal on the last loaded bar is dropped, not
+executed; `max_holding_days` force-exit; end-of-window force-close with
+`exit_reason="END_OF_BACKTEST"`; no-pyramiding (a second bullish signal
+while holding never opens a second position); whole-share flooring +
+cash-cap sizing (including the "budget buys less than one share" skip
+case); a fully hand-verified scenario asserting exact `ending_equity`,
+`total_return_pct`, `max_drawdown_pct`, `win_rate_pct`, `avg_win_pct`,
+`avg_loss_pct` against manually computed Decimal values; the buy-and-hold
+benchmark helper; an empty-calendar edge case. **The headline no-look-ahead
+test** (`TestNoLookAhead`): the same shared history run once truncated at
+a boundary day and once extended further with everything after the
+boundary deliberately mutated to extreme values — every trade and
+equity-curve point on or before the boundary asserted byte-identical
+between the two runs, directly satisfying docs/TEST_STRATEGY.md's Phase 5
+commitment.
+
+`tests/test_backtest_endpoint.py` (9, in-memory SQLite): a hand-authored
+6-trading-day `PriceBar`+`Indicator` fixture for two symbols produces a
+persisted `BacktestRun` with the expected shape; **the survivorship-bias
+test** seeds one symbol marked `active=False` today and confirms it still
+appears in the backtest's trade log (ADR-025); an explicit
+`strategy_version_id` override (an all-zero-weights `StrategyVersion`,
+which forces `compute_score`'s neutral-50 branch) is honored and produces
+zero trades, proving the override actually changes behavior; unknown
+`strategy_version_id` and no-price-history-in-range both 400; a
+not-tracked `benchmark_ticker` returns `null`, not an error; list/detail/
+404 contract tests; the default date-range resolution (dates omitted)
+finds the seeded fixture correctly.
+
+### Live verification (real ~2-year ingested history)
+
+Ran the API against the real Postgres database (30 symbols, real price
+history/indicators from Phase 2's live ingestion) and made a real
+`POST /api/v1/backtests` call with an empty body (all defaults — full
+~2-year window, default entry/exit/sizing params, `SPY` benchmark):
+
+```
+$ time curl -X POST localhost:8000/api/v1/backtests -H "Content-Type: application/json" -d '{}'
+real  0m4.529s
+
+{
+  "id": 1, "strategy_version_id": 1,
+  "date_range_start": "2024-08-03", "date_range_end": "2026-08-03",
+  "parameters": {"entry_score_threshold": "65", "exit_score_threshold": "40",
+                 "max_holding_days": 10, "position_size_pct": "0.10",
+                 "starting_cash": "10000.00", "benchmark_ticker": "SPY"},
+  "results_summary": {
+    "ending_equity": "11502.809000", "total_return_pct": "15.0280900",
+    "max_drawdown_pct": "13.64907690932735224551263087",
+    "win_rate_pct": "42.14876033057851239669421488", "num_trades": 847,
+    "avg_win_pct": "4.686472162381834349631266353",
+    "avg_loss_pct": "-2.988473588237427985474374059",
+    "benchmark_return_pct": "44.38710425605937608720862809",
+    "equity_curve": [/* 499 points, one per trading day */],
+    "trades": [/* 847 trades */]
+  }
+}
+```
+
+**Wall-clock time: 4.5 seconds** for the full 30-symbol, ~2-year (499
+trading day) universe — comfortably synchronous, no background job
+warranted (ADR-006-style reasoning holds).
+
+Sanity checks against the raw numbers (not just trusting the summary):
+- `equity_curve` has exactly 499 points; its last point
+  (`{"as_of": "2026-07-31", "equity": "11502.809000"}`) matches
+  `ending_equity` exactly, confirming the force-close-at-end-of-window
+  bookkeeping doesn't change total equity (ADR-022).
+- Exit-reason breakdown across all 847 trades: 458 `SIGNAL_EXIT` + 377
+  `MAX_HOLDING_DAYS` + 12 `END_OF_BACKTEST` = 847, matching `num_trades`
+  exactly.
+- All 30 seeded symbols appear in the trade log at least once — confirms
+  the full universe participates (`active` is never filtered — ADR-025).
+- Spot-checked one trade by hand: `BA` entered 2024-09-03 @ $167.03 x5,
+  exited 2024-09-04 @ $160.28 (`SIGNAL_EXIT`) — recomputing
+  `(160.28-167.03)*5 = -33.75` and `(160.28-167.03)/167.03*100 =
+  -4.041190205352...%` both match the stored `pnl_usd`/`pnl_pct` exactly.
+- `SPY` benchmark buy-and-hold return (44.39%) comfortably exceeds the
+  strategy's total return (15.03%) over the same window — plausible for a
+  strong-bull-market 2024–2026 window and a threshold-based swing strategy
+  that spends much of its time in cash between signals; not tuned or
+  cherry-picked, just the default parameters' first real run.
+
+Confirmed via `psql`: one `backtest_runs` row (id 1, `strategy_version_id`
+1, correct date range) and one matching `audit_events` row
+(`record_type='BACKTEST_RUN_CREATED'`, `ref_id=1`, `snapshot` containing
+the exact parameters echoed above) — the ADR-024 audit-trail decision
+verified live, not just in a test fixture.
+
+### Stale dev-server note
+
+Same class of issue as Phase 4: a `uvicorn` process left running from
+earlier in this session (predating this phase's router) was still bound
+to port 8000 and initially caused `POST /api/v1/backtests` to 404
+(confirmed via `GET /openapi.json` missing the path). Killed it and
+started a fresh process from current code before the live call above.
+
+### Secrets check before commit
+
+No new secrets this phase — Phase 5 makes no Alpaca or Anthropic API
+calls at all (pure computation over already-ingested Postgres data).
+Confirmed `.env` still absent from `git status --porcelain` before
+staging.

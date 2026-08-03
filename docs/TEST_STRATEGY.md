@@ -32,14 +32,22 @@ Where synthetic data is needed for a test (e.g., a fixture price series),
 it uses a fixed seed / hand-authored values — never live-fetched data — so
 test runs are reproducible.
 
-## Backtesting-specific testing (Phase 5)
+## Backtesting-specific testing (**implemented, Phase 5**)
 
-Backtests get their own test category beyond the pyramid above: tests that
-specifically assert *absence* of look-ahead bias (a bar dated after the
-simulated "current" date must never be visible to the strategy) and
-*absence* of survivorship bias (the historical symbol universe for a given
-date must include instruments that were later delisted, not just today's
-index membership).
+Backtests get their own test category beyond the pyramid above:
+`tests/test_backtest_simulation.py`'s `TestNoLookAhead` runs the pure
+simulation core (`services/backtest.py`'s `run_backtest_simulation()`)
+over the same shared history once truncated at a boundary day and once
+extended further with everything *after* the boundary deliberately
+mutated to extreme values — every trade and equity-curve point on or
+before the boundary is asserted identical between the two runs, the
+concrete operationalization of "absence of look-ahead bias" for this
+codebase. `tests/test_backtest_endpoint.py` asserts *absence* of
+survivorship bias by seeding a symbol marked `active=False` today with a
+signal-worthy historical series and confirming it still appears in the
+backtest's trade log — scoped to this system's reality (a fixed 30-name
+watchlist, not an index with changing constituents; see ADR-025 for why
+full historical-index reconstruction is out of scope).
 
 ## What Phase 1 actually runs
 

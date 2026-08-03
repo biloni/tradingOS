@@ -64,7 +64,7 @@ every phase follows.
       paper account exactly (see docs/TEST_EVIDENCE.md)
 - [x] Phase 3 checkpoint commit (`811c5bd`)
 
-## Phase 4 — Scoring Engine & LLM Synthesis (current)
+## Phase 4 — Scoring Engine & LLM Synthesis
 
 - [x] Concrete `AnthropicLLMProvider` (`claude-sonnet-5`, verified via the
       `claude-api` skill — ADR-017)
@@ -89,14 +89,31 @@ every phase follows.
       validation) — 71/71 passing, no live API required
 - [x] Live verification: real `/api/v1/ask` call against the real Anthropic
       API, `LLMCallLog` row inspected (see docs/TEST_EVIDENCE.md)
-- [ ] Phase 4 checkpoint commit
+- [x] Phase 4 checkpoint commit (`fa66912`)
 
-## Phase 5 — Backtesting
+## Phase 5 — Backtesting (current)
 
-- [ ] `BacktestRun` model + migration
-- [ ] Historical replay engine: no look-ahead bias, no survivorship bias,
-      realistic fills (principle 14)
-- [ ] Backtest report format used by Phase 6's approval gate
+- [x] `BacktestRun` model + migration (`130bfdd45919`)
+- [x] Historical replay engine: next-bar-open fills, no look-ahead bias
+      (ADR-022), universe never filtered by today's `active` flag, no
+      survivorship bias for this fixed watchlist (ADR-025) —
+      `services/backtest.py`
+- [x] Configurable entry/exit/position-sizing rule, versioned per run
+      (ADR-023); backtests persist only in `BacktestRun.results_summary`,
+      never `PaperOrder` rows (ADR-024)
+- [x] `POST /api/v1/backtests` (+ list/detail), runs synchronously — no
+      background job needed yet
+- [x] Backtest report format (equity curve, trade log, summary metrics)
+      that Phase 6's approval gate will compare a candidate
+      `StrategyVersion` against
+- [x] 21 new tests this phase (pure-core fill-timing/exit/sizing/metrics
+      invariants incl. the no-look-ahead headline test, DB/endpoint tests
+      incl. the survivorship-bias fixture) — 92/92 passing, no live API
+      required (no Alpaca/Anthropic call needed this phase at all)
+- [x] Live verification: real backtest run against the ~2-year real
+      ingested history, `BacktestRun` row inspected (see
+      docs/TEST_EVIDENCE.md)
+- [ ] Phase 5 checkpoint commit
 
 ## Phase 6 — Learning / Strategy-Review Loop
 

@@ -15,6 +15,7 @@ never overwrite historical rows under the old version string.
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -262,3 +263,37 @@ def compute_indicators_for_symbol(session: Session, symbol_id: int, start: date,
     inserted_count = len(result.fetchall())
     session.commit()
     return inserted_count
+
+
+def get_indicator_series_for_symbol(
+    session: Session,
+    symbol_id: int,
+    start: date,
+    end: date,
+    version: str = FORMULA_VERSION,
+) -> dict[date, dict[str, Decimal]]:
+    """The one shared helper for reading a date-indexed indicator series for
+    a symbol — mirrors `get_latest_price_bars()`'s role for prices
+    (ADR-011). Every caller reads through this rather than querying
+    `Indicator` directly, so the "current formula version" filter is never
+    reimplemented per caller (used by services/backtest.py; also the
+    natural home for a future chart endpoint's indicator series)."""
+    rows = (
+        session.execute(
+            select(Indicator)
+            .where(
+                Indicator.symbol_id == symbol_id,
+                Indicator.version == version,
+                Indicator.as_of >= start,
+                Indicator.as_of <= end,
+            )
+            .order_by(Indicator.as_of)
+        )
+        .scalars()
+        .all()
+    )
+
+    series: dict[date, dict[str, Decimal]] = {}
+    for row in rows:
+        series.setdefault(row.as_of, {})[row.indicator_name.value] = row.value
+    return series

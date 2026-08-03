@@ -491,3 +491,135 @@ one caller).
 **Consequences.** The limiter resets on process restart, which is
 acceptable for a personal tool bounding accidental spend, not defending
 against determined multi-tenant abuse.
+
+---
+
+## ADR-022: Backtest fill-timing convention — next-bar-open fills, never
+same-day-close, per-symbol index chains
+
+**Context.** Phase 5 needed a concrete answer to principle 14's "avoid
+look-ahead bias... and unrealistic fills." A day's score is computed from
+that same day's own close (via the `Indicator` rows derived from it), so
+acting on it at that day's own close would be look-ahead — the close isn't
+knowable until the day is already over.
+
+**Decision.** Every entry/exit decision fills at the *next* bar in that
+symbol's own series (`bars[i+1]`, a per-symbol index chain — never
+calendar-day arithmetic, since a symbol can have data gaps even though the
+current ~30-name universe rarely does). A decision on a symbol's last
+loaded bar has no next bar to fill against and is dropped, not executed —
+never reaching outside the declared date range for a fill. Any position
+still open when the window ends is force-closed at the last known close,
+`exit_reason: "END_OF_BACKTEST"` (bookkeeping, not a real signal).
+
+**Alternatives considered.** Same-day close fills (rejected: textbook
+look-ahead — you can't transact at a price using information that price
+itself was needed to compute). Calendar-day-plus-one fills (rejected: bugs
+silently on any symbol with a data gap, since "tomorrow" and "the next
+bar" aren't always the same date).
+
+**Consequences.** One documented caveat: `PriceBar` is append-only
+(ADR-011), and a later corrective re-fetch can change what
+`get_latest_price_bars()` resolves to for an old date. Re-running the
+identical backtest window after such a correction can legitimately produce
+different results — that's data correction, not look-ahead, but worth
+naming so it doesn't read as nondeterminism later. Tested directly:
+`tests/test_backtest_simulation.py`'s headline no-look-ahead test runs the
+same shared history once truncated at a boundary day and once extended
+with everything after the boundary deliberately mutated to extreme values,
+asserting every trade/equity-curve point on-or-before the boundary is
+identical between the two runs.
+
+---
+
+## ADR-023: Entry/exit/position-sizing rule — configurable, versioned
+per-run, matching the 2–10 day swing horizon
+
+**Context.** Phase 5 needed *some* concrete trading rule to replay
+historically — the scoring engine alone (Phase 4) only produces a number;
+something has to decide when that number becomes a simulated trade.
+
+**Decision.** A threshold + max-holding-period rule, every parameter
+snapshotted on `BacktestRun.parameters` (principle 8/9 — full
+reproducibility, since these aren't part of `StrategyVersion.config`,
+which only holds scoring weights):
+`entry_score_threshold` (default 65), `exit_score_threshold` (default 40),
+`max_holding_days` (default 10, matching the product's stated 2–10 day
+horizon), `position_size_pct` (default 10% of current equity per new
+position, whole shares, cash-capped, no margin/shorting/pyramiding —
+mirrors `services/portfolio.py`'s real-portfolio conventions). Each
+simulated day processes in two passes, in ticker order: all exits first
+(freeing cash), then all entries (using freed cash). Position-sizing
+equity is snapshotted once per day from cash plus each open position's
+*last known* close — never that day's own close, which isn't knowable yet
+at the moment of a same-day fill against that day's open (a subtler form
+of look-ahead than the fill-timing issue ADR-022 addresses, but the same
+root cause).
+
+**Alternatives considered.** A more elaborate rule (stop-loss/take-profit
+bands, volatility-scaled sizing) — rejected for this phase as unnecessary
+complexity before even one report has been produced; the scoring-based
+threshold rule is enough to validate the replay engine itself. Recomputing
+sizing equity after every same-day fill — rejected: buying doesn't change
+total equity (cash converts to position value at the price paid), so the
+once-per-day snapshot is exactly correct, not an approximation.
+
+**Consequences.** `services/backtest.py`'s `BacktestParams` is the single
+place these defaults live; `schemas/backtest.py`'s `BacktestCreateRequest`
+lets every field be overridden per run.
+
+---
+
+## ADR-024: Backtests persist only in `BacktestRun.results_summary` —
+never `PaperOrder` rows
+
+**Context.** A backtest is a historical simulation, not a real user
+action. Writing simulated fills as `PaperOrder` rows would corrupt
+`services/portfolio.py`'s derived cash/positions (ADR-013) and pollute the
+real paper-trading audit trail, which principle 9 reserves for real
+actions.
+
+**Decision.** The simulated trade log and equity curve live entirely
+inside `BacktestRun.results_summary` (JSON). One `AuditEvent`
+(`record_type="BACKTEST_RUN_CREATED"`, `ref_id=run.id`,
+`snapshot=parameters`) is still written per run, for consistency with how
+every other analytical artifact in this app gets an audit trail — cheap,
+and keeps "what happened and when" queryable in one place even though the
+simulated trades themselves aren't real actions.
+
+**Alternatives considered.** Writing real `PaperOrder` rows tagged as
+"simulated" (rejected: would require a new status/flag threaded through
+every consumer of `PaperOrder` just to keep simulated and real activity
+apart — much simpler to never mix them in the same table at all).
+
+**Consequences.** `services/backtest.py`'s DB wrapper never touches
+`paper_orders` or the real `PaperPortfolio` — it only reads price/indicator
+history and writes `BacktestRun` + `AuditEvent`.
+
+---
+
+## ADR-025: Survivorship-bias mitigation scoped to a fixed watchlist, not
+an index
+
+**Context.** Principle 14 also requires avoiding survivorship bias. `Symbol`
+has no historical constituent/delisting model of any kind — this is a
+fixed, hand-picked 30-name watchlist (ADR-003), not an index being
+replicated, so there's no "index membership as of date X" concept to
+reconstruct in the first place.
+
+**Decision.** The backtest universe is **every known `Symbol` regardless
+of today's `active` flag** — `services/backtest.py`'s `run_backtest()`
+never filters `WHERE active = true` when loading historical series. Full
+historical-index-constituent reconstruction is explicitly out of scope
+and would be over-engineering for 30 hand-picked liquid names that aren't
+trying to replicate an index's changing membership.
+
+**Alternatives considered.** Building a `SymbolMembership`-style table
+tracking historical index inclusion/delisting dates (rejected: no index is
+being replicated here at all — this would solve a problem the system
+doesn't have, at real modeling cost).
+
+**Consequences.** `tests/test_backtest_endpoint.py` seeds a symbol marked
+`active=False` today with a signal-worthy historical series and asserts it
+still appears in the backtest's trade log — the concrete, testable form of
+this mitigation for a fixed-watchlist system.

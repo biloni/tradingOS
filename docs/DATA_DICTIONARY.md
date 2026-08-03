@@ -2,9 +2,10 @@
 
 This documents the **conceptual** data model for the whole system so it can
 be reviewed end-to-end. Entities not yet implemented say so; implemented ones
-say which migration/module they live in. As of Phase 2: `Symbol`,
-`PriceBar`, `Indicator` are live (migration `bd027d9f35a2`); everything else
-below is still conceptual, landing in the phase noted.
+say which migration/module they live in. As of Phase 5: every entity below
+is live except `BacktestRun`'s Phase 6 companion (the strategy-change
+approval flow doesn't add a new entity, it adds a review/approval process
+around `StrategyVersion` and `BacktestRun`, which already exist).
 
 ## Dimensions (master data — **implemented, Phase 2**)
 
@@ -126,14 +127,27 @@ through `services/audit.py`'s `record_audit_event()`, for every paper-order
 propose/confirm/refresh/cancel so far. Append-only; nothing here is ever
 updated or deleted.
 
-## Backtesting (Phase 5)
+## Backtesting (**implemented, Phase 5** — migration `130bfdd45919`)
 
 ### BacktestRun
-`strategyVersionId`, `dateRangeStart`, `dateRangeEnd`, `resultsSummary
-(JSON)`, `createdAt`. Runs against historical `PriceBar` data with realistic
-fills — no look-ahead bias, no survivorship bias (principle 14): the symbol
-universe for a given historical date must be reconstructable as it existed
-on that date, not filtered by today's index membership.
+`apps/api/src/tradingos_api/models/backtest_run.py`. `id`,
+`strategy_version_id` (FK), `date_range_start` / `date_range_end` (`Date`),
+`parameters` (JSON — a full snapshot of every input: `entry_score_threshold`,
+`exit_score_threshold`, `max_holding_days`, `position_size_pct`,
+`starting_cash`, `benchmark_ticker` — these aren't part of
+`StrategyVersion.config`, which only holds scoring weights, so they're
+snapshotted here for full reproducibility, principle 8/9),
+`results_summary` (JSON — `ending_equity`, `total_return_pct`,
+`max_drawdown_pct`, `win_rate_pct`, `num_trades`, `avg_win_pct`,
+`avg_loss_pct`, `benchmark_return_pct` (nullable), `equity_curve`, `trades`
+— see `schemas/backtest.py` for the typed shape callers see), `created_at`.
+Runs synchronously — `services/backtest.py`'s `run_backtest_simulation()`
+(pure, no DB — see its module docstring) replays the scoring engine
+day-by-day against real `PriceBar`/`Indicator` history with realistic
+next-bar-open fills, no look-ahead bias (ADR-022), and no survivorship bias
+(ADR-025 — the universe is every known `Symbol` regardless of today's
+`active` flag). Never writes `PaperOrder` rows (ADR-024) — a backtest is a
+historical simulation, not a real user action.
 
 ## Explicitly not modeled
 
