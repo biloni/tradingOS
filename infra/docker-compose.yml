@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: tradingos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tradingos_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in your shell or a .env file next to this compose file}
+      POSTGRES_DB: tradingos
+    ports:
+      - "5432:5432"
+    volumes:
+      - tradingos-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tradingos_app -d tradingos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tradingos-postgres-data:

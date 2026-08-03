@@ -1,0 +1,48 @@
+[project]
+name = "tradingos-api"
+version = "0.1.0"
+description = "TradingOS API: FastAPI backend for market data, paper portfolio, scoring, and backtesting."
+readme = "README.md"
+authors = [
+    { name = "biloni", email = "bilonikadakia@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.1",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "sqlalchemy==2.0.51",
+    "alembic==1.18.5",
+    "psycopg[binary]==3.3.4",
+]
+
+[project.scripts]
+tradingos-api = "tradingos_api:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "httpx2==2.9.1",
+    "ruff==0.16.1",
+    "mypy==2.3.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
