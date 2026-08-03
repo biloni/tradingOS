@@ -1,36 +1,48 @@
 # Data Dictionary
 
 This documents the **conceptual** data model for the whole system so it can
-be reviewed end-to-end, even though most of these entities are implemented in
-later phases (none exist as SQLAlchemy models or migrations yet — Phase 1 has
-zero domain tables, see docs/ARCHITECTURE.md). Each entity below states which
-phase implements it.
+be reviewed end-to-end. Entities not yet implemented say so; implemented ones
+say which migration/module they live in. As of Phase 2: `Symbol`,
+`PriceBar`, `Indicator` are live (migration `bd027d9f35a2`); everything else
+below is still conceptual, landing in the phase noted.
 
-## Dimensions (master data — Phase 2)
+## Dimensions (master data — **implemented, Phase 2**)
 
 ### Symbol
-The tradable instrument. `ticker`, `name`, `exchange`, `assetType (EQUITY |
-ETF — ADR-003)`, `active`.
+`apps/api/src/tradingos_api/models/symbol.py`. The tradable instrument.
+`id`, `ticker` (unique), `name`, `exchange`, `asset_type` (native Postgres
+enum: `EQUITY | ETF` — ADR-003), `active`. Seeded from
+`seed_symbols.py` (~25 liquid equities + SPY/QQQ/IWM/DIA).
 
 ### FxRate / currency
 Not applicable in the current scope — Alpaca US equities/ETFs are USD-only,
 unlike the multi-currency concern in other Workday-style HR systems. No
 currency-conversion table exists in this data model.
 
-## Facts (immutable, append-only — Phase 2)
+## Facts (immutable, append-only — **implemented, Phase 2**)
 
 ### PriceBar
-One row per `(symbol, date, timeframe)`. `open, high, low, close, volume`,
-`source` (e.g. "alpaca-iex"), `fetchedAt`, `timezone`. Never mutated — a
-correction is a new row with a later `fetchedAt`, not an update in place
-(principle: separate observed facts from everything else).
+`apps/api/src/tradingos_api/models/price_bar.py`. One row per `(symbol_id,
+as_of, timeframe)` — but that tuple is **not** a unique constraint (ADR-011):
+`open, high, low, close` (`Numeric(18,6)`), `volume` (`BigInteger`),
+`source` ("alpaca"), `adjustment` ("split" — ADR-010), `fetched_at`
+(tz-aware). Never mutated — a correction is a new row with a later
+`fetched_at`, not an update in place. `services/price_bars.py`'s
+`get_latest_price_bars()` is the one shared helper that derives "current"
+from this append-only table (every future caller reads through it, never
+re-implements the max-`fetched_at`-per-date logic itself).
 
-## Deterministic calculations (Phase 2)
+## Deterministic calculations (**implemented, Phase 2**)
 
 ### Indicator
-Derived from `PriceBar` by a versioned, plain-Python formula (e.g., RSI-14,
-SMA-50). `symbol`, `asOf`, `indicatorName`, `version`, `value`. Recomputable
-from facts at any time — never hand-edited.
+`apps/api/src/tradingos_api/models/indicator.py`. Derived from `PriceBar` by
+a versioned, plain-Python formula (`services/indicators.py`): `SMA_20`,
+`SMA_50`, `EMA_12`, `EMA_26`, `RSI_14`, `MACD_LINE`, `MACD_SIGNAL`,
+`MACD_HIST`, `BB_UPPER`, `BB_MID`, `BB_LOWER`, `ATR_14`. `symbol_id`,
+`as_of`, `indicator_name`, `version` (currently `"v1"`), `value`
+(`Numeric(18,6)`). Unlike `PriceBar`, this **is** idempotent — unique
+constraint on `(symbol_id, as_of, indicator_name, version)` — since it's a
+pure function of existing facts, not a new observation (ADR-012).
 
 ## Model inferences (Phase 4)
 

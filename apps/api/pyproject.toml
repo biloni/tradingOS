@@ -15,10 +15,12 @@ dependencies = [
     "sqlalchemy==2.0.51",
     "alembic==1.18.5",
     "psycopg[binary]==3.3.4",
+    "alpaca-py==0.43.5",
 ]
 
 [project.scripts]
 tradingos-api = "tradingos_api:main"
+tradingos-ingest-prices = "tradingos_api.scripts.ingest_prices:main"
 
 [build-system]
 requires = ["uv_build>=0.12.1,<0.13.0"]

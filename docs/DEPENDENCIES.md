@@ -17,6 +17,7 @@ CPython 3.14.6 locally)
 | sqlalchemy | 2.0.51 | ORM / engine |
 | alembic | 1.18.5 | Migrations |
 | psycopg[binary] | 3.3.4 | Postgres driver (v3) |
+| alpaca-py | 0.43.5 (verified again 2026-08-03, Phase 2) | Official Alpaca SDK (ADR-009) — pulls in `pandas`, `numpy`, `websockets`, `requests`, `msgpack`, `sseclient-py` as transitive deps |
 
 Dev-only:
 

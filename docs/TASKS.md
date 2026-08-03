@@ -4,7 +4,7 @@ Each phase is worked in full (small, modular, tested, documented) before the
 next begins. See PROJECT_INSTRUCTIONS.md "Working Method" for the process
 every phase follows.
 
-## Phase 1 — Foundations & Architecture (current)
+## Phase 1 — Foundations & Architecture
 
 - [x] Repo scaffold: `apps/web` (Next.js), `apps/api` (FastAPI), `infra/`
 - [x] Vendor ADRs confirmed with user: Alpaca (data+broker), US equities+ETFs
@@ -19,16 +19,27 @@ every phase follows.
 - [x] Lint/format/type-check/tests passing on both apps
 - [x] All 15 required docs + DEPENDENCIES.md written
 - [x] Verification workflow run end-to-end, docs/TEST_EVIDENCE.md filled in
-- [ ] Phase 1 checkpoint commit
+- [x] Phase 1 checkpoint commit (`0a2644d`)
 
-## Phase 2 — Data Ingestion & Indicators
+## Phase 2 — Data Ingestion & Indicators (current)
 
-- [ ] Concrete `AlpacaMarketDataProvider` implementing `MarketDataProvider`
-- [ ] `Symbol`, `PriceBar` SQLAlchemy models + first Alembic migration
-- [ ] Deterministic indicator calculations (versioned, unit-tested)
-- [ ] Corporate-actions handling (splits/dividends) for equities/ETFs
-- [ ] Synthetic fixtures for the default test suite (no live Alpaca calls
-      required to pass tests)
+- [x] Concrete `AlpacaMarketDataProvider` implementing `MarketDataProvider`
+- [x] `Symbol`, `PriceBar`, `Indicator` SQLAlchemy models + first Alembic
+      migration (`bd027d9f35a2`)
+- [x] Deterministic indicator calculations (SMA/EMA/RSI/MACD/Bollinger/ATR,
+      versioned via `FORMULA_VERSION`, unit-tested against hand-verifiable
+      invariants)
+- [x] Corporate-actions handling: delegated to Alpaca's split-adjusted bars
+      (ADR-010), not a custom adjustment engine
+- [x] Synthetic fixtures for the default test suite (mocked `alpaca-py`
+      client, in-memory SQLite for endpoint tests — no live Alpaca calls or
+      credentials required to pass `pytest`)
+- [x] Ingestion entrypoint (`scripts/ingest_prices.py`) + 3 read endpoints
+      (`/api/v1/symbols`, `.../bars`, `.../indicators`)
+- [x] Live verification: real Alpaca keys provided, ingestion run against
+      real data (30 symbols, 14,970 price bars, 171,270 indicator rows),
+      endpoints hit and confirmed returning real data
+- [ ] Phase 2 checkpoint commit
 
 ## Phase 3 — Paper Portfolio & Trade Tracking
 

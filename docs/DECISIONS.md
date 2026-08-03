@@ -158,3 +158,94 @@ install is the primary path for this developer's local setup.
 **Consequences.** README documents both paths. A dedicated least-privilege
 role (`tradingos_app`) and database (`tradingos`) were created rather than
 using the `postgres` superuser at runtime.
+
+---
+
+## ADR-009: Alpaca SDK (`alpaca-py`), not hand-rolled HTTP
+
+**Context.** Phase 2 needed a concrete `MarketDataProvider` implementation
+against Alpaca's market data API.
+
+**Decision.** Use the official `alpaca-py` package (`StockHistoricalDataClient`)
+rather than calling Alpaca's REST endpoints directly with `httpx`/`requests`.
+
+**Alternatives considered.** Hand-rolled HTTP client (rejected: would
+duplicate auth header handling, pagination, and response-shape parsing that
+the official SDK already gets right and keeps up to date).
+
+**Consequences.** Adds `alpaca-py` and its transitive deps (`pandas`,
+`numpy`, `websockets`, etc. — see docs/DEPENDENCIES.md) to `apps/api`.
+`AlpacaMarketDataProvider` (providers/alpaca_market_data.py) wraps the SDK
+behind the existing `MarketDataProvider` Protocol so callers never see the
+SDK's own types directly.
+
+---
+
+## ADR-010: Corporate actions via Alpaca's split-adjusted bars, not a custom
+adjustment engine
+
+**Context.** Phase 2's task list calls for "corporate-actions handling
+(splits/dividends)." Building adjustment math from raw corporate-action data
+would duplicate a well-solved problem.
+
+**Decision.** Request bars with `adjustment="split"` (split-adjusted, not
+dividend-adjusted) from Alpaca. Split-only matches how charting platforms
+display default price series and is what SMA/RSI/MACD-style technical
+indicators expect; dividend adjustment depresses historical closes in a way
+suited to total-return analysis, not swing-trade price-action signals.
+
+**Alternatives considered.** `adjustment="all"` (both split + dividend) —
+rejected for the reason above. `adjustment="raw"` + custom adjustment engine
+— rejected as unnecessary re-implementation of a vendor-solved problem.
+
+**Consequences.** `PriceBar.adjustment` is stored as `"split"` on every row
+so this choice is visible in the data itself, not just in code. A future
+phase wanting total-return analysis would add a second, explicitly-dividend-
+adjusted series rather than changing this one.
+
+---
+
+## ADR-011: `PriceBar` is append-only; `get_latest_price_bars()` is the one
+shared derivation helper
+
+**Context.** docs/DATA_DICTIONARY.md already stated `PriceBar` facts are
+never mutated in place. Phase 2 had to decide the concrete mechanics of that.
+
+**Decision.** No unique constraint on `(symbol_id, as_of, timeframe)` —
+multiple rows for the same date are allowed (e.g. a later corrective
+re-fetch). `services/price_bars.py`'s `get_latest_price_bars()` is the single
+place every caller (indicators now, scoring/backtesting later) reads
+"current" prices through, always picking the max-`fetched_at` row per date.
+
+**Alternatives considered.** Upsert on `(symbol_id, as_of, timeframe)`
+(rejected: silently overwriting a prior fetch loses the audit trail of what
+was observed when — contradicts principle 3/9).
+
+**Consequences.** Re-running the ingestion script repeatedly grows the table
+rather than upserting — documented plainly in the script's docstring and
+docs/STATUS.md so it reads as intentional, not a bug.
+
+---
+
+## ADR-012: `Indicator` rows are idempotent (insert-if-not-exists), not
+append-only
+
+**Context.** Unlike `PriceBar` (an observed fact), `Indicator` is a
+deterministic calculation (principle 6) — given the same inputs and the same
+formula version, the output is always the same value.
+
+**Decision.** Unique constraint on `(symbol_id, as_of, indicator_name,
+version)`; `compute_indicators_for_symbol()` uses `INSERT ... ON CONFLICT DO
+NOTHING ... RETURNING id` and counts only the rows Postgres actually
+inserted. (Note: `cursor.rowcount` was tried first and observed to return
+`-1` for this bulk multi-row upsert under psycopg3 — unreliable, so
+`RETURNING` is used instead for a portable, correct count.)
+
+**Alternatives considered.** Append-only like `PriceBar` (rejected: there's
+no meaningful "correction" concept for a pure function of existing data — a
+different answer only happens when the formula version changes, which is
+already handled by bumping `FORMULA_VERSION`).
+
+**Consequences.** Re-running the ingestion script against unchanged price
+history is a safe no-op for indicators (verified: second run reported 0 new
+rows) — the same run does still insert new `PriceBar` rows per ADR-011.

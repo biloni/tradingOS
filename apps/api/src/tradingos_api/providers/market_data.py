@@ -14,6 +14,15 @@ from typing import Protocol
 from pydantic import BaseModel
 
 
+class MarketDataProviderNotConfigured(RuntimeError):
+    """Raised when a provider is used without its required credentials set.
+
+    Callers (e.g. the ingestion script) catch this and print a clear message
+    instead of the feature crashing with an opaque error — principle 5:
+    missing config is shown explicitly, not papered over.
+    """
+
+
 class PriceBarDTO(BaseModel):
     symbol: str
     as_of: date
