@@ -53,6 +53,32 @@
 - Rate-limited endpoint — **implemented, Phase 4**
   (`POST /api/v1/ask`, `core/rate_limit.py`).
 
+## Phase 7 review note (2026-08-03) — frontend introduces no new secret-handling surface
+
+Reviewed `apps/web` end-to-end before the Phase 7 checkpoint:
+
+- The Anthropic API key is never referenced anywhere under `apps/web` —
+  confirmed by inspection of every `lib/api/*.ts` module. The only
+  frontend-configurable value is `NEXT_PUBLIC_API_URL` (the API's own
+  base URL, not a secret — deliberately `NEXT_PUBLIC_*` since it's not
+  sensitive, unlike the Anthropic key which stays server-side-only in
+  `apps/api`).
+- No form in `apps/web` collects or transmits a credential, API key, or
+  payment detail of any kind — every form (`OrderForm`,
+  `StrategyVersionsPage`'s propose form, the ask chat input) only ever
+  submits trading/strategy-configuration data to `apps/api`'s existing,
+  already-reviewed endpoints.
+- No new client-side storage was added (no `localStorage`/cookies/session
+  storage) — all state is either server-derived (TanStack Query) or
+  page-local React state that resets on reload.
+- `apps/web`'s only outbound network calls are to `NEXT_PUBLIC_API_URL`
+  (this app's own API) — no third-party script, analytics tag, or
+  external API call exists anywhere in the frontend.
+
+**Conclusion:** Phase 7 does not change this document's threat model —
+still a single-user local tool, no auth, no new secret ever touches the
+browser.
+
 ## Local dev environment note
 
 Postgres auth on this dev machine uses `scram-sha-256` (encrypted password

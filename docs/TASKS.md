@@ -141,10 +141,43 @@ every phase follows.
 - [x] Live verification: real propose → compare → approve flow against
       the real ingested data, `strategy_versions`/`audit_events` rows
       inspected (see docs/TEST_EVIDENCE.md)
-- [ ] Phase 6 checkpoint commit
+- [x] Phase 6 checkpoint commit (`3fdbfac`)
 
 ## Phase 7 — UI Polish & Documentation Hardening
 
-- [ ] Full dashboard, charts, review flows
-- [ ] docs/USER_GUIDE.md expanded to cover every shipped feature
-- [ ] Final security/test-strategy review pass
+- [x] Full dashboard, charts, review flows
+      - Dashboard: portfolio snapshot + health status + quick links
+      - Symbols list + detail (candlestick chart + latest-indicators
+        readout — no ranged overlay, the single-day `/indicators`
+        contract doesn't support one)
+      - Portfolio: holdings, propose→confirm→(refresh) paper-order flow,
+        reconciliation panel
+      - Ask: NL query chat with grounded recommendation chips and
+        429/503/422-specific error copy
+      - Backtests: run-new form, list, `BacktestReport` (metrics + equity
+        curve + trade log)
+      - Strategy versions: structured propose form, list,
+        propose→compare→approve/reject state machine (`CompareView`)
+      - Shared `components/ui/` kit + persistent sidebar (ADR-029)
+- [x] docs/USER_GUIDE.md expanded to cover every shipped feature (full
+      rewrite, one section per page/flow, plus known limitations)
+- [x] Final security/test-strategy review pass — docs/SECURITY.md dated
+      note (frontend introduces no new secret-handling surface),
+      docs/TEST_STRATEGY.md's Playwright layer marked implemented
+- [x] 20 new Vitest/RTL component tests: paper-order propose→confirm +
+      error states, strategy propose→compare→approve/reject state
+      machine + error states, ask page recommendation rendering +
+      429/503/422 states, `BacktestReport` data-shape/empty-state
+      coverage (jsdom can't render `<canvas>`, so chart components are
+      mocked in these tests rather than rendered)
+- [x] One Playwright e2e test (`e2e/paper-order-flow.spec.ts`, ADR-030)
+      against real dev + API servers — passing
+- [x] Bug found and fixed while writing tests: `CompareView.tsx`'s
+      `DeltaMetric` parsed an already `%`-suffixed string with `Number()`,
+      producing `NaN` and silently breaking the +/− sign and tone on
+      every delta metric (ADR-031)
+- [x] Live click-through of the full demo path (dashboard → symbol chart
+      → propose/confirm a paper order → run a backtest → propose/
+      compare/reject a strategy version → ask a question) — see
+      docs/TEST_EVIDENCE.md
+- [x] Phase 7 checkpoint commit

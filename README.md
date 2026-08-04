@@ -11,8 +11,8 @@ unreviewed autonomous trading bot.** See [PROJECT_INSTRUCTIONS.md](PROJECT_INSTR
 for the full set of non-negotiable product principles, and
 [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md) for MVP scope.
 
-**Current status:** Phase 6 (Learning / Strategy-Review Loop) — see
-[docs/STATUS.md](docs/STATUS.md).
+**Current status:** Phase 7 (UI Polish & Documentation Hardening) — the
+final planned phase, complete. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Stack
 
@@ -71,6 +71,9 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy . && uv run p
 
 # apps/web
 pnpm lint && pnpm typecheck && pnpm test
+
+# apps/web e2e (Playwright) — requires both servers above already running
+pnpm test:e2e
 ```
 
 ## Documentation index
@@ -94,11 +97,12 @@ pnpm lint && pnpm typecheck && pnpm test
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | How to use the app (grows each phase) |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | Pinned versions, verified against live registries |
 
-## Known limitations (as of Phase 6)
+## Known limitations (as of Phase 7)
 
-- No UI yet — every feature through Phase 6 (ingestion, indicators, paper
-  trading, scoring, NL query, backtesting, the strategy-review loop) is
-  API-only; the Next.js frontend is scaffolding pending Phase 7.
+- No SMA/indicator overlay line on the symbol-detail candlestick chart —
+  the real indicators endpoint only returns a single day's snapshot, not
+  a ranged series; a text readout is shown instead
+  ([docs/USER_GUIDE.md](docs/USER_GUIDE.md)).
 - No live-order capability exists anywhere in the codebase, by design
   (principle 10) — this isn't a flag waiting to be flipped, it doesn't exist.
 - No auth/multi-user support ([ADR-007](docs/DECISIONS.md)) — single-user
@@ -117,3 +121,6 @@ pnpm lint && pnpm typecheck && pnpm test
   fully built and doesn't depend on what originates a candidate.
 - `/api/v1/ask` is stateless per request — no persisted multi-turn
   conversation history yet ([ADR-019](docs/DECISIONS.md)).
+- Only one Playwright e2e journey exists (the paper-order flow,
+  [ADR-030](docs/DECISIONS.md)) — not a full end-to-end suite across
+  every page.

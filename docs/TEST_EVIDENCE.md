@@ -749,3 +749,218 @@ No new secrets this phase — Phase 6 makes no Alpaca or Anthropic API
 calls at all (pure computation over already-ingested Postgres data plus
 the existing backtest engine). Confirmed `.env` still absent from
 `git status --porcelain` before staging.
+
+## Phase 7 — UI Polish & Documentation Hardening (2026-08-03)
+
+### `apps/api` full suite — confirming zero backend drift
+
+No backend code changed this phase (UI-only). Re-ran the full suite
+anyway per the phase's acceptance criteria:
+
+```
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+85 files already formatted
+
+$ mypy .
+Success: no issues found in 84 source files
+
+$ pytest -v
+============================= test session starts =============================
+collected 107 items
+...
+======================= 107 passed, 1 warning in 11.27s ========================
+```
+Identical 107/107 pass count to Phase 6's checkpoint — confirms no drift.
+
+### `apps/web` component tests, lint, typecheck
+
+```
+$ pnpm lint
+$ eslint
+(no output = no errors)
+
+$ pnpm typecheck
+$ tsc --noEmit
+(no output = no errors)
+
+$ pnpm test
+$ vitest run
+ Test Files  5 passed (5)
+      Tests  20 passed (20)
+```
+
+20 new tests this phase, across 4 new files (dashboard coverage already
+existed from Phase 1, extended in this phase's rewrite of `page.tsx`):
+
+- `__tests__/portfolio.test.tsx` (3): propose→DRAFT-row-appears; the
+  `ConfirmButton` two-step gate (first click reveals "Are you sure?"
+  without submitting, second click actually confirms and the row's
+  status flips DRAFT→SUBMITTED); a propose error (400) surfaces via
+  `ErrorBanner` without adding a row.
+- `__tests__/strategy-versions.test.tsx` (4): the Review card (Compare/
+  Approve/Reject) only renders while `PROPOSED`; `Compare against active`
+  renders the delta and two `BacktestReport`s; the `ConfirmButton` gate
+  on Reject, ending in a REJECTED status and the Review card disappearing;
+  an approve error (400) surfaces via `ErrorBanner` with status unchanged.
+- `__tests__/ask.test.tsx` (5): an empty `recommendations` array renders
+  no recommendation chips; a populated array renders ticker/score/
+  confidence-pill chips; the 429/503/422-specific `ErrorBanner` copy each
+  render correctly for their respective status codes.
+- `__tests__/backtest-report.test.tsx` (5): the summary metrics grid
+  renders correctly formatted values (including a spot-check against the
+  exact real numbers from Phase 5's live verification — `$11,502.81`,
+  `15.03%`, `847` trades, `44.39%` benchmark return); one trade-log row
+  per trade with a `StatusPill` for `exit_reason`; empty-state copy for
+  zero trades and an empty equity curve; a null `benchmark_return_pct`
+  renders `—` instead of crashing. `EquityCurveChart` is mocked in this
+  file and in `strategy-versions.test.tsx` — jsdom has no real `<canvas>`
+  2D context, so `lightweight-charts` can't actually mount in these tests
+  (see the chart components' own comments); these tests cover data-shape
+  and empty-state handling, not real chart rendering, per the approved
+  Phase 7 plan's explicit priority-5 note for chart-adjacent components.
+
+### Bug found and fixed while writing the strategy-versions test
+
+Asserting on the rendered `+4.00%` delta text
+(`__tests__/strategy-versions.test.tsx`) initially failed — a real
+correctness bug in `components/strategy/CompareView.tsx`'s `DeltaMetric`:
+it called `Number(value)` on a string its own caller had already suffixed
+with `%` (e.g. `"4.00%"`), which is `NaN` in JavaScript, so the `+` prefix
+and emerald/red tone silently never rendered correctly regardless of the
+delta's actual sign — verified directly:
+```
+$ node -e "console.log(Number('4.00%'), Number('-1.00%'), Number('4.00'))"
+NaN NaN 4
+```
+Fixed by stripping a trailing `%` before parsing
+(`Number(value.replace(/%$/, ""))`). This had shipped silently in Phase
+6's original `CompareView.tsx` and was never caught by manual curl-based
+verification (which only inspects raw JSON, not rendered UI text/color) —
+found only once a component test asserted on the actual rendered string
+(ADR-031's discussion of this bug has the full before/after).
+
+### `apps/web` e2e (Playwright, ADR-030)
+
+Both servers already running locally (`uvicorn` on :8000 via the venv
+directly, `pnpm dev` on :3000). Installed Chromium
+(`pnpm exec playwright install chromium`) and ran the one e2e test:
+
+```
+$ pnpm exec playwright test
+Running 1 test using 1 worker
+
+  ok 1 [chromium] › e2e\paper-order-flow.spec.ts:10:5 › propose and confirm a paper order for a seeded liquid symbol (1.8s)
+
+  1 passed (2.4s)
+```
+
+This is a real, unmocked run against the real Alpaca paper-trading API —
+proposes a `MARKET BUY 1 AAPL` order, confirms it through the
+`ConfirmButton` gate, and asserts the row's status leaves `DRAFT` for
+`SUBMITTED`/`FILLED`.
+
+One config fix needed along the way: `e2e/paper-order-flow.spec.ts`'s
+`test(...)` calls were initially also being picked up by `vitest run`
+(both frameworks default to `*.spec.ts` discovery), causing a spurious
+Vitest failure with no relation to any application bug. Fixed by adding
+`exclude: ["**/node_modules/**", "**/e2e/**"]` to `vitest.config.mts`.
+
+### Live click-through of the full demo path (Browser tool)
+
+Both dev servers running against the real Postgres database (all prior
+phases' seeded/live-verified data intact). Walked the exact path named in
+the approved Phase 7 plan's verification section.
+
+**Environment limitation, disclosed up front:** this session's Browser
+pane reported "the Browser pane is not displayed, so the page is not
+compositing frames," which broke `computer{action:"screenshot"}` outright
+and — less obviously — also broke coordinate/`ref`-based clicks on real
+interactive elements (a click on "Propose order" produced no network
+request at all) and canvas pixel-buffer inspection (`canvas.width`/
+`.height` stuck at the browser's uninitialized 300×150 default across all
+chart canvases, and `canvas.toDataURL()` producing byte-identical output
+for all of them, consistent with Chromium suspending/throttling
+`requestAnimationFrame` — which `lightweight-charts` uses for its actual
+draw calls — for a non-composited tab). Worked around every case with an
+approach that doesn't depend on visual compositing: `javascript_tool`-
+dispatched `element.click()` calls (verified via `read_network_requests`
+that these produce real POST/GET calls, unlike the coordinate clicks),
+`get_page_text`/`read_page` for content verification, and
+`read_console_messages` for error-checking. This is a tooling/environment
+artifact of this specific session, not an application defect — confirmed
+by finding `lightweight-charts`' own "Charting by TradingView"
+attribution link present in the accessibility tree (proving the chart
+library itself initialized correctly even though its canvas never drew a
+visible frame), and by every JS-dispatched click producing the correct
+real network call and real state change described below.
+
+**Dashboard → Symbols → symbol chart:** loaded `/`, confirmed the
+portfolio snapshot and API-status card render with real data. Navigated
+to a symbol detail page; confirmed the latest-indicators text readout
+matches real DB values already verified in Phase 2's evidence (SMA_20
+$324.37, SMA_50 $309.50, RSI_14 43.24, etc.).
+
+**Portfolio — propose/confirm a real paper order:** filled the order
+form, JS-dispatched-clicked "Propose order" — a `DRAFT` row appeared.
+JS-dispatched-clicked "Confirm" (revealing "Are you sure?"), then
+"Confirm" again — `read_network_requests` confirmed a real
+`POST /api/v1/paper-orders/{id}/confirm` returning `200`, and the row's
+status updated to `SUBMITTED` in the UI without a manual refresh
+(TanStack Query invalidation working as designed).
+
+**Backtests, Strategy Versions — propose/compare/reject:** proposed a
+fresh "Phase 7 UI test candidate" `StrategyVersion` via the real form.
+On its detail page, clicked "Compare against active" (JS-dispatched,
+waited ~8s for two real backtests) — `CompareView` rendered with real
+delta metrics and both `BacktestReport`s; the Candidate side showed
+`$11,502.81` ending equity / `15.03%` return / `847` trades / `44.39%`
+benchmark return, exactly matching Phase 5's live-verified numbers (the
+active `Plan of Record`-lineage version's backtest is deterministic given
+the same underlying price history — see ADR-022). Clicked "Reject"
+(revealing the `ConfirmButton` gate), then "Confirm rejection" — the
+page's final text confirmed:
+```
+Phase 7 UI test candidate
+REJECTED
+Config
+{ "weights": {...}, "rsi_oversold": "30", ... }
+```
+and the Review card (Compare/Approve/Reject) correctly disappeared once
+the version left `PROPOSED`, matching `isProposed` gating in
+`app/strategy-versions/[id]/page.tsx`.
+
+**Ask — real Anthropic call:** navigated to `/ask`, filled "What does
+AAPL's current setup look like?" (a TradingOS-appropriate question — a
+generic placeholder question from an unrelated exercise was typed in by
+mistake first and corrected before submitting), JS-dispatched-clicked
+"Send". `read_network_requests` confirmed a real
+`POST /api/v1/ask` → `200`. The rendered answer:
+
+```
+Here's AAPL's current technical picture as of 2026-07-31:
+Latest close: $308.91 ... SMA_20: $324.37 | SMA_50: $309.50 ...
+RSI_14: 43.24 ... MACD histogram is negative (-1.37) ...
+Bollinger Bands: ... price is in the lower half of the band ...
+I haven't run the deterministic scoring model yet — want me to call
+compute_recommendation for AAPL ...? Remember, this is decision support
+only — final call is yours.
+```
+Every number matches the real DB values from Phase 2's ingestion exactly,
+confirming the model is grounded in real tool results, not inventing
+figures (principles 6/7) — and it correctly stayed in its
+decision-support-only lane unprompted, same as Phase 4's live
+verification. `read_console_messages` showed zero errors throughout.
+
+This completes live verification of every page and both review flows
+through the real UI (not just curl, as in Phases 3/6) — the full demo
+path named in PROJECT_INSTRUCTIONS.md's working method.
+
+### Secrets check before commit
+
+No new secrets this phase — `apps/web` never references the Anthropic
+key or any Alpaca credential anywhere (docs/SECURITY.md's Phase 7 review
+note). Confirmed `.env`/`.env.local` still absent from
+`git status --porcelain` before staging.

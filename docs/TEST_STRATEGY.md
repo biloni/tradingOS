@@ -12,10 +12,18 @@
 3. **Component tests** (Vitest + React Testing Library) — UI components in
    isolation, with `fetch`/API calls mocked. `__tests__/page.test.tsx` is the
    Phase 1 example.
-4. **End-to-end tests** (Playwright) — deferred until a real multi-step user
-   journey exists (ADR-006). Phase 1's only journey is "load the health
-   page," already covered by the component test — a Playwright test today
-   would duplicate it for no additional signal.
+4. **End-to-end tests** (Playwright) — **implemented, Phase 7**
+   (`apps/web/e2e/paper-order-flow.spec.ts`, ADR-030). Exactly one test:
+   propose a paper order for a seeded liquid symbol, confirm it through
+   the two-step `ConfirmButton` gate, and assert its status leaves `DRAFT`
+   via a real Alpaca paper-trading call. Runs against the real local dev
+   server + real FastAPI + real seeded Postgres data — not mocked, and
+   deliberately not part of the default `pnpm test` run (see below) since
+   it requires both servers already running locally
+   (`pnpm exec playwright test` or `pnpm test:e2e`). Deferred since Phase
+   1 per ADR-006 until this phase's two real multi-step journeys
+   (paper-order propose→confirm; strategy propose→compare→approve/reject)
+   existed to justify it.
 
 ## Fixtures, not live APIs, in the default test suite
 
@@ -25,6 +33,11 @@ provider tests inject a fake implementation of `MarketDataProvider` /
 `PaperBrokerProvider` / `LLMProvider` (see docs/ARCHITECTURE.md's provider
 abstraction section) built from static fixture data. This keeps CI/local
 test runs free, fast, and reproducible without secrets.
+
+The one deliberate exception is the Playwright e2e test (layer 4 above,
+ADR-030) — by definition it exercises the real Alpaca paper-trading API,
+which is why it is not part of `pytest`/`vitest run` and must be invoked
+explicitly (`pnpm test:e2e`) with both real servers already running.
 
 ## Determinism
 

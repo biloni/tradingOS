@@ -366,7 +366,10 @@ backtest re-run — nothing to activate.
 
 List (newest-first) / detail. Same shape as `POST /api/v1/strategy-versions`.
 
-## Phase 7+ (not yet implemented)
+## Phase 7 — frontend consumer
 
-Any UI for reviewing/proposing/approving strategy versions or viewing
-backtest reports — everything through Phase 6 is API-only.
+Every endpoint contract above is now consumed by `apps/web`
+(`lib/api/*.ts`, one module per domain, response fields typed
+field-for-field against these contracts — see ADR-031 on the
+Decimal-as-string convention). No new endpoints were added this phase;
+Phase 7 was UI-only against the API surface documented above.

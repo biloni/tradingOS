@@ -734,3 +734,115 @@ relying on. A defensive `candidate.id == active.id` guard in
 precondition silently corrupting a row into both `ACTIVE` and
 `SUPERSEDED`, even though the `status == PROPOSED` check already makes
 that case unreachable today.
+
+---
+
+## ADR-029: Hand-rolled `components/ui/` kit, sized to actual need — no
+external design system
+
+**Context.** Phase 7 needed to build 6 pages' worth of UI against the
+already-complete API. No component library is named anywhere in the brief
+or PROJECT_INSTRUCTIONS.md's default technical direction (Next.js/
+TypeScript/Tailwind/TanStack Query/"a reliable charting library" — the
+last of which is already scoped by ADR-004).
+
+**Decision.** `components/ui/`: `Card`, `Button` (variant: primary/
+secondary/danger/ghost), `Table`/`Thead`/`Tbody`/`Tr`/`Th`/`Td`,
+`StatusPill` (one shared status→tone lookup covering every enum-like
+string this app renders — `PaperOrderStatus`, `StrategyVersionStatus`,
+`RecommendationConfidence`, backtest `exit_reason`), `LoadingSpinner`,
+`ErrorBanner` (centralizes HTTP-status→message mapping via an `ApiError`
+class carrying the response status, with per-call message overrides),
+`Input`, `Textarea`, `ConfirmButton` (an inline two-step confirm row, not
+a modal). Each component was extracted only once it was actually needed
+3+ times across the 6 pages, not speculatively built up front.
+
+**Alternatives considered.** Pulling in shadcn/ui or a similar library
+(rejected: this is the kind of "enterprise-grade for its own sake"
+over-build the project brief warns against for a personal, one-developer
+app — and `shadcn`'s own CLI init requires network access that may not be
+available, per the brief's own tooling note). A full accessible modal
+dialog for `ConfirmButton` (rejected: real a11y work — focus trap, ESC
+handling, backdrop — that a second explicit click satisfies just as well
+for principle 11's actual requirement, "confirm immediately before the
+action," without needing dialog primitives at all).
+
+**Consequences.** `ConfirmButton` is reused identically for order-confirm,
+strategy-approve, and strategy-reject — the same human-confirmation
+pattern everywhere an action is irreversible, rather than three bespoke
+implementations.
+
+---
+
+## ADR-030: Playwright added this phase — one e2e test, run against real
+dev + API servers, not mocked
+
+**Context.** ADR-006 deferred Playwright "until a real multi-step user
+journey exists." Two now exist: the paper-order propose→confirm flow and
+the strategy propose→compare→approve/reject flow.
+
+**Decision.** Exactly one Playwright test —
+`apps/web/e2e/paper-order-flow.spec.ts` — covering the paper-order flow
+(faster than the strategy flow, which needs two full backtest runs to
+complete; and the flow ADR-006 itself named as its trigger example). It
+runs against the real local dev server, the real FastAPI process, and
+real already-ingested Postgres data — no mocked `fetch`, no seeded
+throwaway database. `playwright.config.ts` deliberately has no
+`webServer` block; both servers must already be running locally, matching
+this project's existing manual local-dev workflow rather than adding new
+CI infrastructure. `@playwright/test` added as a devDependency; a
+`test:e2e` script added to `package.json`.
+
+**Alternatives considered.** A larger Playwright suite covering every
+page (rejected: the existing Vitest component tests already cover
+per-component behavior and error states with mocked `fetch`; a Playwright
+test that also mocked the API wouldn't earn the name "end-to-end" and
+would just duplicate that coverage more slowly). Testing the strategy
+flow instead (rejected: correct but slower — two ~5-6s backtest runs per
+test execution — for no additional signal over the paper-order flow,
+which exercises the identical `ConfirmButton` human-confirmation pattern).
+
+**Consequences.** This one test depends on a seeded liquid symbol
+(`AAPL`) existing and the paper-trading market being reachable — documented
+in this file and in docs/TEST_STRATEGY.md as a real, accepted dependency
+of this specific test, not a flake risk to silently tolerate.
+
+---
+
+## ADR-031: Decimal-as-string is a first-class TypeScript contract, not an
+implementation detail
+
+**Context.** Every `Numeric`-backed field in the API (prices, cash,
+backtest metrics, indicator values, strategy thresholds) is serialized as
+a JSON string, never a float — deliberate on the backend (`decimal.js`/
+Python `Decimal`, never float-math currency). Phase 7's frontend needed a
+policy for how these fields are typed and handled in TypeScript.
+
+**Decision.** Every `lib/api/*.ts` response interface types these fields
+`string` explicitly (e.g. `PaperOrder.limit_price: string | null`,
+`BacktestRun.results_summary.ending_equity: string`) — never `number`,
+even though a naive reading of "it's a numeric value" would suggest that.
+`Number(...)` conversion happens only at the point of display formatting
+or chart-data mapping (`CandlestickChart`, `EquityCurveChart`,
+`BacktestReport`'s `usd()`/`pct()` helpers) — never inside `lib/api/` or
+`lib/hooks/`.
+
+**Alternatives considered.** Converting to `number` in the fetch layer for
+convenience (rejected: reintroduces float-math risk one layer removed
+from where the backend deliberately avoided it, and would silently lose
+precision for values like `"4,500,000.00"`-scale figures if this app ever
+needed them at that magnitude — defeats the entire point of the backend's
+own Decimal discipline). A shared `Money`/`Decimal`-like TS wrapper type
+(rejected for MVP: no arithmetic is ever performed on these values
+client-side, only display formatting — a wrapper class would add
+ceremony with no correctness benefit over a plain typed `string`).
+
+**Consequences.** A bug caught directly by this discipline during Phase 7
+component-test writing: `components/strategy/CompareView.tsx`'s
+`DeltaMetric` called `Number(value)` on a string that already had `%`
+appended by its caller (e.g. `"4.00%"`), which is `NaN` — so the +/− sign
+and emerald/red tone silently never worked. Fixed by stripping a trailing
+`%` before parsing. Caught because the ADR-031 discipline of tracing
+exactly where a string becomes a number made the bug visible once a test
+asserted on the rendered `+4.00%` text, rather than being masked by an
+implicit `number` conversion happening somewhere upstream.
