@@ -1,6 +1,7 @@
 # Status
 
-**Current phase:** Phase 7 — UI Polish & Documentation Hardening
+**Current phase:** Phase 7 (shipped) + a planning-only Product &
+Architecture Refinement pass layered on top, not yet implemented.
 **Last updated:** 2026-08-03
 
 ## Done
@@ -63,12 +64,49 @@
     their final review-pass updates (frontend introduces no new
     secret-handling surface; Playwright layer marked implemented).
 
+## Product & Architecture Refinement (2026-08-03, planning only — no code changed)
+
+A much larger scope was defined per an explicit refinement brief: a
+symbol-validated tiered watchlist, an 8-role investment committee behind
+deterministic risk gates, regime/VIX-aware position sizing, ATR+structure
+stops, a broker-agnostic trade journal as the primary tracked portfolio,
+an active trade monitor, premarket/intraday/EOD scheduled workflows, and
+recommendation-vs-reality tracking. Per the brief's own instruction, this
+pass produced **documents only — no application code, no scaffolding, no
+migration, no new dependency installed.**
+
+Produced this pass:
+- docs/PRODUCT_REQUIREMENTS.md — full rewrite (persona, jobs-to-be-done,
+  50 functional requirements, 8 non-functional requirements, user stories,
+  8 measurable acceptance criteria).
+- docs/ARCHITECTURE.md — full rewrite (context diagram, ingestion→
+  recommendation→action→review data-flow diagram, both Mermaid; 11 bounded
+  contexts; trust boundaries; deployment topology).
+- docs/DECISIONS.md — ADR-032 through ADR-042 (symbol validation,
+  watchlist tiers, regime-can't-trigger enforcement, ATR+structure stops,
+  risk-budget sizing, no-average-down precondition, committee execution
+  order/cost bound, journal-vs-Alpaca-paper split, in-process scheduler,
+  computed recommendation-vs-reality classification, deferred walk-forward).
+- docs/PROVIDER_MATRIX.md — candidate evidence vendors (none selected,
+  BLOCKING_DECISIONS.md #1/#2/#7) + a low/normal/heavy usage cost estimate.
+- docs/MODEL_GOVERNANCE.md — extended for the 8-role committee (per-role
+  prompt versions, structured output schemas, evaluation/drift plan, cost
+  bound of 7 calls/run).
+- docs/MVP_PLAN.md (new) — MVP / Phase 2 / Future scope split.
+- docs/UX_MAP.md (new) — pages, actions, empty/error/stale states, mobile.
+- docs/THREAT_MODEL.md (new) — STRIDE walk of the 4 new trust boundaries.
+- docs/RISK_REGISTER.md (new) — 10 risks with likelihood/impact/mitigation.
+- docs/BLOCKING_DECISIONS.md (new) — 10 decisions, each with a recommended
+  default, none acted on.
+- README.md — status/known-limitations updated to make clear this refined
+  scope is unimplemented.
+
 ## In progress / next
 
-- Create the Phase 7 checkpoint commit.
-- **Then stop and wait** — no Phase 8 is defined in docs/TASKS.md; this
-  was the final planned phase. Any further work needs a new explicit
-  request.
+- **Stop and wait**, per this pass's own explicit instruction. Nothing is
+  scaffolded. Next step is yours: review docs/BLOCKING_DECISIONS.md
+  (confirm or override each of the 10), after which an implementation
+  phase plan (with real phase numbers) can be proposed.
 
 ## Known blockers
 

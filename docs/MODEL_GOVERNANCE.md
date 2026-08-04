@@ -94,3 +94,129 @@ and the blast radius of a runaway client loop. Exceeding it returns `429`.
 at `MAX_ITERATIONS = 5` Anthropic calls per `/api/v1/ask` request (ADR-019)
 — an unbounded or adversarial tool-call sequence can't run indefinitely or
 burn unbounded spend on a single request.
+
+---
+
+## Refinement: the investment committee (planned, not yet implemented)
+
+Everything below extends the policies above to the 8-role committee
+(docs/ARCHITECTURE.md bounded context 5, ADR-038) — no new governance
+*mechanism* is introduced; every existing policy on this page (tool-use
+not text-to-SQL, grounding, confidence-is-not-a-probability,
+review-before-activation, cost/prompt versioning, rate limiting, tool-call
+budget) applies identically to each of the 8 roles. This section records
+what's specific to running 8 roles instead of 1.
+
+### Per-role prompt/model versions
+
+Each role gets its own `prompt_version` string (e.g. `committee-bull-v1`,
+`committee-cio-v1`), independently bumpable — changing the Bear Analyst's
+prompt doesn't require re-versioning the other 7. All 8 roles use the same
+model (`claude-sonnet-5`, ADR-017) for MVP; a role-specific model choice
+(e.g. a cheaper model for a simpler role) is a future optimization, not
+adopted without evidence it's needed — matches the existing "don't add
+infrastructure without a demonstrated need" posture.
+
+### Structured outputs per role, not free text
+
+Every role returns a schema-validated structured object, not prose alone —
+extending the existing tool-use pattern (`llm_tools.py`'s allow-list) to
+each role's *output* shape, not just its ability to call tools:
+
+- **Bull / Bear Analyst:** `{ thesis: str, cited_evidence: [evidence_id],
+  key_risks_acknowledged: [str] }` — `cited_evidence` must reference actual
+  evidence-bundle item ids (FR-17); a citation to a non-existent evidence
+  id is a validation failure, not silently accepted.
+- **Technical / Fundamental / Macro Strategist:** `{ assessment: str,
+  supporting_indicators_or_evidence: [evidence_id], stance: BULLISH |
+  BEARISH | NEUTRAL }`.
+- **Risk Manager:** `{ narrative: str, position_size_shares: int,
+  stop_price: Decimal, target_price: Decimal, risk_flags: [str] }` — the
+  numeric fields here are **echoed from the deterministic gates' tool
+  result, never independently computed by the model** (principle 6/7); the
+  schema includes them so the narrative is checkable against the same
+  numbers a human would see, not so the model is trusted to produce them.
+- **Portfolio Manager:** `{ narrative: str, portfolio_fit_flags: [str]
+  (e.g. sector concentration, correlation) }`, same
+  echo-not-compute rule for any numeric limit it references.
+- **CIO/Judge:** `{ recommendation: BUY | SELL | HOLD | WATCH | AVOID |
+  NO_ACTION, narrative: str, confidence_inputs_summary: str }` — no
+  self-reported numeric confidence field (see below).
+
+Every structured output is validated against its pydantic schema
+server-side before being persisted or shown — a malformed response is a
+handled error state (retry once, then surface as "committee run failed for
+this symbol," never silently coerced into a valid-looking shape).
+
+### Grounding, per role
+
+The existing `SYSTEM_PROMPT` policy ("never estimate/recall/guess a
+number, always call a tool, say plainly when data is missing") applies to
+every one of the 8 role prompts individually — each role's own prompt
+restates it, since each is a separate API call with its own system prompt,
+not a shared conversation where one instruction covers all 8.
+
+### Confidence is still not a probability — the CIO doesn't get to invent one either
+
+Extending the existing policy: the CIO's structured output has no
+self-reported confidence field at all (see the schema above) — the
+`Recommendation.confidence` band is still computed the same deterministic
+way the shipped MVP already does (`_confidence_from_signals()`-equivalent,
+extended to weigh committee-role agreement the same way the existing
+4-signal model weighs indicator agreement: net agreement across Bull/Bear/
+Technical/Fundamental/Macro stances, not the CIO's self-assessment).
+
+### Evaluation
+
+**Planned, not yet implemented.** Before this ships, a small fixture-based
+eval set (a handful of hand-constructed evidence bundles with known
+"obviously bullish," "obviously bearish," "clearly missing data," and
+"clearly earnings-blocked" cases) should exist and be checked into
+`apps/api/tests/` the same way `test_scoring.py`'s hand-verified invariants
+work today — asserting each role's structured output is well-formed and
+that the CIO's final action respects the deterministic gates (e.g. never
+`BUY` when a gate returned `blocked`), not that any qualitative judgment is
+"correct" in some absolute sense (grading committee narrative *quality* is
+explicitly out of scope for automated tests — that's ongoing human review,
+consistent with principle 16 more broadly).
+
+### Confidence calibration tie-in
+
+Unchanged in kind from the existing policy (still deferred pending real
+outcome data), now with a concrete data source: docs/PRODUCT_REQUIREMENTS.md's
+FR-40–FR-42 (recommendation-vs-reality tracking) is the prerequisite
+dataset. Once enough closed, outcome-tracked recommendations exist, a
+calibration pass could compare the deterministic confidence band against
+actual win rate per band — still explicitly Phase 2, not attempted without
+a real sample size (docs/MVP_PLAN.md).
+
+### Drift monitoring
+
+**Planned, not yet implemented.** Two concrete drift signals to watch once
+this ships: (1) a rising rate of malformed/schema-invalid role outputs
+over time (would indicate a model or prompt regression), tracked via the
+existing `LLMCallLog` error/retry fields; (2) a rising rate of
+`recommendation-vs-reality` = `IGNORED` (ADR-041) specifically for
+high-confidence recommendations, which would be a signal worth a human
+looking at (not an automated alert in MVP — see docs/MVP_PLAN.md's
+in-app-only alert scope, BLOCKING_DECISIONS.md #9, which doesn't extend to
+system self-monitoring alerts in this pass).
+
+### Human approval gates, extended
+
+The existing propose→backtest→compare→approve loop (ADR-026/027/028,
+unchanged mechanism) now also governs: any change to a committee role's
+prompt version, the committee pre-filter bar (BLOCKING_DECISIONS.md #3),
+and the deterministic-gate thresholds (regime bands, risk-budget %,
+stop/target parameters) — per FR-45/FR-46, a prompt change is a strategy
+change like any other and gets the identical review gate, not a lighter-
+weight path just because it's "only a prompt."
+
+### Cost/iteration budget per committee run
+
+**Planned.** A full committee run is bounded at exactly 7 billed Anthropic
+calls (5 parallel analyst roles + 1 Risk/PM call + 1 CIO call, ADR-038) —
+no retry loop that could silently balloon this, matching the existing
+`MAX_ITERATIONS` philosophy from `/ask`. A single malformed-output retry
+(see Structured outputs above) adds at most 1 extra call for the specific
+role that failed validation, never a whole-committee re-run.

@@ -181,3 +181,34 @@ every phase follows.
       compare/reject a strategy version → ask a question) — see
       docs/TEST_EVIDENCE.md
 - [x] Phase 7 checkpoint commit
+
+## Product & Architecture Refinement (2026-08-03) — planning only, no phase number
+
+Not a numbered implementation phase — a documents-only pass per an
+explicit refinement brief ("do not write application code yet ... stop
+after presenting the artifacts"). See docs/STATUS.md for the full summary
+and docs/MVP_PLAN.md's "Sequencing note" for why no phase number is
+assigned here.
+
+- [x] docs/PRODUCT_REQUIREMENTS.md — full rewrite
+- [x] docs/ARCHITECTURE.md — full rewrite, context + data-flow diagrams
+- [x] docs/DECISIONS.md — ADR-032 through ADR-042
+- [x] docs/PROVIDER_MATRIX.md — candidate evidence vendors + cost estimate
+- [x] docs/MODEL_GOVERNANCE.md — extended for the 8-role committee
+- [x] docs/MVP_PLAN.md (new)
+- [x] docs/UX_MAP.md (new)
+- [x] docs/THREAT_MODEL.md (new)
+- [x] docs/RISK_REGISTER.md (new)
+- [x] docs/BLOCKING_DECISIONS.md (new) — 10 decisions, none acted on
+- [x] README.md updated (doc index + known-limitations clarity that this
+      scope is unimplemented)
+- [ ] **Blocked on you:** confirm/override docs/BLOCKING_DECISIONS.md
+- [ ] **Blocked on you:** a numbered implementation phase plan, proposed
+      only after the above is confirmed
+
+## Phase 8+ — not yet planned
+
+No phase number is assigned to any implementation work from the
+refinement above. Once docs/BLOCKING_DECISIONS.md is confirmed, a real
+phase breakdown (following the same small-checkpointed-increments pattern
+Phases 1–7 used) would be proposed here, not started silently.

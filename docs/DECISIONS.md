@@ -846,3 +846,353 @@ and emerald/red tone silently never worked. Fixed by stripping a trailing
 exactly where a string becomes a number made the bug visible once a test
 asserted on the rendered `+4.00%` text, rather than being masked by an
 implicit `number` conversion happening somewhere upstream.
+
+---
+
+## ADR-032: Symbol validation is a first-class workflow, not an assumption
+baked into watchlist membership
+
+**Context.** The refined Tier 1 watchlist includes tickers that don't
+obviously resolve (`SKHY`, `SPCX`, `NASA`, `DRAM`) and the brief explicitly
+forbids silently assuming every symbol is valid.
+
+**Decision.** A new `SymbolValidation` record type, separate from `Symbol`
+itself: `raw_input` (preserved verbatim, principle 3/4), `status`
+(`RESOLVED`/`AMBIGUOUS`/`QUARANTINED`), `canonical_symbol_id` (nullable FK,
+set only when `RESOLVED`), `reason` (human-readable), `checked_at`,
+`source` (the reference provider used — Alpaca's assets endpoint,
+BLOCKING_DECISIONS.md #7). Watchlist membership (ADR-033) requires a
+validation record to exist; a `QUARANTINED` symbol can still have a
+membership row (so it stays visible as "wanted but not yet usable") but is
+excluded from every downstream evidence/committee/recommendation flow.
+
+**Alternatives considered.** Validating only at ingestion time with no
+persisted record (rejected: principle 9 requires an audit trail, and "why
+is this symbol quarantined" needs to be answerable later without
+re-querying the vendor). Treating an unresolved symbol as a hard error that
+blocks the whole watchlist import (rejected: one bad ticker in a 48-symbol
+list shouldn't block the other 47 — quarantine, don't fail closed on the
+whole batch).
+
+**Consequences.** `SKHY`/`SPCX`/`NASA`/`DRAM` (and any future watchlist
+addition) get a real, inspectable answer instead of a silent guess. Every
+consumer of the watchlist (premarket plan, committee pre-filter) filters on
+validation status, never on raw ticker presence alone.
+
+---
+
+## ADR-033: Watchlist tiers are a new entity, decoupled from `Symbol`
+master data
+
+**Context.** `Symbol` (existing) is universe-wide reference data — every
+instrument ever validated, active or not. The refined product needs a
+separate, user-curated, tiered "what am I actually watching" concept with
+configurable monitoring frequency per member.
+
+**Decision.** `Watchlist` (currently exactly one: "Tier 1") +
+`WatchlistMembership` (symbol_id, tier, monitoring_frequency, added_at,
+added_reason) as new entities, never merging this concept into `Symbol`
+itself. Mirrors the existing `Symbol` vs. `PriceBar`/`Indicator` separation
+(master data vs. what's derived/tracked about it) already established in
+Phase 2.
+
+**Alternatives considered.** A boolean `Symbol.is_watchlisted` flag
+(rejected: can't express tiers, monitoring frequency, or *when*/*why* a
+symbol was added — loses exactly the audit/configurability principle 8/9
+require, and doesn't scale to a second tier without another flag per tier).
+
+**Consequences.** Adding "Tier 2" or a future opportunity-discovery
+watchlist (explicitly deferred, docs/MVP_PLAN.md) needs zero schema change
+— just a new `Watchlist` row.
+
+---
+
+## ADR-034: Regime classification structurally cannot trigger a
+recommendation — enforced by module boundary, not convention
+
+**Context.** The refinement brief explicitly calls out that VIX must
+influence cash/risk limits and must **not** independently trigger a
+purchase — naming this as a specific mistake to avoid (the brief frames it
+as replacing "buy whenever VIX is above 20").
+
+**Decision.** The Regime & Risk Budget context (docs/ARCHITECTURE.md's
+bounded context 4) exposes exactly one thing downstream: an adjusted risk
+budget/allocation ceiling, consumed by the Deterministic Gates context
+(context 6). It has no function, method, or code path that constructs or
+writes a `Recommendation` row. This is enforced the same structural way
+principle 7's "LLM never computes ground truth" is enforced today (the
+`llm_tools.py` allow-list has no write-capable tool for prices) — a
+code-review-visible absence, not a runtime check that could be bypassed by
+a future change someone forgets to gate.
+
+**Alternatives considered.** A regime-based rule inside the committee
+prompt ("if VIX is elevated, be more cautious") as the only enforcement
+(rejected: a prompt instruction is not the same guarantee as a missing code
+path — principle 6/7 requires the *system* to make regime-as-trigger
+structurally unreachable, not just discouraged).
+
+**Consequences.** Testing this is concrete: a unit test asserting the
+regime module's public interface has no return type or method that could
+construct a `Recommendation` is a real, meaningful test, not a tautology.
+
+---
+
+## ADR-035: Stops/targets are ATR + structure + gap + catalyst + trailing —
+replacing the brief's called-out ±10% anti-pattern
+
+**Context.** The refinement brief explicitly calls out fixed ±10% exits as
+a mistake to replace with volatility- and structure-aware logic.
+
+**Decision.** Stop/target computation (Deterministic Gates context) is a
+composite: an ATR-multiple base distance (reusing the existing `ATR_14`
+indicator — no new indicator needed), adjusted by the nearest meaningful
+support/resistance level (a new deterministic pivot/swing-point detector
+over existing `PriceBar` history), widened for recent overnight-gap risk
+(computed from existing OHLC data — a gap is `today's open` vs. `yesterday's
+close`, already available), tightened or entry-blocked inside an earnings
+window (FR-24), with a trailing-stop rule once a position is favorably
+extended by a configurable multiple of the original risk. Every component
+is plain code over data already in the system or one new cheap calculation
+— no new vendor required for this specific capability.
+
+**Alternatives considered.** A single ATR-multiple stop with no structure/
+gap/catalyst adjustment (rejected: closer to the ±10% anti-pattern than the
+brief asks for — "volatility-aware" alone isn't "structure-aware").
+Options-based defined-risk exits (protective puts) as the primary mechanism
+(rejected for MVP: not requested, real added complexity and cost — noted
+as a Phase-2 candidate in docs/MVP_PLAN.md instead).
+
+**Consequences.** `services/backtest.py`'s existing single-window engine
+needs its exit-rule module swapped for this composite (FR-43) before a
+backtest result reflects what the refined system would actually have done
+— named explicitly so it isn't silently skipped.
+
+---
+
+## ADR-036: Position sizing is risk-budget ÷ stop-distance, then capped —
+never the other way around
+
+**Context.** The existing shipped MVP's backtest defaults to a flat 10% of
+equity per position (ADR-023) — the refinement requires size to *derive*
+from risk budget and stop distance, with allocation/liquidity/sector/
+correlation/speculative-name limits as caps on that result, not as the
+primary sizing method.
+
+**Decision.** `shares = floor((equity × risk_budget_pct) / stop_distance_per_share)`,
+computed **first**, then reduced (never increased) by whichever cap binds
+tightest: allocation ceiling, a fraction of average daily volume
+(liquidity), sector concentration, portfolio correlation, or a lower cap
+specifically for speculative-tagged names. `risk_budget_pct` defaults to 1%
+(BLOCKING_DECISIONS.md #6), itself regime-adjusted (ADR-034).
+
+**Alternatives considered.** Keeping the existing flat-%-of-equity sizing
+and treating stop distance as informational only (rejected: this is
+exactly the ordering the refinement brief asks to fix — size must *derive*
+from risk, not be capped by a risk-derived stop after the fact). Sizing
+directly off a fixed dollar risk amount rather than a % of current equity
+(rejected: doesn't compound/shrink with account performance, which for a
+capital-preservation-first profile matters — losing streaks should
+automatically shrink size).
+
+**Consequences.** `services/backtest.py`'s existing `position_size_pct`
+config field (ADR-023) is superseded, not merely renamed — the new sizing
+module takes stop distance as a required input the old flat-% model never
+needed, so this is a breaking config-shape change requiring a new
+`StrategyVersion.config` schema version, gated by the existing propose→
+compare→approve loop like any other strategy change (FR-45).
+
+---
+
+## ADR-037: No-average-down is a hard precondition check, not a prompt
+instruction
+
+**Context.** The brief explicitly requires that no add-on proposal happens
+"solely because price fell," and requires a new positive catalyst, an
+intact thesis, defined total risk, and committee approval for any add-on.
+
+**Decision.** A precondition function runs **before** an add-on candidate
+is even assembled into an evidence bundle for the committee: it checks (a)
+whether new evidence exists since the original entry that a human/vendor
+would recognize as a distinct catalyst (a new earnings beat, a new news
+item timestamped after the original entry, not just a price move), and (b)
+whether the original thesis's originating rationale is still marked intact
+(not superseded by contradicting evidence). Failing either check returns a
+structured rejection **before** any LLM call is made for the add-on — the
+committee never sees an add-on proposal that doesn't already have a
+qualifying reason attached.
+
+**Alternatives considered.** Letting the committee (specifically the Risk
+Manager/CIO roles) reject add-ons that lack a new catalyst (rejected: same
+reasoning as ADR-034 — a prompt-level judgment call is not the same
+guarantee as a code-enforced precondition, and this is exactly the kind of
+capital-preservation guardrail principle 1 says must hold even under
+stress, i.e., even if a future prompt change weakens the instruction).
+
+**Consequences.** "New catalyst" detection needs a concrete, testable
+definition (a news/earnings item timestamped after the original entry
+date) rather than a vague "the LLM judged it novel" — this is deliberately
+narrower and more mechanical than a human's intuitive sense of "new
+information," an accepted tradeoff for making the rule enforceable in code.
+
+---
+
+## ADR-038: Investment committee runs 5 roles in parallel, then 3 in a
+fixed sequence — never all 8 concurrently
+
+**Context.** The 8 committee roles have real data dependencies on each
+other: the Risk Manager and Portfolio Manager need the Deterministic
+Gates' output (ADR-034/035/036) plus the four analyst roles' arguments; the
+CIO needs literally everything else (FR-19).
+
+**Decision.** Execution order: (1) Deterministic Gates run first, no LLM
+call, produce the numeric constraints. (2) Bull Analyst, Bear Analyst,
+Technical Analyst, Fundamental Analyst, Macro Strategist run — these five
+are mutually independent (each reasons from the shared evidence bundle
+without needing another role's output) and are dispatched concurrently to
+bound wall-clock latency (NFR-02). (3) Risk Manager and Portfolio Manager
+run next, each receiving the five analysts' outputs plus the gate numbers
+from step 1. (4) CIO/Judge runs last, receiving everything from steps 1–3.
+This ordering is enforced in the orchestration code, mirroring
+`services/ask.py`'s existing tool-use loop pattern (extended, not
+replaced) — each stage's outputs become the next stage's tool-call context.
+
+**Alternatives considered.** All 8 roles as one large concurrent batch
+(rejected: Risk Manager/PM/CIO would either need to run without the
+analysts' arguments, defeating the point of a "committee," or need a second
+round-trip anyway — the staged approach is both more correct and not
+meaningfully slower, since only the truly independent roles are batched).
+A single mega-prompt asking one model call to "role-play all 8 perspectives"
+(rejected: defeats the auditability requirement — FR-16/FR-26 need each
+role's output separately logged and separately schema-validated, and a
+single free-form multi-persona response can't be reliably parsed into
+per-role structured records or cost-tracked per role).
+
+**Consequences.** A full committee run is 3 sequential LLM round-trips
+(batched-5, then Risk+PM, then CIO) rather than 8 — bounds latency
+predictably, and each round-trip is logged via the existing `LLMCallLog`
+pattern (`prompt_version` distinguishes each of the 8 roles' own version).
+
+---
+
+## ADR-039: Manual trade journal is the primary tracked portfolio; the
+existing Alpaca paper portfolio becomes the practice sandbox
+
+**Context.** Detailed in docs/BLOCKING_DECISIONS.md #5 — the refined
+product needs to track trades "manually placed at any broker," which the
+existing Alpaca-specific `PaperPortfolio`/`PaperOrder` model can't
+represent (it only ever reflects real Alpaca paper-account fills).
+
+**Decision.** New `TradeJournalEntry` entity, broker-agnostic, user-entered.
+Performance dashboard, active trade monitor, and recommendation-vs-reality
+tracking (FR-33/35/40) are all built against the journal. The existing
+Alpaca paper portfolio is **kept**, not removed or migrated — it remains
+useful exactly as originally designed (a free, unlimited, realistic-fill
+sandbox for exercising the propose→confirm flow and for any future paper-
+broker connection the user chooses to link), just explicitly re-labeled as
+secondary rather than the primary tracked number.
+
+**Alternatives considered.** Migrating all portfolio tracking onto Alpaca
+paper orders and asking the user to "log" trades as Alpaca paper orders
+too (rejected: doesn't represent trades placed at the user's real broker at
+real prices/times, which is what the user actually wants tracked — an
+Alpaca paper fill price can differ from a real fill at another broker).
+Deleting the Alpaca paper-broker feature now that it's not primary
+(rejected: it's real, tested, working infrastructure — ADR-002's paper-
+brokerage rationale and the whole propose/confirm review-gate UX still has
+standalone value for practicing the flow without touching the journal).
+
+**Consequences.** Two portfolios can now legitimately disagree (a position
+might exist in the journal but not in Alpaca-paper, or vice versa) — this
+is intentional, not a bug to reconcile; the UI (docs/UX_MAP.md) labels each
+clearly rather than presenting one blended number.
+
+---
+
+## ADR-040: In-process scheduler (no Redis/Celery) for premarket/intraday/
+EOD jobs
+
+**Context.** ADR-006 deferred a background-job system as having no
+demonstrated use case. The refined product's premarket/intraday/EOD
+cadence is exactly the demonstrated use case ADR-006 said would trigger
+revisiting this.
+
+**Decision.** An in-process scheduler (APScheduler, running inside the
+existing `apps/api` FastAPI process) triggers the same service-layer
+functions the HTTP routes already call — no new process, no message queue,
+no Redis (BLOCKING_DECISIONS.md #4). Matches the exact reasoning ADR-021
+already used for the in-process rate limiter: single-user, single-process
+personal app, no multi-instance deployment to coordinate across.
+
+**Alternatives considered.** Celery + Redis (rejected: real new
+infrastructure — a broker, a worker process, ops overhead — for three jobs
+that each run once a day or a few times an hour on one machine; exactly the
+"enterprise-grade for its own sake" over-build PROJECT_INSTRUCTIONS.md
+warns against). OS-level cron invoking a script (rejected as the *primary*
+mechanism, though documented as a viable alternative: couples job triggering
+to OS-specific tooling, less portable than an in-process library, and loses
+the "same process, same connection pool, same code paths as the API"
+simplicity — but a reasonable fallback if APScheduler's Windows behavior
+turns out to be unreliable in practice, worth a quick spike before
+committing).
+
+**Consequences.** Jobs don't survive an `apps/api` process restart
+mid-run — acceptable since each job (premarket/intraday/EOD) is idempotent
+and cheaply re-runnable, not a multi-hour stateful process. If a future
+deployment moves to a managed host that recycles processes aggressively,
+this assumption should be re-checked (noted in docs/ARCHITECTURE.md's
+deployment topology section).
+
+---
+
+## ADR-041: Recommendation-vs-reality classification is computed, not
+self-reported
+
+**Context.** Principle 15's calibration requirement needs real outcome
+data, which needs a reliable way to know whether the user actually followed
+a given recommendation — asking the user to self-tag "I followed this one"
+is unreliable and adds friction contrary to "busy, wants concise."
+
+**Decision.** `FOLLOWED`/`IGNORED`/`MODIFIED` is computed by matching a
+`Recommendation` to any `TradeJournalEntry` for the same symbol within a
+configurable time window, comparing side/size/entry price against
+configurable tolerances — never a user-set flag. `IGNORED` is the default
+outcome (no matching entry found within the window) rather than requiring
+explicit action to record a non-follow.
+
+**Alternatives considered.** A manual "mark as followed" toggle in the UI
+(rejected: adds a step the busy persona is likely to skip, and self-
+reported compliance is exactly the kind of soft signal principle 15
+already warns against trusting for anything calibration-adjacent).
+
+**Consequences.** The match tolerances (time window, size/price deviation
+thresholds) are themselves versioned config (principle 8), reviewable if
+the classification looks wrong in practice — not a hardcoded heuristic.
+
+---
+
+## ADR-042: Walk-forward backtesting is explicitly deferred, not
+attempted this pass
+
+**Context.** The refinement brief asks for "backtesting and walk-forward
+evaluation" as one bullet; the shipped MVP already has single-window
+backtesting (Phase 5). Walk-forward (rolling/anchored re-optimization
+windows) is real, separate methodology work.
+
+**Decision.** This architecture pass confirms `BacktestRun`'s existing
+schema (`date_range_start`/`date_range_end`/`parameters`/`results_summary`)
+is compatible with being invoked repeatedly across rolling windows without
+a redesign, and defers the actual walk-forward orchestration (window
+sizing, re-optimization cadence, aggregate reporting across windows) to
+docs/MVP_PLAN.md's Phase 2 — after the committee/regime/sizing logic it
+would validate actually exists to backtest.
+
+**Alternatives considered.** Designing walk-forward now, in parallel with
+the MVP items (rejected: walk-forward's value is validating a strategy's
+robustness *over time* — there's no refined strategy logic to validate yet
+in this pass, so the design work would be speculative, which the
+engineering rules already discourage — "no designing for hypothetical
+future requirements beyond what's needed now").
+
+**Consequences.** docs/PRODUCT_REQUIREMENTS.md's FR-44 records this
+explicitly as a compatibility check, not a completed design, so it doesn't
+read as silently dropped.

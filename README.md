@@ -11,8 +11,17 @@ unreviewed autonomous trading bot.** See [PROJECT_INSTRUCTIONS.md](PROJECT_INSTR
 for the full set of non-negotiable product principles, and
 [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md) for MVP scope.
 
-**Current status:** Phase 7 (UI Polish & Documentation Hardening) — the
-final planned phase, complete. See [docs/STATUS.md](docs/STATUS.md).
+**Current status:** the shipped app (Phases 1–7) is complete and unchanged.
+A **product & architecture refinement pass** (2026-08-03, planning only —
+no code changed) has since defined a much larger scope: a symbol-validated,
+tiered watchlist; an 8-role investment committee (Bull/Bear/Technical/
+Fundamental/Macro/Risk Manager/Portfolio Manager/CIO) sitting behind
+deterministic risk gates; regime/VIX-aware sizing; a broker-agnostic trade
+journal; an active trade monitor; and recommendation-vs-reality tracking.
+See [docs/MVP_PLAN.md](docs/MVP_PLAN.md) for scope,
+[docs/BLOCKING_DECISIONS.md](docs/BLOCKING_DECISIONS.md) for the open
+decisions awaiting your confirmation before any of it is built, and
+[docs/STATUS.md](docs/STATUS.md) for the full picture.
 
 ## Stack
 
@@ -96,9 +105,23 @@ pnpm test:e2e
 | [docs/MODEL_GOVERNANCE.md](docs/MODEL_GOVERNANCE.md) | LLM guardrails, confidence calibration policy, strategy-change approval gate |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | How to use the app (grows each phase) |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | Pinned versions, verified against live registries |
+| [docs/MVP_PLAN.md](docs/MVP_PLAN.md) | *(Refinement, planning only)* MVP / Phase 2 / Future scope split for the refined product |
+| [docs/UX_MAP.md](docs/UX_MAP.md) | *(Refinement, planning only)* Pages, navigation, key actions, empty/error/stale states |
+| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | *(Refinement, planning only)* STRIDE-style walk of the refinement's new trust boundaries |
+| [docs/RISK_REGISTER.md](docs/RISK_REGISTER.md) | *(Refinement, planning only)* Product/technical/vendor/regulatory risks, likelihood/impact/mitigation |
+| [docs/BLOCKING_DECISIONS.md](docs/BLOCKING_DECISIONS.md) | *(Refinement, planning only)* 10 open decisions with recommended defaults — nothing here is acted on without your confirmation |
 
 ## Known limitations (as of Phase 7)
 
+- **The refined product described in docs/PRODUCT_REQUIREMENTS.md,
+  docs/ARCHITECTURE.md, docs/MVP_PLAN.md, docs/UX_MAP.md,
+  docs/THREAT_MODEL.md, and docs/RISK_REGISTER.md is a planning artifact
+  only — none of it is implemented.** The app running today is exactly the
+  Phases 1–7 feature set below this line: a 30-symbol seed watchlist, a
+  4-signal deterministic score, a single-call `/ask` tool, and no
+  committee/regime/journal/monitor/scheduler layer. Implementation doesn't
+  start until docs/BLOCKING_DECISIONS.md is confirmed and a new
+  implementation phase is explicitly requested.
 - No SMA/indicator overlay line on the symbol-detail candlestick chart —
   the real indicators endpoint only returns a single day's snapshot, not
   a ranged series; a text readout is shown instead
