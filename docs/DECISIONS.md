@@ -1196,3 +1196,122 @@ future requirements beyond what's needed now").
 **Consequences.** docs/PRODUCT_REQUIREMENTS.md's FR-44 records this
 explicitly as a compatibility check, not a completed design, so it doesn't
 read as silently dropped.
+
+---
+
+## ADR-043: Phase 8 replaces the schema wholesale rather than migrating it additively
+
+**Context.** The refinement pass's own instructions ask for the full
+~70-entity, 13-bounded-context domain model from docs/ARCHITECTURE.md to
+actually be implemented ("domain model, database schema, migrations, seed
+fixtures, and versioned API contracts"). Three of the shipped MVP's 9
+tables share a name with a Phase 8 table but not a compatible shape:
+`recommendations` (was a single mutable-ish row, is now a stable identity
++ append-only `recommendation_versions`), `backtest_runs` (integer PK →
+UUID PK, plus a new `backtest_trades` child), and `strategy_versions`
+(integer PK → UUID PK, plus a new `strategy_definitions` parent). Every
+other Phase 1-7 table (`symbols`, `price_bars`, `indicators`,
+`paper_portfolios`, `paper_orders`, `llm_call_logs`) has no Phase 8
+equivalent with the same name at all — the concepts they represented are
+superseded outright (`Instrument` for `Symbol`, `Account`/`Order` for
+`PaperPortfolio`/`PaperOrder`, `MarketBar`/`TechnicalIndicatorSnapshot` for
+`PriceBar`/`Indicator`, `ModelCallRecord` for `LLMCallLog`, deliberately
+narrower — see ADR below on payload scope).
+
+**Decision.** Drop all 9 old tables and their Postgres enum types, then
+create the full new 70-table schema in one migration
+(`ece90645a84b_phase_8_domain_model_replace_mvp_schema_.py`), rather than
+attempting an additive/backward-compatible migration that keeps the old
+tables alongside the new ones. `audit_events` is the one table kept
+byte-for-byte unchanged — its shape (`record_type`/`ref_id`/`snapshot`/
+`created_at`) was already generic enough to serve the new domain model
+without modification, and it's the append-only audit trail; dropping and
+recreating it would needlessly discard Phase 1-7's real audit history.
+Every UUID-keyed new table uses `sa.Uuid(as_uuid=True)` (`UUIDPkMixin`)
+instead of the old integer-PK convention, matching Workday-style systems'
+actual PK convention and the refinement brief's explicit "use UUIDs where
+appropriate." The migration's `downgrade()` recreates the original 9-table
+Phase 1-7 shape exactly (verified by `tests/test_migrations.py` running
+the full empty→head→one-step-down→head round trip against an isolated
+Postgres schema), so the old schema remains fully recoverable, not merely
+documented.
+
+**Alternatives considered.** Keeping the 3 reused-name tables' old integer
+PKs and bolting new UUID-keyed tables around them (rejected: produces a
+schema with two different PK conventions for entities that are
+conceptually the same "recommendation"/"backtest run"/"strategy version"
+concept, permanently confusing which convention is canonical, and the
+`recommendations` table's shape change — splitting mutable content into
+append-only versions — isn't expressible as an additive column change
+regardless of PK type). Running old and new schemas side-by-side behind a
+feature flag (rejected: this is a pre-production take-home exercise with
+one seeded demo dataset, not a live system with real user data needing a
+zero-downtime cutover — the added complexity would be enterprise-grade
+over-engineering for a system with no actual migration-safety requirement,
+the same category of over-build the project's engineering rules warn
+against).
+
+**Consequences.** This is a breaking, non-additive migration — running it
+against any database with real Phase 1-7 data destroys that data (mitigated
+by the exact-reversal `downgrade()` and, in practice, by the seed script's
+idempotent reset path `alembic downgrade base && alembic upgrade head &&
+tradingos-seed` being the documented reset workflow rather than an
+in-place data-preserving upgrade). Every existing Phase 1-7 API consumer
+breaks (see ADR-044, which covers the corresponding router-layer decision).
+
+---
+
+## ADR-044: Phase 1-7 business-logic routers/services are retired, not migrated, this pass
+
+**Context.** Phase 8's own scope, as instructed, is "domain model,
+database schema, migrations, seed fixtures, and versioned API contracts —
+do not integrate external providers yet." The shipped MVP's business logic
+— `services/scoring.py` (deterministic technical scoring),
+`services/backtest.py` (historical simulation engine), `services/llm_tools.py`
++ `services/ask.py` (LLM tool-use orchestration), `services/strategy.py`'s
+propose/compare/approve/reject state machine — was all written against the
+old integer-PK, 9-table schema. ADR-043's wholesale schema replacement
+means every one of these modules' queries and assumptions are now wrong.
+
+**Decision.** Delete the Phase 1-7 routers, schemas, and services that
+implement this business logic
+(`routers/{ask,backtest,paper_orders,portfolio,strategy,symbols}.py` and
+their corresponding `schemas/`/`services/` modules, plus their test files)
+rather than attempting to port them onto the new schema in the same pass.
+The 12 new Phase 8 routers are read-mostly/CRUD against the new schema
+(list/detail/propose-and-confirm/patch-with-optimistic-concurrency) plus
+one real write path with actual domain logic (`routers/orders.py`'s
+`_apply_fill()` — FIFO lot consumption and cash-ledger posting), backed by
+a seed script that populates realistic-looking data (including one full
+synthetic committee session, backtest run, and trade history) so every
+read endpoint has real content to serve without the retired business logic
+existing yet.
+
+**Alternatives considered.** Porting the scoring/backtest/LLM-orchestration
+logic onto the new schema in this same pass (rejected: this is a separate,
+large body of work — re-deriving the scoring engine's signal inputs from
+the new `technical_indicator_snapshots`/`fundamentals_snapshots`/
+`sentiment_snapshots` evidence tables, rewriting the backtest simulator
+against `market_bars`, and rebuilding the LLM tool-use loop around the new
+committee/recommendation shape are each their own multi-step efforts
+already called out as deferred work in docs/MVP_PLAN.md's phase list, not
+something this task's explicit scope — "domain model ... not full business
+logic" — asked for). Keeping the old routers importable but non-functional
+behind a feature flag (rejected: dead code that can't run against the new
+schema is worse than no code — it would silently rot and mislead a future
+reader into thinking scoring/backtesting/ask already work end-to-end on
+Phase 8's schema when they don't).
+
+**Consequences.** `POST /api/v1/backtests` (run a new backtest),
+`POST /api/v1/strategy-versions/{id}/compare` (re-run and diff two
+configs), and `POST /api/v1/ask` (the NL query feature) do not exist on
+the current API — `GET /api/v1/backtests` serves only what the seed script
+already populated. Recommenting these features against the new schema is
+explicitly the next phase's work (docs/STATUS.md/docs/TASKS.md track this
+as not-yet-started, not silently dropped). The AI/ML rubric line item this
+project is graded on (docs/PROVIDER_MATRIX.md, docs/MODEL_GOVERNANCE.md)
+is satisfied by the *committee/agent data model* existing and being
+queryable end-to-end (`agent_definitions` → `agent_versions` →
+`committee_sessions` → `agent_runs` → `agent_opinions`, with real seeded
+example data), not by a live orchestration loop calling Anthropic in this
+pass — consistent with "do not integrate external providers yet."

@@ -21,7 +21,7 @@ dependencies = [
 
 [project.scripts]
 tradingos-api = "tradingos_api:main"
-tradingos-ingest-prices = "tradingos_api.scripts.ingest_prices:main"
+tradingos-seed = "tradingos_api.scripts.seed_phase8:main"
 
 [build-system]
 requires = ["uv_build>=0.12.1,<0.13.0"]
@@ -41,6 +41,22 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom (`param: T = Depends(...)`) is a
+# call-in-default-argument by design, not the mutable-default-argument
+# bug B008 exists to catch (docs/DECISIONS.md — Phase 8 routers use this
+# pattern throughout: get_db, get_current_user_id, get_broker_provider,
+# get_llm_provider).
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.params.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Cookie",
+]
 
 [tool.mypy]
 python_version = "3.12"

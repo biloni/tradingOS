@@ -1,7 +1,9 @@
 # Status
 
-**Current phase:** Phase 7 (shipped) + a planning-only Product &
-Architecture Refinement pass layered on top, not yet implemented.
+**Current phase:** Phase 8 (shipped) — the full domain model, schema,
+migrations, seed fixtures, and versioned API contracts from the Product &
+Architecture Refinement pass are now implemented (schema/API only, per
+that phase's own scope — business logic re-implementation is next).
 **Last updated:** 2026-08-03
 
 ## Done
@@ -64,6 +66,66 @@ Architecture Refinement pass layered on top, not yet implemented.
     their final review-pass updates (frontend introduces no new
     secret-handling surface; Playwright layer marked implemented).
 
+## Phase 8 (2026-08-03) — domain model, schema, migrations, seed data, API
+
+Implements the schema/API scope of the refinement pass below ("domain
+model, database schema, migrations, seed fixtures, and versioned API
+contracts — do not integrate external providers yet"):
+
+- **Domain model** — 13 bounded contexts, ~70 tables, all UUID-keyed
+  (ADR-043 supersedes the old integer-PK, 9-table Phase 1-7 schema
+  wholesale; `audit_events` is the one table kept unchanged). Full column
+  list in docs/DATA_DICTIONARY.md; relationships in docs/ER_DIAGRAM.md.
+- **36 native Postgres enums** with co-located lifecycle transition maps
+  (`models/enums.py`), enforced through one shared
+  `services/lifecycle.py::assert_transition_allowed()` helper.
+- **One migration** (`ece90645a84b`) — hand-verified empty→head, head→
+  one-step-down (old schema restored byte-for-byte), and downgrade→base,
+  all via `tests/test_migrations.py` against an isolated Postgres schema
+  (never the real dev database).
+- **Seed script** (`tradingos-seed`) — idempotent; populates every
+  bounded context with realistic linked data (48-symbol Tier-1 watchlist,
+  one full 8-role committee session, a manual journal account with real
+  fills/positions/lots, one backtest run with normalized trades, alerts,
+  provider config, risk policy).
+- **12 API areas, 37 endpoints** (`docs/API_CONTRACTS.md`) — instruments/
+  validation, watchlists, market overview/freshness, recommendations/
+  committee detail, portfolio/positions/cash/risk, manual order entry/
+  import/reconciliation, trade journal, performance, alerts, daily plans,
+  backtests (read-only), settings/provider status. Pagination, filtering,
+  idempotency keys, and optimistic concurrency (`expected_updated_at`)
+  implemented per the brief; decimal fields serialize as JSON strings
+  (ADR-031, unchanged) — verified structurally by
+  `tests/test_openapi_snapshot.py`.
+- **Old Phase 1-7 business-logic routers/services retired**, not ported,
+  this pass (ADR-044) — `scoring`, `backtest`-execution, and LLM
+  tool-use orchestration are out of "domain model ... not full business
+  logic" scope; `GET /api/v1/backtests` serves only seeded historical
+  runs, and `POST /api/v1/ask`/`/api/v1/backtests`/strategy compare no
+  longer exist on the API.
+- **Bug found and fixed** while writing `tests/test_invariants.py`:
+  `routers/orders.py::_apply_fill()` reduced `positions.quantity` on a
+  SELL but never consumed the matching `position_lots` rows via FIFO,
+  silently diverging the two places this app tracks quantity. Fixed by
+  adding oldest-first lot consumption on the SELL path — the exact
+  invariant the brief's own test requirement asks for. Also fixed:
+  `ORDER_TRANSITIONS["DRAFT"]` didn't include `FILLED`, which blocked a
+  `MANUAL` account's one-step confirm-and-fill (no broker submission step
+  to pass through `SUBMITTED` first).
+- **51 tests** across migration reversibility, DB constraints/indexes,
+  Numeric-never-float precision (incl. a fractional-share exact-Decimal
+  round trip), position-lot/cash-ledger invariants, OpenAPI structural
+  contracts, and idempotency/optimistic-concurrency — all passing, plus
+  the pre-existing provider-mapping tests. `ruff check`/`ruff format
+  --check`/`mypy .` all clean across `src/` and `tests/`.
+- **Live-verified** via direct `curl` against the real seeded Postgres
+  database: instrument validation, watchlist add/patch/409-on-duplicate,
+  committee-session detail (all 8 real agent runs + opinions), the full
+  manual order propose→confirm→fill→reconciliation cycle (including the
+  SELL/FIFO-lot fix), bulk order import with idempotency, journal note/
+  review append, alert acknowledge with optimistic-concurrency 409, and
+  risk-policy PATCH/revert — all 12 API areas exercised with real data.
+
 ## Product & Architecture Refinement (2026-08-03, planning only — no code changed)
 
 A much larger scope was defined per an explicit refinement brief: a
@@ -103,10 +165,14 @@ Produced this pass:
 
 ## In progress / next
 
-- **Stop and wait**, per this pass's own explicit instruction. Nothing is
-  scaffolded. Next step is yours: review docs/BLOCKING_DECISIONS.md
-  (confirm or override each of the 10), after which an implementation
-  phase plan (with real phase numbers) can be proposed.
+- **Stop, per this phase's own explicit instruction** ("commit, and
+  stop"). Not yet done, and explicitly out of Phase 8's scope (ADR-044):
+  re-implementing scoring/backtest-execution/LLM tool-use orchestration
+  against the new schema; wiring up real Anthropic/Alpaca calls for the
+  committee and evidence-ingestion contexts ("do not integrate external
+  providers yet"); a frontend for the new schema (the existing `apps/web`
+  still targets the retired Phase 1-7 API and will not build against the
+  current backend until that work happens).
 
 ## Known blockers
 

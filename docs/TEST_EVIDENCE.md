@@ -964,3 +964,128 @@ No new secrets this phase — `apps/web` never references the Anthropic
 key or any Alpaca credential anywhere (docs/SECURITY.md's Phase 7 review
 note). Confirmed `.env`/`.env.local` still absent from
 `git status --porcelain` before staging.
+
+## Phase 8 — domain model, schema, migrations, seed data, API
+
+### `apps/api` full suite
+
+```
+$ .venv/Scripts/python.exe -m pytest -v
+======================= 51 passed, 1 warning in 15.78s ========================
+```
+51/51 passing: 5 provider tests carried over from Phases 2-4
+(`test_alpaca_market_data.py`, `test_alpaca_paper_broker.py`,
+`test_anthropic_llm.py`), `test_health.py`, and 6 new Phase 8 files —
+`test_migrations.py` (4), `test_constraints.py` (14), `test_precision.py`
+(5), `test_invariants.py` (3), `test_idempotency.py` (4), and
+`test_openapi_snapshot.py` (5).
+
+```
+$ .venv/Scripts/ruff.exe check .
+All checks passed!
+$ .venv/Scripts/ruff.exe format --check .
+83 files already formatted
+$ .venv/Scripts/mypy.exe .
+Success: no issues found in 82 source files
+```
+
+### Migration tests — isolated-schema strategy
+
+`tradingos_app` (the app's Postgres role) has no `CREATEDB` privilege in
+this environment (checked directly: `rolsuper=false, rolcreatedb=false`),
+so `test_migrations.py` isolates each run inside a dedicated Postgres
+**schema** (`migration_test_schema`, created/dropped by the test fixture)
+rather than a second database — `PGOPTIONS="-c search_path=<schema>"` is
+set for each `alembic` subprocess invocation, verified to correctly scope
+every table/type Alembic creates to that schema and nowhere near `public`
+(the real seeded dev data). Confirmed after every test run:
+`SELECT count(*) FROM instruments WHERE ticker='ZZZTEST'` → `0` and no
+`Test Account %` rows in `accounts` — the transactional `db_session`
+fixture (SQLAlchemy's `join_transaction_mode="create_savepoint"` pattern)
+correctly rolls back every constraint/precision/invariant/idempotency test
+without touching real seed data, verified directly.
+
+Four migration tests, all passing: upgrade from empty reaches head (13
+bounded contexts' tables present, none of the old MVP-only names);
+downgrade one step restores the exact pre-Phase-8 9-table shape; a full
+upgrade→downgrade→upgrade round trip; downgrade to base empties the
+schema down to `alembic_version` (row count 0) — matching Alembic's actual
+terminal-state behavior (it never drops its own bookkeeping table).
+
+### Live API verification (real seeded Postgres, all 12 areas)
+
+Every call below ran against a live `uvicorn` process serving the real
+Phase 8 schema with `tradingos-seed`'s output — not mocked, not against
+`TestClient`.
+
+**1. Instruments/validation**
+```
+$ curl -s http://localhost:8000/api/v1/instruments/validate -d '{"raw_input":"aapl"}'
+{"status":"RESOLVED","instrument":{"ticker":"AAPL","...":"..."},"reason":"..."}
+```
+
+**2/3. Watchlists / market**
+```
+$ curl -s http://localhost:8000/api/v1/watchlists
+[{"id":"d75b2207-...","name":"Tier 1","description":"The core 48-symbol swing-trade watchlist.","...":"..."}]
+$ curl -s http://localhost:8000/api/v1/market/overview
+{"regime":{"...":"..."},"tracked_instrument_count":43,"stale_instrument_count":39}
+```
+
+**4. Recommendations / committee detail** — fetched a real committee
+session id via `psycopg`, then:
+```
+$ curl -s http://localhost:8000/api/v1/recommendations/committee-sessions/61612c7b-b3f6-465d-a639-03e9a93f4d58
+{"instrument":{"ticker":"AAPL"},"status":"COMPLETED","agent_runs":[
+  {"role":"BULL","status":"SUCCEEDED","opinion":{"stance":"BULLISH","...":"..."}},
+  {"role":"BEAR","status":"SUCCEEDED","opinion":{"stance":"BEARISH","...":"..."}},
+  ... 6 more real roles, all SUCCEEDED with populated opinions
+]}
+```
+
+**5/6. Portfolio & orders — full propose → confirm → fill → reconciliation
+cycle**, including the bug this exposed (see below):
+```
+$ curl -s -X POST http://localhost:8000/api/v1/orders -d '{"account_id":"41d0...","instrument_id":"7c9c...","side":"BUY","order_type":"MARKET","quantity":"5","limit_price":"221.30"}'
+{"id":"001387be-...","status":"DRAFT","quantity":"5.00000000","limit_price":"221.300000","executions":[]}
+
+$ curl -s -X POST http://localhost:8000/api/v1/orders/001387be-.../confirm
+{"detail":"Order: cannot transition from DRAFT to FILLED"}
+```
+**Bug #1 found**: `ORDER_TRANSITIONS["DRAFT"]` in `models/enums.py` only
+allowed `{SUBMITTED, CANCELED}`, but `confirm_order()` for a `MANUAL`
+account fills directly (no broker submission step). Fixed by adding
+`FILLED` to `DRAFT`'s allowed transitions, with a comment explaining why.
+After the fix and a server restart:
+```
+$ curl -s -X POST http://localhost:8000/api/v1/orders/001387be-.../confirm
+{"status":"FILLED","filled_at":"2026-08-03T23:03:16-07:00","executions":[{"quantity":"5.00000000","price":"221.300000"}]}
+$ curl -s http://localhost:8000/api/v1/orders/reconciliation/41d020ae-...
+[{"ticker":"AAPL","position_quantity":"10.00000000","lots_quantity":"10.00000000","discrepancy":"0E-8"},
+ {"ticker":"JPM","position_quantity":"5.00000000","lots_quantity":"5.00000000","discrepancy":"0E-8"}]
+```
+Cash correctly debited: `16938.00 → 15831.50` (`5 × 221.30 = 1106.50`).
+
+**Bug #2 found** while writing `tests/test_invariants.py`'s SELL scenario
+(not caught by the BUY-only live curl session above): `_apply_fill()`
+reduced `positions.quantity` on a SELL but never consumed the matching
+`position_lots.quantity_remaining` rows. A test asserting `position_qty
+== lots_qty` after `BUY 5, BUY 5, SELL 3` failed with `7 != 10`. Fixed by
+adding FIFO (oldest-`opened_at`-first) lot consumption on the SELL branch
+of `_apply_fill()`, setting `closed_at` once a lot empties. Re-ran
+`test_invariants.py` and the full suite — all 51 pass.
+
+**7-12. Journal, performance, alerts, plans, backtests, settings** — all
+GETs verified with real seeded data; writes verified: journal note/review
+POST (200, appended), alert PATCH acknowledge (200) and a stale
+`expected_updated_at` correctly `409`s, risk-policy PATCH/revert (200),
+watchlist duplicate-item POST correctly `409`s, order cancel (200,
+`CANCELED`), order bulk import with `idempotency_key` — same key posted
+twice returns the identical order id both times and the position reflects
+the fill exactly once (`4`, not `8`).
+
+### Secrets check before commit
+
+No new secrets this phase — no credential value is ever a column
+(`provider_config`), and `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

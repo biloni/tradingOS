@@ -93,6 +93,7 @@ pnpm test:e2e
 | [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md) | Mission, MVP scope, explicit out-of-scope list, phase roadmap |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Component diagram, fact/calc/inference/decision pipeline, provider abstraction pattern |
 | [docs/DATA_DICTIONARY.md](docs/DATA_DICTIONARY.md) | Every entity in the data model, and which phase implements it |
+| [docs/ER_DIAGRAM.md](docs/ER_DIAGRAM.md) | Mermaid ER diagrams — a context map plus one detailed diagram per bounded context |
 | [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md) | Endpoint contracts |
 | [docs/SECURITY.md](docs/SECURITY.md) | Secrets handling, least privilege, authn/authz posture |
 | [docs/PROVIDER_MATRIX.md](docs/PROVIDER_MATRIX.md) | Vendor choices and alternatives considered |

@@ -206,9 +206,49 @@ assigned here.
 - [ ] **Blocked on you:** a numbered implementation phase plan, proposed
       only after the above is confirmed
 
-## Phase 8+ — not yet planned
+## Phase 8 (2026-08-03) — domain model, schema, migrations, seed data, API
 
-No phase number is assigned to any implementation work from the
-refinement above. Once docs/BLOCKING_DECISIONS.md is confirmed, a real
-phase breakdown (following the same small-checkpointed-increments pattern
-Phases 1–7 used) would be proposed here, not started silently.
+Implements "domain model, database schema, migrations, seed fixtures, and
+versioned API contracts — do not integrate external providers yet" from
+the refinement above. Full detail in docs/STATUS.md.
+
+- [x] 13 bounded contexts, ~70 UUID-keyed tables (`models/*.py`) — full
+      wholesale schema replacement (ADR-043), `audit_events` unchanged
+- [x] 36 native Postgres enums + lifecycle transition maps (`models/enums.py`,
+      `services/lifecycle.py`)
+- [x] One migration (`ece90645a84b`), hand-verified empty→head→one-step-
+      down→head and downgrade→base against an isolated Postgres schema
+- [x] Idempotent seed script (`tradingos-seed`) — every bounded context
+      populated with realistic linked data
+- [x] Old Phase 1-7 business-logic routers/services/tests retired (ADR-044)
+- [x] 12 API areas / 37 endpoints, Pydantic schemas + routers — pagination,
+      filtering, idempotency keys, optimistic concurrency
+- [x] Tests: migration reversibility, DB constraints/indexes, Numeric-
+      never-float precision, position-lot/cash-ledger invariants, OpenAPI
+      structural contracts, idempotency/concurrency (51 total, all passing)
+- [x] Bug found + fixed: SELL fills weren't consuming `position_lots` via
+      FIFO (invariant violation caught by the invariant tests themselves);
+      `DRAFT`→`FILLED` was missing from `ORDER_TRANSITIONS`
+- [x] `ruff check` / `ruff format --check` / `mypy .` clean across `src/`
+      and `tests/`
+- [x] docs/DATA_DICTIONARY.md — full rewrite for the new schema
+- [x] docs/API_CONTRACTS.md — full rewrite for the new API (old Phase 1-7
+      contracts preserved as a historical record at the bottom)
+- [x] docs/DECISIONS.md — ADR-043 (schema replacement), ADR-044 (business-
+      logic retirement)
+- [x] docs/ER_DIAGRAM.md (new) — context map + one Mermaid diagram per
+      bounded context
+- [x] Live-verified via direct API calls against real seeded data across
+      all 12 areas
+- [x] Phase 8 checkpoint commit
+
+## Phase 9+ — not yet planned
+
+Not yet done, explicitly out of Phase 8's scope: re-implementing scoring/
+backtest-execution/LLM tool-use orchestration against the new schema;
+wiring up real Anthropic/Alpaca calls ("do not integrate external
+providers yet" — Phase 8 only); rebuilding `apps/web` against the new API
+(the existing frontend still targets the retired Phase 1-7 contracts and
+will not build against the current backend). No phase number is assigned
+to this work yet — it would be proposed and confirmed before starting,
+following the same pattern as every prior phase.

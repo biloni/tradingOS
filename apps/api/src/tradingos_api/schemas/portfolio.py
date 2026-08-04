@@ -1,32 +1,51 @@
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel
+
+from tradingos_api.models.enums import AccountType
+from tradingos_api.schemas.instruments import InstrumentResponse
 
 
-class PositionOut(BaseModel):
-    """Derived, not read from a table — see PaperOrder's docstring / ADR-013.
-    Cost basis is a simple weighted average across all BUY fills; this
-    doesn't do FIFO/LIFO tax-lot accounting (a known, documented MVP
-    simplification, not an oversight — see docs/DECISIONS.md ADR-013)."""
+class AccountResponse(BaseModel):
+    id: uuid.UUID
+    account_type: AccountType
+    name: str
+    base_currency: str
+    is_active: bool
 
-    ticker: str
-    quantity: int
-    avg_entry_price: Decimal
-    current_price: Decimal | None
+    model_config = {"from_attributes": True}
+
+
+class PositionResponse(BaseModel):
+    instrument: InstrumentResponse
+    quantity: Decimal
+    avg_cost: Decimal
     market_value: Decimal | None
-    unrealized_pl: Decimal | None
-
-    @field_serializer("avg_entry_price", "current_price", "market_value", "unrealized_pl")
-    def _serialize_decimal_as_str(self, value: Decimal | None) -> str | None:
-        return str(value) if value is not None else None
 
 
-class PortfolioSnapshotOut(BaseModel):
-    cash_usd: Decimal
-    positions: list[PositionOut]
-    total_market_value: Decimal
-    total_equity: Decimal
+class CashSummaryResponse(BaseModel):
+    account_id: uuid.UUID
+    cash: Decimal
+    starting_cash: Decimal
 
-    @field_serializer("cash_usd", "total_market_value", "total_equity")
-    def _serialize_decimal_as_str(self, value: Decimal) -> str:
-        return str(value)
+
+class RiskSnapshotResponse(BaseModel):
+    as_of: datetime
+    gross_exposure_pct: Decimal | None
+    largest_position_pct: Decimal | None
+    sector_concentration: dict[str, Any] | None
+    correlation_flag: bool
+
+    model_config = {"from_attributes": True}
+
+
+class AccountDetailResponse(BaseModel):
+    account: AccountResponse
+    cash: CashSummaryResponse
+    positions: list[PositionResponse]
+    latest_risk_snapshot: RiskSnapshotResponse | None
