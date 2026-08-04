@@ -91,7 +91,7 @@ every phase follows.
       API, `LLMCallLog` row inspected (see docs/TEST_EVIDENCE.md)
 - [x] Phase 4 checkpoint commit (`fa66912`)
 
-## Phase 5 — Backtesting (current)
+## Phase 5 — Backtesting
 
 - [x] `BacktestRun` model + migration (`130bfdd45919`)
 - [x] Historical replay engine: next-bar-open fills, no look-ahead bias
@@ -113,13 +113,35 @@ every phase follows.
 - [x] Live verification: real backtest run against the ~2-year real
       ingested history, `BacktestRun` row inspected (see
       docs/TEST_EVIDENCE.md)
-- [ ] Phase 5 checkpoint commit
+- [x] Phase 5 checkpoint commit (`29a0763`)
 
-## Phase 6 — Learning / Strategy-Review Loop
+## Phase 6 — Learning / Strategy-Review Loop (current)
 
-- [ ] Strategy-change proposal flow: backtest report + comparison against the
-      current `StrategyVersion` + explicit user approval before activation
-      (principle 16) — no auto-activation path exists
+- [x] `StrategyVersion` gains a real 4-state lifecycle (`PROPOSED`/
+      `ACTIVE`/`REJECTED`/`SUPERSEDED`), replacing `is_active: bool`
+      outright (migration `eed7cb451bdc`, ADR-027)
+- [x] Proposals are user/operator-submitted candidate configs, not an
+      autonomous optimizer (ADR-026) — `POST /api/v1/strategy-versions`,
+      schema-validated against the exact shape `compute_score()` expects
+- [x] `POST /{id}/compare`: fresh backtest for candidate + active with
+      identical params, persists 2 real `BacktestRun` rows, never changes
+      candidate status
+- [x] `POST /{id}/approve`: requires `PROPOSED`; re-runs the comparison
+      itself for the audit snapshot (ADR-028, never trusts a prior
+      `/compare`); activates the candidate, supersedes the previous
+      active version; never enforces a numeric approval bar — a human
+      decides
+- [x] `POST /{id}/reject`: requires `PROPOSED`; no backtest re-run
+- [x] Every proposal/approval/rejection writes its own `AuditEvent`
+      (`STRATEGY_VERSION_PROPOSED`/`APPROVED`/`REJECTED` — principle 9)
+- [x] 15 new tests this phase (pure `compute_comparison_delta` deltas,
+      propose/compare/approve/reject state-machine + audit-trail
+      endpoint tests) — 107/107 passing, no live API required (no new
+      vendor this phase either)
+- [x] Live verification: real propose → compare → approve flow against
+      the real ingested data, `strategy_versions`/`audit_events` rows
+      inspected (see docs/TEST_EVIDENCE.md)
+- [ ] Phase 6 checkpoint commit
 
 ## Phase 7 — UI Polish & Documentation Hardening
 

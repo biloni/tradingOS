@@ -15,7 +15,7 @@ from tradingos_api.models.recommendation import (
     RecommendationConfidence,
     RecommendationStatus,
 )
-from tradingos_api.models.strategy_version import StrategyVersion
+from tradingos_api.models.strategy_version import StrategyVersion, StrategyVersionStatus
 from tradingos_api.models.symbol import AssetType, Symbol
 
 __all__ = [
@@ -35,6 +35,7 @@ __all__ = [
     "RecommendationConfidence",
     "RecommendationStatus",
     "StrategyVersion",
+    "StrategyVersionStatus",
     "Symbol",
     "Timeframe",
 ]

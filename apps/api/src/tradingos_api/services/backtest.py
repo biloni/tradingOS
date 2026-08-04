@@ -47,6 +47,11 @@ from tradingos_api.services.strategy import get_or_create_default_strategy_versi
 
 ExitReason = Literal["SIGNAL_EXIT", "MAX_HOLDING_DAYS", "END_OF_BACKTEST"]
 
+# Matches scripts/ingest_prices.py's BACKFILL_DAYS — the default window
+# covers the full history actually ingested when neither date is given.
+# Shared by routers/backtest.py and routers/strategy.py.
+DEFAULT_BACKTEST_LOOKBACK_DAYS = 730
+
 
 @dataclass(frozen=True)
 class SymbolBar:

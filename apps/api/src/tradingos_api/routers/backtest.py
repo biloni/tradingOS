@@ -8,13 +8,9 @@ from sqlalchemy.orm import Session
 from tradingos_api.db.session import get_db
 from tradingos_api.models.backtest_run import BacktestRun
 from tradingos_api.schemas.backtest import BacktestCreateRequest, BacktestRunOut
-from tradingos_api.services.backtest import run_backtest
+from tradingos_api.services.backtest import DEFAULT_BACKTEST_LOOKBACK_DAYS, run_backtest
 
 router = APIRouter(prefix="/api/v1/backtests", tags=["backtests"])
-
-# Matches scripts/ingest_prices.py's BACKFILL_DAYS — the default window
-# covers the full history actually ingested when neither date is given.
-DEFAULT_BACKTEST_LOOKBACK_DAYS = 730
 
 
 def _get_backtest_run_or_404(session: Session, run_id: int) -> BacktestRun:

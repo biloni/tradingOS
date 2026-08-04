@@ -2,10 +2,10 @@
 
 This documents the **conceptual** data model for the whole system so it can
 be reviewed end-to-end. Entities not yet implemented say so; implemented ones
-say which migration/module they live in. As of Phase 5: every entity below
-is live except `BacktestRun`'s Phase 6 companion (the strategy-change
-approval flow doesn't add a new entity, it adds a review/approval process
-around `StrategyVersion` and `BacktestRun`, which already exist).
+say which migration/module they live in. As of Phase 6: every entity below
+is live. Phase 6 added no new entity — it added a review/approval
+*process* (a real lifecycle on `StrategyVersion`, plus reusing
+`BacktestRun`) rather than a new table.
 
 ## Dimensions (master data — **implemented, Phase 2**)
 
@@ -52,11 +52,20 @@ pure function of existing facts, not a new observation (ADR-012).
 configuration of scoring weights/thresholds (principle 8 — never
 hardcoded): `id`, `name`, `config` (JSON —
 `{"weights": {...}, "rsi_bullish_low", "rsi_bullish_high", "rsi_oversold"}`),
-`is_active`, `created_at`. The MVP has exactly one active version, lazily
-created by `services/strategy.py`'s
-`get_or_create_default_strategy_version()` — this is the *first* version,
-not a proposed change, so it doesn't go through Phase 6's not-yet-built
-strategy-change approval gate (principle 16).
+`status` (native enum `PROPOSED|ACTIVE|REJECTED|SUPERSEDED` — **implemented,
+Phase 6**, migration `eed7cb451bdc`, replacing the earlier `is_active: bool`
+outright, ADR-027), `decided_at` / `decision_comment` (nullable — set once
+when a `PROPOSED` version is approved or rejected), `created_at`. The MVP's
+first version is lazily created directly as `ACTIVE` by
+`services/strategy.py`'s `get_or_create_default_strategy_version()` — it
+skips the approval gate since it's the first version, not a proposed
+change. Every subsequent change goes through Phase 6's propose → compare →
+approve/reject flow (principle 16, ADR-026/028):
+`propose_strategy_version()`, `run_comparison()`,
+`approve_strategy_version()`, `reject_strategy_version()` — exactly one
+`ACTIVE` row at a time; approving a candidate flips the previously active
+row to `SUPERSEDED` (kept for history, same pattern as
+`RecommendationStatus`).
 
 ### Recommendation
 `apps/api/src/tradingos_api/models/recommendation.py`. `id`, `symbol_id`

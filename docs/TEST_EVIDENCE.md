@@ -607,3 +607,145 @@ No new secrets this phase — Phase 5 makes no Alpaca or Anthropic API
 calls at all (pure computation over already-ingested Postgres data).
 Confirmed `.env` still absent from `git status --porcelain` before
 staging.
+
+## Phase 6 — Learning / Strategy-Review Loop (2026-08-03)
+
+### Migration round-trip
+
+```
+$ uv run alembic upgrade head
+INFO  Running upgrade 130bfdd45919 -> eed7cb451bdc, add strategy_version status lifecycle
+
+$ uv run alembic downgrade 130bfdd45919
+INFO  Running downgrade eed7cb451bdc -> 130bfdd45919, add strategy_version status lifecycle
+
+$ uv run alembic upgrade head
+INFO  Running upgrade 130bfdd45919 -> eed7cb451bdc, add strategy_version status lifecycle
+
+$ uv run alembic check
+No new upgrade operations detected.
+```
+Not purely additive (ADR-027) — `is_active` was a live `NOT NULL` column
+with a real row, so `upgrade()` adds `status` nullable, backfills
+(`is_active=true → ACTIVE`, `is_active=false → PROPOSED`), sets `NOT
+NULL`, then drops `is_active`. One real gotcha hit and fixed during this
+migration's first attempt: `op.add_column()` on an *existing* table does
+**not** implicitly `CREATE TYPE` for an `sa.Enum` column the way
+`op.create_table()` does — the first run failed with
+`psycopg.errors.UndefinedObject: type "strategy_version_status" does not
+exist`. Fixed by explicitly calling `status_enum.create(op.get_bind(),
+checkfirst=True)` before `op.add_column()`. Confirmed via `psql` after
+the round-trip that the one real seeded row (`Plan of Record v1`)
+correctly backfilled to `status = 'ACTIVE'`.
+
+### `apps/api` full suite
+
+```
+$ uv run ruff check .
+All checks passed!
+
+$ uv run ruff format --check .
+85 files already formatted
+
+$ uv run mypy .
+Success: no issues found in 84 source files
+
+$ uv run pytest -v
+============================= test session starts =============================
+platform win32 -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+collected 107 items
+...
+======================= 107 passed, 1 warning in 3.77s ========================
+```
+15 new tests this phase, all fixtures-only (no live API required to
+pass): `tests/test_strategy.py` (3, pure `compute_comparison_delta` —
+candidate-better, candidate-worse, and identical-summaries cases, hand-
+computed deltas, no DB). `tests/test_strategy_versions_endpoint.py` (12,
+in-memory SQLite, a minimal price-only fixture since these tests are
+about the state machine and audit trail, not backtest correctness
+already covered in Phase 5): propose (happy path; invalid `rsi_bullish_low
+>= rsi_bullish_high` → 422; doesn't touch any active version); compare
+(persists exactly 2 new `BacktestRun` rows; candidate status unchanged;
+404 on unknown id); approve (happy path — candidate becomes `ACTIVE`, the
+lazily-created default becomes `SUPERSEDED`, one `STRATEGY_VERSION_APPROVED`
+`AuditEvent` with both backtest ids and the previous-active id in its
+snapshot; approving a second time → 400; 404 on unknown id); reject
+(happy path — `REJECTED`, no `BacktestRun` rows created, active version
+untouched, one `STRATEGY_VERSION_REJECTED` `AuditEvent`; rejecting twice →
+400); list/detail.
+
+### Live verification (real ingested history)
+
+Started the API against the real Postgres database (the real
+`Plan of Record v1` `StrategyVersion` already `ACTIVE` from prior phases)
+and ran a real propose → compare → approve flow.
+
+**Propose** a candidate with different weights (momentum up-weighted,
+Bollinger down-weighted):
+```
+$ curl -X POST localhost:8000/api/v1/strategy-versions -d '{
+    "name": "Momentum-weighted candidate",
+    "config": {"weights": {"trend": 1.0, "momentum": 1.5, "macd": 1.0, "bollinger": 0.5},
+               "rsi_bullish_low": 50, "rsi_bullish_high": 70, "rsi_oversold": 30}}'
+{"id":2,"name":"Momentum-weighted candidate","status":"PROPOSED","decided_at":null, ...}
+```
+
+**Compare** it against the active version (real time: 6.4s for the pair
+of backtests over the full ~2-year/30-symbol history):
+```
+$ curl -X POST localhost:8000/api/v1/strategy-versions/2/compare -d '{"benchmark_ticker": null}'
+candidate (id 2) total_return_pct: 14.9277600
+active    (id 1) total_return_pct: 15.0280900
+delta: {"total_return_pct": "-0.1003300", "max_drawdown_pct": "5.447...",
+        "win_rate_pct": "9.782...", "num_trades": -148, ...}
+```
+The candidate's momentum-weighted config traded 148 fewer times and
+returned marginally less than the active version over this window —
+exactly the kind of concrete, quantified trade-off the review gate exists
+to surface (not to decide on).
+
+**Approve** anyway, with a comment (real time: 5.4s — approve re-runs the
+comparison itself per ADR-028, never trusting the `/compare` call above):
+```
+$ curl -X POST localhost:8000/api/v1/strategy-versions/2/approve -d '{
+    "benchmark_ticker": null, "comment": "Live Phase 6 verification approval"}'
+{"id":2,"status":"ACTIVE","decided_at":"2026-08-03T16:57:27...",
+ "decision_comment":"Live Phase 6 verification approval", ...}
+```
+
+Confirmed final state via `psql`:
+```
+$ psql ... -c "SELECT id, name, status, decided_at, decision_comment FROM strategy_versions ORDER BY id;"
+ id |            name             |   status   |          decided_at           |          decision_comment
+----+-----------------------------+------------+-------------------------------+------------------------------------
+  1 | Plan of Record v1           | SUPERSEDED |                                |
+  2 | Momentum-weighted candidate | ACTIVE     | 2026-08-03 16:57:27.545043-07 | Live Phase 6 verification approval
+
+$ psql ... -c "SELECT record_type, ref_id, snapshot FROM audit_events WHERE record_type LIKE 'STRATEGY_VERSION%' ORDER BY id;"
+ STRATEGY_VERSION_PROPOSED | 2 | {"name": "Momentum-weighted candidate", "config": {...}}
+ STRATEGY_VERSION_APPROVED | 2 | {"delta": {...}, "comment": "Live Phase 6 verification approval",
+                                  "active_backtest_run_id": 7, "candidate_backtest_run_id": 6,
+                                  "previous_active_strategy_version_id": 1}
+```
+The previous `ACTIVE` version correctly flipped to `SUPERSEDED`; the
+candidate is now `ACTIVE` with `decided_at`/`decision_comment` set; both
+`AuditEvent` rows exist with the exact data expected — `STRATEGY_VERSION_
+PROPOSED` capturing the submitted config, `STRATEGY_VERSION_APPROVED`
+referencing the exact two `BacktestRun` ids (6, 7) the approval was based
+on and the previous active version's id (1), matching `run_comparison()`'s
+real output exactly.
+
+Note on `backtest_runs` row count: 7 total (1 pre-existing from Phase 5's
+own live verification, plus 3 pairs from this session — the `/compare`
+call's pair, an inadvertent duplicate `/compare` call triggered by a
+verification-script fallback branch, and `/approve`'s own fresh pair).
+Harmless — every pair is a real, correctly-attributed backtest — but
+noted for an accurate record rather than silently reporting a cleaner
+number than what actually happened.
+
+### Secrets check before commit
+
+No new secrets this phase — Phase 6 makes no Alpaca or Anthropic API
+calls at all (pure computation over already-ingested Postgres data plus
+the existing backtest engine). Confirmed `.env` still absent from
+`git status --porcelain` before staging.

@@ -11,7 +11,7 @@ unreviewed autonomous trading bot.** See [PROJECT_INSTRUCTIONS.md](PROJECT_INSTR
 for the full set of non-negotiable product principles, and
 [docs/PRODUCT_REQUIREMENTS.md](docs/PRODUCT_REQUIREMENTS.md) for MVP scope.
 
-**Current status:** Phase 5 (Backtesting) — see
+**Current status:** Phase 6 (Learning / Strategy-Review Loop) — see
 [docs/STATUS.md](docs/STATUS.md).
 
 ## Stack
@@ -94,27 +94,26 @@ pnpm lint && pnpm typecheck && pnpm test
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | How to use the app (grows each phase) |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | Pinned versions, verified against live registries |
 
-## Known limitations (as of Phase 5)
+## Known limitations (as of Phase 6)
 
-- No UI yet — every feature through Phase 5 (ingestion, indicators, paper
-  trading, scoring, NL query, backtesting) is API-only; the Next.js
-  frontend is scaffolding pending Phase 7.
+- No UI yet — every feature through Phase 6 (ingestion, indicators, paper
+  trading, scoring, NL query, backtesting, the strategy-review loop) is
+  API-only; the Next.js frontend is scaffolding pending Phase 7.
 - No live-order capability exists anywhere in the codebase, by design
   (principle 10) — this isn't a flag waiting to be flipped, it doesn't exist.
 - No auth/multi-user support ([ADR-007](docs/DECISIONS.md)) — single-user
   personal tool.
 - Docker Compose path for Postgres is documented but not the primary path on
   the current dev machine ([ADR-008](docs/DECISIONS.md)).
-- No historical-outcome-based confidence calibration yet — Phase 5's
-  backtest reports are the raw material, but calibration itself needs
-  Phase 6's review loop and a real sample of completed trades before any
-  confidence number is framed as a probability
+- No historical-outcome-based confidence calibration yet — still needs a
+  real sample of completed trades post-activation before any confidence
+  number is framed as a probability
   ([docs/MODEL_GOVERNANCE.md](docs/MODEL_GOVERNANCE.md)).
-- No strategy-change comparison/approval workflow yet — Phase 5 only
-  produces one backtest report at a time, not a side-by-side comparison
-  against the active `StrategyVersion` (Phase 6, principle 16).
 - No historical index-constituent/delisting reconstruction — backtests use
   every known symbol regardless of today's `active` flag, but this is a
   fixed 30-name watchlist, not an index replication ([ADR-025](docs/DECISIONS.md)).
+- No autonomous strategy-proposal system — candidates are user/operator-
+  submitted ([ADR-026](docs/DECISIONS.md)); the review gate itself is
+  fully built and doesn't depend on what originates a candidate.
 - `/api/v1/ask` is stateless per request — no persisted multi-turn
   conversation history yet ([ADR-019](docs/DECISIONS.md)).

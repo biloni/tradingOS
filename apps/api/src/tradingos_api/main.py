@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from tradingos_api.routers import ask, backtest, health, paper_orders, portfolio, symbols
+from tradingos_api.routers import ask, backtest, health, paper_orders, portfolio, strategy, symbols
 
 app = FastAPI(title="TradingOS API", version="0.1.0")
 
@@ -18,3 +18,4 @@ app.include_router(paper_orders.router)
 app.include_router(portfolio.router)
 app.include_router(ask.router)
 app.include_router(backtest.router)
+app.include_router(strategy.router)

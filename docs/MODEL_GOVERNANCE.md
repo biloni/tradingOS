@@ -42,12 +42,24 @@ ever framed as a calibrated probability.
 
 ## Strategy changes require review, not auto-activation
 
-Per principle 16, any change the learning system proposes to scoring
+**Implemented, Phase 6.** Per principle 16, any change to scoring
 formulas or thresholds requires: a backtest report, an explicit comparison
 against the currently-active `StrategyVersion`, and the user's explicit
-approval — before it becomes the active version. There is no code path in
-this system's design that activates a new strategy version without that
-approval step.
+approval — before it becomes the active version. `services/strategy.py`'s
+`propose_strategy_version()` creates a candidate as `PROPOSED` (never
+touching the active version); `run_comparison()` and
+`approve_strategy_version()` always re-run a fresh backtest for both the
+candidate and the active version before activation (ADR-028) — there is
+no code path anywhere in this codebase that activates a new strategy
+version without going through that comparison first. Note on what "the
+learning system" means here (ADR-026): this project has no autonomous
+optimizer that invents candidate weights on its own — proposals are
+user/operator-submitted via `POST /api/v1/strategy-versions`. The
+review/backtest/comparison/approval gate is the actual governance
+requirement, regardless of what originates a candidate. The system never
+enforces a numeric approval bar (e.g. "candidate must beat active on
+return") — the gate's job is to surface the comparison, never to decide
+for the human.
 
 ## Cost and prompt versioning
 

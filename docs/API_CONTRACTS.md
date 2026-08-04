@@ -272,8 +272,101 @@ invalid, or no symbol has any price history in the requested range.
 
 List (newest-first) / detail. Same shape as the `POST` response.
 
-## Phase 6+ (not yet implemented)
+## `POST /api/v1/strategy-versions`
 
-Comparing a candidate `StrategyVersion`'s backtest report against the
-active version's, with an explicit approval gate before activation
-(principle 16) — Phase 5 only produces one report at a time.
+Propose a candidate scoring configuration (ADR-026 — a user/operator-
+submitted candidate, not an autonomous optimizer). Never touches the
+currently active version.
+
+**Request body**
+```json
+{
+  "name": "Tighter RSI band",
+  "config": {
+    "weights": {"trend": 1.0, "momentum": 1.5, "macd": 1.0, "bollinger": 1.0},
+    "rsi_bullish_low": 55, "rsi_bullish_high": 65, "rsi_oversold": 30
+  }
+}
+```
+`config` is validated against the exact shape `services/scoring.py`'s
+`compute_score()` understands — a malformed shape or `rsi_bullish_low >=
+rsi_bullish_high` is a `422`, not a silently-broken (always-neutral) score.
+
+**Response `201`**
+```json
+{
+  "id": 2, "name": "Tighter RSI band", "config": {"...": "..."},
+  "status": "PROPOSED", "decided_at": null, "decision_comment": null,
+  "created_at": "2026-08-03T12:00:00+00:00"
+}
+```
+
+## `POST /api/v1/strategy-versions/{id}/compare`
+
+Read-only and repeatable (ADR-028) — runs a fresh backtest for both the
+candidate and the currently active version with **identical** parameters
+(same optional overrides as `POST /api/v1/backtests`, minus
+`strategy_version_id`), persisting two real `BacktestRun` rows every call.
+Never changes the candidate's `status`.
+
+**Response `200`**
+```json
+{
+  "candidate_backtest": { "...": "full BacktestRunOut, see POST /api/v1/backtests" },
+  "active_backtest": { "...": "full BacktestRunOut" },
+  "delta": {
+    "total_return_pct": "3.20", "max_drawdown_pct": "-1.10",
+    "win_rate_pct": "2.50", "avg_win_pct": "0.40", "avg_loss_pct": "-0.15",
+    "num_trades": 12
+  }
+}
+```
+`delta` is candidate minus active for each metric — surfaced for a human
+to read, never used by the system to auto-decide anything.
+
+**Response `404`** — unknown candidate id.
+
+## `POST /api/v1/strategy-versions/{id}/approve`
+
+The explicit human approval action (principle 16) — requires the
+candidate to be `PROPOSED`. Re-runs the comparison itself (ADR-028, never
+trusts a prior `/compare` call) to produce the audit snapshot, then
+activates the candidate and supersedes the previously active version.
+
+**Request body** — same optional params as `/compare`, plus:
+```json
+{"comment": "Backtested better win rate with similar drawdown, approving."}
+```
+
+**Response `200`** — the candidate, now `ACTIVE`:
+```json
+{
+  "id": 2, "name": "Tighter RSI band", "config": {"...": "..."},
+  "status": "ACTIVE", "decided_at": "2026-08-03T12:05:00+00:00",
+  "decision_comment": "Backtested better win rate with similar drawdown, approving.",
+  "created_at": "2026-08-03T12:00:00+00:00"
+}
+```
+The previously active version's `status` becomes `SUPERSEDED` (kept for
+history). One `AuditEvent` (`record_type="STRATEGY_VERSION_APPROVED"`)
+records both backtest ids, the delta, and the comment.
+
+**Response `400`** — candidate isn't `PROPOSED` (already decided).
+**Response `404`** — unknown candidate id.
+
+## `POST /api/v1/strategy-versions/{id}/reject`
+
+**Request body**: `{"comment": "..."}` (optional). Requires `PROPOSED`. No
+backtest re-run — nothing to activate.
+
+**Response `200`** — the candidate, now `REJECTED`, with `decided_at`/
+`decision_comment` set. **Response `400`** — not `PROPOSED`.
+
+## `GET /api/v1/strategy-versions` / `GET /api/v1/strategy-versions/{id}`
+
+List (newest-first) / detail. Same shape as `POST /api/v1/strategy-versions`.
+
+## Phase 7+ (not yet implemented)
+
+Any UI for reviewing/proposing/approving strategy versions or viewing
+backtest reports — everything through Phase 6 is API-only.

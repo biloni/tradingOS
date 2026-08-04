@@ -623,3 +623,114 @@ doesn't have, at real modeling cost).
 `active=False` today with a signal-worthy historical series and asserts it
 still appears in the backtest's trade log — the concrete, testable form of
 this mitigation for a fixed-watchlist system.
+
+---
+
+## ADR-026: Strategy-change proposals are user-submitted candidate
+configs, not an autonomous learning system
+
+**Context.** Principle 16 requires "strategy changes proposed by the
+learning system" to go through review/backtest/comparison/approval before
+activation. Nothing in this codebase (or docs/PRODUCT_REQUIREMENTS.md,
+docs/TASKS.md) describes an automated optimizer that invents candidate
+scoring weights on its own — docs/MODEL_GOVERNANCE.md's own header notes
+that document predates any LLM integration code, so "the learning system"
+is Phase-1-era framing, not a commissioned component. Principles 6/7
+(deterministic code owns numeric truth) also cut against an autonomous
+system generating weights as if they were ground truth.
+
+**Decision.** A "proposal" in this system is a user/operator-submitted
+candidate `StrategyVersion.config` via `POST /api/v1/strategy-versions`
+(`services/strategy.py`'s `propose_strategy_version()`). The
+review/backtest/comparison/approval *gate* — not what originates the
+candidate — is principle 16's actual required deliverable, and that gate
+is built in full this phase.
+
+**Alternatives considered.** Building an automated weight-tuning optimizer
+(rejected: zero demonstrated need anywhere in the brief, and the same
+category of over-build ADR-025 already declined for historical-index
+reconstruction — solving a problem the system doesn't have).
+
+**Consequences.** If a real optimizer is ever added, it would call the
+same `propose_strategy_version()` entry point a human does — the gate
+doesn't change based on who/what originates a candidate.
+
+---
+
+## ADR-027: `StrategyVersion` gains a real 4-state lifecycle, replacing
+`is_active: bool` outright
+
+**Context.** Phase 6 needs to represent a candidate config that exists but
+isn't active yet, and a decision (approved/rejected) about it — a bare
+`is_active: bool` can't express "proposed, under review" or "was active,
+now superseded."
+
+**Decision.** `status: StrategyVersionStatus` (`PROPOSED`, `ACTIVE`,
+`REJECTED`, `SUPERSEDED`) **replaces** `is_active` outright (not kept
+alongside it), consistent with this codebase's recurring one-source-of-
+truth-per-fact philosophy (`PaperPosition`/ADR-013,
+`get_latest_price_bars()`/ADR-011). Plus nullable `decided_at` /
+`decision_comment`, set once when a `PROPOSED` version is approved or
+rejected. Not purely additive — `is_active` was a live `NOT NULL` column
+with a real row — so the migration adds `status` nullable, backfills
+(`is_active=true → ACTIVE`, `is_active=false → PROPOSED`, since no row has
+ever reached a terminal `REJECTED`/`SUPERSEDED` state without a decision
+that hasn't happened), sets `NOT NULL`, then drops `is_active`.
+`downgrade()` mirrors this and needs the same enum-drop fixup this repo's
+migrations have needed since Phase 2 (`op.drop_column()` doesn't drop the
+native Postgres enum type it created). Grep-confirmed: only
+`services/strategy.py` and one test fixture referenced `is_active`
+anywhere in `apps/api/src` — small blast radius.
+
+**Alternatives considered.** Keeping `is_active` alongside a new `status`
+column (rejected: two overlapping signals for the same fact is exactly the
+anti-pattern this codebase avoids elsewhere).
+
+**Consequences.** `services/backtest.py`'s `run_backtest()` deliberately
+keeps taking a raw `strategy_version_id` with **no status filtering** —
+backtesting a `REJECTED`/`SUPERSEDED` version for historical curiosity is
+harmless and arguably useful; only the state-*transition* endpoints
+(`approve`/`reject`) gate on `status == PROPOSED`.
+
+---
+
+## ADR-028: Compare/approve always re-run both backtests fresh, never
+trust a client-supplied prior comparison
+
+**Context.** A `compare` or `approve` call needs a fair, current
+side-by-side of the candidate against whatever is *actually* active right
+now — trusting a client-supplied earlier `/compare` result would require
+verifying it used the right version ids and identical parameters, real
+validation complexity for little benefit.
+
+**Decision.** `services/strategy.py`'s `run_comparison()` always calls
+`run_backtest()` twice — once for the candidate, once for the currently
+active version, identical params both times — persisting two fresh real
+`BacktestRun` rows every time. `approve_strategy_version()` calls
+`run_comparison()` itself to produce its audit snapshot, never accepting
+a pre-computed comparison from the caller — mirrors ADR-014's
+"re-validate immediately before acting, don't trust an earlier check"
+philosophy. The system **never** enforces a numeric approval bar (e.g.
+"candidate must beat active on return") — principle 16 requires human
+review and explicit approval, not an automated gate; the system's job is
+only to surface the comparison.
+
+**Alternatives considered.** Accepting a client-supplied prior
+`BacktestRun` id pair on `approve` (rejected: would need to verify those
+runs actually used the right `strategy_version_id`s and params — more
+complexity than just re-running, which Phase 5 already showed is cheap
+and fast).
+
+**Consequences, named explicitly (matching ADR-024's own trade-off
+style):** a `propose → compare → approve` sequence run back-to-back
+creates 4 `BacktestRun` rows total (2 from each call), each with its own
+`BACKTEST_RUN_CREATED` audit event — an accepted cost, not redundant/buggy
+behavior. Also, because `run_backtest()` commits internally, `approve`'s
+two backtest runs are durably committed before the activation decision
+itself — benign (a mid-request crash leaves orphan `BacktestRun` rows,
+never an unintended activation) but worth naming rather than silently
+relying on. A defensive `candidate.id == active.id` guard in
+`approve_strategy_version()` protects against a future weakened
+precondition silently corrupting a row into both `ACTIVE` and
+`SUPERSEDED`, even though the `status == PROPOSED` check already makes
+that case unreachable today.

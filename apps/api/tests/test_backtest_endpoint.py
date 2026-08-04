@@ -18,7 +18,7 @@ from tradingos_api.db.session import get_db
 from tradingos_api.main import app
 from tradingos_api.models.indicator import Indicator, IndicatorName
 from tradingos_api.models.price_bar import PriceBar, Timeframe
-from tradingos_api.models.strategy_version import StrategyVersion
+from tradingos_api.models.strategy_version import StrategyVersion, StrategyVersionStatus
 from tradingos_api.models.symbol import AssetType, Symbol
 
 D0 = date(2026, 1, 5)
@@ -218,7 +218,7 @@ class TestCreateBacktest:
         neutral_strategy = StrategyVersion(
             name="all-zero-weights",
             config={"weights": {"trend": 0, "momentum": 0, "macd": 0, "bollinger": 0}},
-            is_active=False,
+            status=StrategyVersionStatus.PROPOSED,
             created_at=datetime.now(UTC),
         )
         db_session.add(neutral_strategy)
