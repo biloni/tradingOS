@@ -115,7 +115,7 @@ every phase follows.
       docs/TEST_EVIDENCE.md)
 - [x] Phase 5 checkpoint commit (`29a0763`)
 
-## Phase 6 — Learning / Strategy-Review Loop (current)
+## Phase 6 — Learning / Strategy-Review Loop
 
 - [x] `StrategyVersion` gains a real 4-state lifecycle (`PROPOSED`/
       `ACTIVE`/`REJECTED`/`SUPERSEDED`), replacing `is_active: bool`
