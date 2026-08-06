@@ -41,3 +41,26 @@ procedure worth recording now, since it came up during Phase 1 setup:
    the statement as incomplete and swallow subsequent input as more SQL.
 4. Revert `pg_hba.conf` back to `scram-sha-256` and restart the service
    again.
+
+## v2 Decision and Execution Amendment (2026-08-05) — operating mode and kill switch
+
+PROJECT_INSTRUCTIONS.md's new "TradingOS v2 Decision and Execution
+Amendment" section (`OA-*`) requires four visibly distinct order-authority
+modes and an always-available kill switch / cancel-open-orders control.
+Neither is wired into a running deployment yet:
+
+- **Local dev has no operating-mode setting today.** There is no
+  `OPERATING_MODE` environment variable or config value anywhere in
+  `apps/api` — every existing order endpoint behaves like an ungated
+  `PAPER_MANUAL_APPROVAL` (see docs/SECURITY.md's v2 amendment note for
+  the exact gap). When a future phase wires
+  `apps/api/src/tradingos_api/policy/order_authority.py::assert_order_authorized()`
+  into `routers/orders.py`, this section gets a real "which mode is this
+  deployment running in, and how do I change it" runbook entry — not
+  before, since there is no toggle to document yet.
+- **Kill switch / cancel-open-orders — not built.** No live broker
+  integration exists (principle 10, unchanged), so there is currently
+  nothing for a kill switch to stop. The requirement is recorded here so
+  it is scoped into the same phase that ever adds `PAPER_AUTO_POLICY` or
+  `LIVE_CONFIRM_EACH_ORDER` order submission, rather than treated as an
+  afterthought once orders are already flowing.

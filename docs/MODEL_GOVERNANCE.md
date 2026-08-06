@@ -220,3 +220,39 @@ no retry loop that could silently balloon this, matching the existing
 `MAX_ITERATIONS` philosophy from `/ask`. A single malformed-output retry
 (see Structured outputs above) adds at most 1 extra call for the specific
 role that failed validation, never a whole-committee re-run.
+
+---
+
+## v2 Decision and Execution Amendment (2026-08-05) — decision-quality display rules
+
+PROJECT_INSTRUCTIONS.md's new "TradingOS v2 Decision and Execution
+Amendment" section (`DQ-*`) makes two existing policies on this page into
+literal display-layer requirements, plus adds one new deterministic-vs.-
+LLM boundary specific to the earnings strategy:
+
+- **Confidence and magnitude are different numbers (DQ-4).** Direction
+  confidence (how sure the system is about *which way*) and expected
+  movement magnitude (how *big* a move) must never be conflated into one
+  number or one label. This extends "Confidence is not a probability
+  until it's calibrated" above: that section already established
+  confidence as a qualitative, computed band; DQ-4 additionally forbids
+  ever collapsing that band together with a magnitude estimate (e.g. an
+  earnings expected-move percentage) into a single displayed figure. Any
+  future committee-output schema or action-card UI must keep these two
+  values in visibly separate fields.
+- **No LLM self-rating as a calibrated probability, restated as a display
+  rule (DQ-5).** Unchanged in substance from "Confidence is not a
+  probability" above and from principle 15 — DQ-5 restates it as a
+  literal rule about what the UI/API response layer may render, not just
+  what the model is instructed to avoid saying.
+- **The earnings direction score is deterministic, never an LLM
+  self-rating (HES-1).** The hybrid earnings strategy's "conservative
+  live threshold is an earnings direction score of at least 6 out of 8"
+  (PROJECT_INSTRUCTIONS.md) is, like `Recommendation.confidence` and the
+  committee's per-role stances, a **computed** score from versioned,
+  auditable inputs — never a number an LLM reports about its own
+  certainty. No earnings-scoring code exists yet (the hybrid earnings
+  strategy is policy, not implementation, as of this revision — see
+  docs/STATUS.md); this note fixes the constraint before that scoring
+  function is ever written, the same way "tool-use, not text-to-SQL" was
+  fixed before `services/llm_tools.py` existed.

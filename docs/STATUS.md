@@ -1,10 +1,64 @@
 # Status
 
-**Current phase:** Phase 8 (shipped) — the full domain model, schema,
-migrations, seed fixtures, and versioned API contracts from the Product &
-Architecture Refinement pass are now implemented (schema/API only, per
-that phase's own scope — business logic re-implementation is next).
-**Last updated:** 2026-08-03
+**Current phase:** Phase 8 (shipped), plus Revision Prompt R0 — a binding
+policy amendment (PROJECT_INSTRUCTIONS.md's new "TradingOS v2 Decision and
+Execution Amendment") layered on top, documentation- and policy-check-only
+per R0's own instruction ("do not implement future provider, scoring,
+dashboard, or broker features in this revision").
+**Last updated:** 2026-08-05
+
+## Revision Prompt R0 (2026-08-05) — v2 Decision and Execution Amendment
+
+Appended a new, clearly-labeled, binding section to `PROJECT_INSTRUCTIONS.md`
+covering six areas: **PRODUCT MODES** (investment vs. tactical
+recommendations, mode-exclusive action vocabularies, no silent
+conversion), **MORNING DECISION STANDARD** (one immutable versioned plan
+per trading day, fixed section grouping, provenance display), **HYBRID
+EARNINGS STRATEGY** (6/8 conservative live threshold, 0.25%/0.50%
+pre-event risk budget, gap-risk modeling, no leakage from the future),
+**ORDER AUTHORITY** (four modes exactly —
+`RESEARCH_ONLY`/`PAPER_MANUAL_APPROVAL`/`PAPER_AUTO_POLICY`/
+`LIVE_CONFIRM_EACH_ORDER` — fail-closed, kill switch, no text channel can
+reach the broker boundary), **DECISION QUALITY** (facts/calculations/
+inferences/decisions shown as separate sections, confidence ≠ magnitude,
+no LLM self-rating presented as a probability), and **SECURITY AND
+SAFETY** (credentials never reach Cowork, approval binds the exact order,
+material changes invalidate approval).
+
+Per R0's explicit scope limit, this pass is policy adoption plus proof-
+of-concept validation, not feature implementation:
+
+- Two new standalone modules under `apps/api/src/tradingos_api/policy/`
+  (`order_authority.py`, `recommendation_modes.py`) — pure Python, no
+  SQLAlchemy model, no migration, no router, no provider call — encode
+  the four-mode taxonomy and the investment/tactical separation rules as
+  executable, testable logic.
+- 45 new unit tests (`tests/test_policy_order_authority.py`,
+  `tests/test_policy_recommendation_modes.py`) prove: the mode taxonomy
+  is exactly the four required members with no autonomous-live mode; each
+  mode's authorization gate (deny-always / confirmation-required /
+  versioned-grant-required / fresh-confirmation-required, fail-closed on
+  ambiguity); the bracket-leg no-second-confirmation carve-out; the two
+  recommendation action vocabularies are mode-exclusive except for the
+  shared `NO_ACTION`; sharing a `recommendation_id` across an investment/
+  tactical pair is rejected; a mode change without an explicit user
+  action is rejected; and (a structural guard against the real `src/`
+  tree) the order-fill/broker-boundary function and every order-mutating
+  endpoint exist only in `routers/orders.py` today.
+- docs/DECISIONS.md — ADR-045 records the decision and its alternatives.
+- docs/SECURITY.md, docs/MODEL_GOVERNANCE.md, docs/OPERATIONS.md,
+  docs/TASKS.md — each cross-references the amendment from its own
+  section (credential/Cowork handling, confidence-vs-magnitude and
+  earnings-score-is-deterministic notes, kill-switch/cancel-all runbook
+  stub, and the R0 task checklist respectively).
+- **Not done, and explicitly out of scope for this revision:** wiring
+  `assert_order_authorized()` into `routers/orders.py`; a real `mode`
+  column on `recommendations`/`recommendation_versions`; the morning-plan
+  generator, the earnings-strategy engine, the kill switch's actual
+  control surface, or any dashboard change. All are named as the next
+  phase's work, not silently started.
+- `ruff check`/`ruff format --check`/`mypy .` clean; full suite (96 tests:
+  the 51 from Phase 8 plus 45 new) passing.
 
 ## Done
 

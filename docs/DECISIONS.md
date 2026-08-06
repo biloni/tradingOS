@@ -1315,3 +1315,81 @@ queryable end-to-end (`agent_definitions` → `agent_versions` →
 `committee_sessions` → `agent_runs` → `agent_opinions`, with real seeded
 example data), not by a live orchestration loop calling Anthropic in this
 pass — consistent with "do not integrate external providers yet."
+
+---
+
+## ADR-045: The v2 Decision and Execution Amendment is adopted as binding policy, implemented as a standalone tested policy module
+
+**Context.** Revision Prompt R0 asked for a large, permanent policy
+amendment to PROJECT_INSTRUCTIONS.md — product modes (investment vs.
+tactical), a morning-decision-plan publishing standard, a hybrid earnings
+strategy, a four-tier order-authority taxonomy, decision-quality display
+rules, and security/safety controls (kill switch, credential handling,
+Cowork's read-only role) — while explicitly forbidding implementation of
+"future provider, scoring, dashboard, or broker features in this
+revision" and requiring "tests or policy checks proving the four
+operating modes and the separation of investment versus tactical
+recommendations."
+
+**Decision.** Append the full amendment to `PROJECT_INSTRUCTIONS.md`
+(new "TradingOS v2 Decision and Execution Amendment" section, IDs
+`PM-*`/`MDS-*`/`HES-*`/`OA-*`/`DQ-*`/`SS-*`) as binding policy for every
+future phase, effective immediately. To satisfy the test/policy-check
+requirement without crossing into forbidden feature work, add a new,
+self-contained `apps/api/src/tradingos_api/policy/` package with **no**
+SQLAlchemy model, no migration, no router, and no provider call:
+- `order_authority.py` — `OrderAuthorityMode` (exactly `RESEARCH_ONLY`,
+  `PAPER_MANUAL_APPROVAL`, `PAPER_AUTO_POLICY`, `LIVE_CONFIRM_EACH_ORDER`)
+  and `assert_order_authorized()`, a pure function every future order-
+  submission code path must call before reaching a broker boundary.
+- `recommendation_modes.py` — `RecommendationMode` (`INVESTMENT`/
+  `TACTICAL`), the two mode-exclusive action vocabularies from PM-1, and
+  `assert_distinct_mode_attributes()`/`assert_no_silent_mode_conversion()`
+  encoding PM-2/PM-3.
+
+45 new unit tests (`tests/test_policy_order_authority.py`,
+`tests/test_policy_recommendation_modes.py`) prove: the mode taxonomy has
+exactly the required members (no fifth or autonomous-live mode can be
+added silently); each mode's authorization rule (deny-always,
+confirmation-required, versioned-grant-required, fresh-confirmation-
+required); fail-closed behavior on ambiguous live-order identity; the
+bracket-leg no-second-confirmation carve-out; that the two recommendation-
+mode action vocabularies are mutually exclusive except for the shared
+`NO_ACTION`; that sharing a `recommendation_id` across an investment/
+tactical pair is rejected; and that a mode change without an explicit
+user action is rejected. A structural guard test
+(`TestBrokerBoundaryIsSingleEntryPoint`) also asserts, against the real
+`src/` tree, that `_apply_fill()` and the order-mutating router functions
+exist only in `routers/orders.py` today — proving OA-7's "only the
+deterministic order service can submit/replace/cancel an order" already
+holds for the current codebase, not merely documented as an aspiration.
+
+**Alternatives considered.** Adding a real `mode` column to
+`recommendations`/`recommendation_versions` and a real `OperatingMode`
+setting wired into `routers/orders.py` in this same pass (rejected: the
+prompt explicitly forbids implementing broker/scoring/dashboard features
+in this revision, and a schema change here would need its own migration,
+seed-data update, and API contract change — real feature work requiring
+its own scoped, approved phase, not something to fold into a policy-
+adoption pass). Writing the amendment as pure prose with no executable
+check at all (rejected: the prompt explicitly asks for "tests or policy
+checks proving" the two structural rules — prose alone wouldn't catch a
+future PR silently adding a fifth order-authority mode or letting an
+investment and tactical recommendation share an id). Modifying
+`models/enums.py::RecommendationAction` in place to the new nine/seven-
+value vocabularies (rejected: that enum is the live, migrated
+`recommendation_action` Postgres type from Phase 8; changing its values
+without a migration would break the running schema, and the instructions
+for this revision explicitly say not to touch what Prompt 0–3 already
+shipped).
+
+**Consequences.** The amendment is binding from this commit forward, but
+nothing in the live API, schema, or scheduler enforces it yet — every
+`OA-*`/`PM-*`/`MDS-*`/`HES-*`/`DQ-*` item note explicitly says so where
+relevant, so a future reader cannot mistake "policy adopted" for "feature
+shipped." The next phase that touches order submission, recommendation
+generation, or the morning plan must read this ADR and
+PROJECT_INSTRUCTIONS.md's new section first and reconcile its design
+against every applicable rule before writing code (the same
+architecture-approval-gate working-method rule that already governs
+vendor/security-boundary changes).

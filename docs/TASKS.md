@@ -242,13 +242,43 @@ the refinement above. Full detail in docs/STATUS.md.
       all 12 areas
 - [x] Phase 8 checkpoint commit
 
+## Revision Prompt R0 (2026-08-05) — v2 Decision and Execution Amendment
+
+Not a numbered implementation phase — a permanent-instructions amendment
+plus proof-of-concept policy checks, explicitly scoped to exclude
+"future provider, scoring, dashboard, or broker features." See
+docs/STATUS.md for the full summary.
+
+- [x] PROJECT_INSTRUCTIONS.md — new binding "TradingOS v2 Decision and
+      Execution Amendment" section (PRODUCT MODES, MORNING DECISION
+      STANDARD, HYBRID EARNINGS STRATEGY, ORDER AUTHORITY, DECISION
+      QUALITY, SECURITY AND SAFETY)
+- [x] `apps/api/src/tradingos_api/policy/order_authority.py` (new) —
+      `OrderAuthorityMode` (4 modes exactly) + `assert_order_authorized()`
+- [x] `apps/api/src/tradingos_api/policy/recommendation_modes.py` (new) —
+      `RecommendationMode`, the two mode-exclusive action vocabularies,
+      identity-separation and no-silent-conversion checks
+- [x] `tests/test_policy_order_authority.py` (new, 27 tests) + a
+      structural guard proving today's order-mutation code lives only in
+      `routers/orders.py`
+- [x] `tests/test_policy_recommendation_modes.py` (new, 18 tests)
+- [x] docs/DECISIONS.md — ADR-045
+- [x] docs/STATUS.md, docs/SECURITY.md, docs/MODEL_GOVERNANCE.md,
+      docs/OPERATIONS.md — each cross-references the amendment
+- [x] `ruff check`/`ruff format --check`/`mypy .` clean; full suite (96
+      tests) passing
+- [x] R0 checkpoint commit
+
 ## Phase 9+ — not yet planned
 
-Not yet done, explicitly out of Phase 8's scope: re-implementing scoring/
-backtest-execution/LLM tool-use orchestration against the new schema;
-wiring up real Anthropic/Alpaca calls ("do not integrate external
-providers yet" — Phase 8 only); rebuilding `apps/web` against the new API
-(the existing frontend still targets the retired Phase 1-7 contracts and
-will not build against the current backend). No phase number is assigned
-to this work yet — it would be proposed and confirmed before starting,
-following the same pattern as every prior phase.
+Not yet done, explicitly out of scope for Phase 8 and R0 alike:
+re-implementing scoring/backtest-execution/LLM tool-use orchestration
+against the new schema; wiring up real Anthropic/Alpaca calls ("do not
+integrate external providers yet"); rebuilding `apps/web` against the new
+API (the existing frontend still targets the retired Phase 1-7 contracts
+and will not build against the current backend); wiring
+`assert_order_authorized()` into `routers/orders.py`; a real `mode`
+column on `recommendations`; the morning-plan generator; the earnings-
+strategy engine; the kill switch's actual control surface. No phase
+number is assigned to this work yet — it would be proposed and confirmed
+before starting, following the same pattern as every prior phase.

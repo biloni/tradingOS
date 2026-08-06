@@ -79,6 +79,58 @@ Reviewed `apps/web` end-to-end before the Phase 7 checkpoint:
 still a single-user local tool, no auth, no new secret ever touches the
 browser.
 
+## v2 Decision and Execution Amendment (2026-08-05) — order authority and Cowork boundary
+
+PROJECT_INSTRUCTIONS.md's new "TradingOS v2 Decision and Execution
+Amendment" section (`OA-*`/`SS-*`) adds security-relevant policy on top
+of everything above:
+
+- **Cowork is explicitly named as a non-exempt channel (SS-1/SS-5).**
+  Broker credentials may never be sent to a Claude Cowork prompt, and a
+  Cowork scheduled task is a **read-only** consumer of the morning
+  decision plan — it cannot be an order-execution channel under any
+  configuration. No Cowork integration exists in this codebase yet; this
+  is a forward-looking constraint recorded before one is ever built, not
+  a retrofit.
+- **No text channel may reach the broker boundary (OA-7).** No LLM,
+  scheduled job, news article, email, or notification may directly
+  invoke order submission/replacement/cancellation — only the
+  deterministic order service may. `tests/test_policy_order_authority.py::TestBrokerBoundaryIsSingleEntryPoint`
+  proves this already holds structurally for the current codebase: the
+  order-fill function (`_apply_fill`) and every order-mutating endpoint
+  (`propose_order`/`confirm_order`/`cancel_order`/`import_fills`) are
+  defined only in `routers/orders.py`, nowhere else under `src/`. This is
+  a real, checked invariant today, not just a stated goal — Phase 8
+  already retired the one component (`services/ask.py`'s LLM tool-use
+  loop) that could have been a text-to-action risk.
+- **Four-tier order authority (OA-1..OA-6).** `RESEARCH_ONLY`,
+  `PAPER_MANUAL_APPROVAL`, `PAPER_AUTO_POLICY`, `LIVE_CONFIRM_EACH_ORDER`
+  — implemented as a standalone, tested policy module
+  (`apps/api/src/tradingos_api/policy/order_authority.py`,
+  `assert_order_authorized()`), fail-closed on any ambiguous live-order
+  identity. **Not yet wired into `routers/orders.py`** — today's API has
+  no operating-mode concept at all; every existing order endpoint behaves
+  like an ungated `PAPER_MANUAL_APPROVAL` (propose creates a `DRAFT`,
+  confirm requires an explicit `POST .../confirm` call — a de facto
+  confirmation step — but there is no `OrderAuthorityMode` value stored
+  or checked anywhere). Wiring the real gate in is future work, tracked
+  in docs/TASKS.md's "Phase 9+" section, not silently assumed to already
+  be enforced.
+- **Kill switch and cancel-all (OA-9/SS-4).** Required by the amendment;
+  **not implemented**. No live broker integration exists in this
+  codebase (principle 10, unchanged), so there is nothing to kill yet —
+  but the control (and its own audit trail) must exist before any live
+  or auto-policy order path is ever built, not added after the fact.
+- **Approval binds the exact order (OA-8/SS-2/SS-3).** Required by the
+  amendment for any future confirmation UI/API: account, symbol, side,
+  quantity, order type, limit/stop prices, time in force, outside-hours
+  flag, attached legs, maximum notional, recommendation version, and
+  approval expiration, with any material change invalidating the
+  approval. Not yet implemented — today's `POST /api/v1/orders/{id}/confirm`
+  re-executes against the order row as currently stored, with no
+  captured "this is what was approved" snapshot distinct from the order
+  itself.
+
 ## Local dev environment note
 
 Postgres auth on this dev machine uses `scram-sha-256` (encrypted password
