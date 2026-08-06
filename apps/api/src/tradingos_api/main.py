@@ -16,6 +16,7 @@ from tradingos_api.routers import (
     performance,
     plans,
     portfolio,
+    provider_diagnostics,
     recommendations,
     settings,
     tactical,
@@ -50,3 +51,4 @@ app.include_router(tactical.router)
 app.include_router(earnings.router)
 app.include_router(order_authority.proposals_router)
 app.include_router(order_authority.approvals_router)
+app.include_router(provider_diagnostics.router)

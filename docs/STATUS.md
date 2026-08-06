@@ -5,12 +5,83 @@ amendment, shipped), Revision Prompt R1 (product/architecture delta
 review, approved by proceeding to R2), Revision Prompt R2 (scaffold/
 navigation compatibility patch, shipped — `apps/web` route/nav/UI-
 primitive scaffolding only, no provider calls, strategy calculations,
-recommendations, scheduling, or broker submission), and Revision Prompt
-R3 (backward-compatible schema and API migration, shipped — additive
+recommendations, scheduling, or broker submission), Revision Prompt R3
+(backward-compatible schema and API migration, shipped — additive
 migration + 19 new endpoints across 7 new bounded contexts, no provider
 integration, no trading/scoring logic, no live broker submission
-endpoint).
+endpoint), and Revision Prompt 4 (point-in-time evidence layer, shipped
+— 15 provider interfaces, ingestion services, 9 data-quality gates, and
+a provider-diagnostics API; one real vendor (Alpaca) plus synthetic
+fixtures, no paid vendor contracted, no recommendation/scoring/order
+logic).
 **Last updated:** 2026-08-06
+
+## Revision Prompt 4 (2026-08-06) — point-in-time market/earnings/guidance/news/broker-capability ingestion
+
+**No prior implementation existed to inspect** — same documented gap as
+R2/R3 — this prompt's own scope (provider abstractions, ingestion, data
+quality, provider diagnostics; explicitly not recommendations or orders)
+didn't depend on one.
+
+- **Schema (additive):** `EarningsTimingCategory` gains `TIME_NOT_SUPPLIED`/
+  `DATE_UNCONFIRMED` (kept alongside R3's `UNKNOWN`, never removed); a
+  nullable `usable_at` point-in-time cutoff column on `news_items`,
+  `earnings_guidance_items`, `earnings_consensus_snapshots`,
+  `earnings_revisions`, `fundamentals_snapshots`; `eps_dispersion` on
+  consensus snapshots; `guidance_midpoint`/`units` on guidance items;
+  `invalidates_earnings_interpretation`/`note` on corporate actions
+  (backfilled `false`); two new generic-ledger tables
+  (`earnings_event_corrections`, `provider_ingestion_records`). Migration
+  hand-verified upgrade → downgrade → upgrade against the real seeded
+  dev database — `ALTER TYPE ... ADD VALUE IF NOT EXISTS` handles the
+  two new enum values (Postgres has no `DROP VALUE`, documented as a
+  downgrade no-op). Full detail: docs/DATA_DICTIONARY.md §10,
+  docs/ER_DIAGRAM.md §14.
+- **15 provider interfaces** (`providers/*.py`, ~11 files): `InstrumentReferenceProvider`,
+  `MarketQuoteProvider`, `HistoricalBarsProvider`, `CorporateActionsProvider`,
+  `FundamentalsProvider`, `EarningsCalendarProvider`, `EarningsConsensusProvider`,
+  `AnalystRevisionProvider`, `CompanyGuidanceProvider`, `NewsProvider`,
+  `OfficialFilingProvider`, `MacroProvider`, `VolatilityIndexProvider`,
+  `OptionsExpectedMoveProvider`, `BrokerCapabilityProvider` — each with
+  its own capability-metadata model and its own `NotConfigured`/
+  `Unavailable` exceptions, kept interface-specific even where one
+  vendor implements several. 7 backed for real by Alpaca
+  (`providers/alpaca_evidence.py`, verified against the live API — see
+  Test Evidence); 8 synthetic/fixture-backed
+  (`providers/synthetic_evidence.py`, honestly `is_live_data: false`) —
+  no paid vendor, per this prompt's own explicit instruction;
+  docs/BLOCKING_DECISIONS.md #1/#2 remain open, unresolved by this pass.
+- **Point-in-time policy** (`policy/point_in_time.py`, new): general
+  `assert_evidence_usable_by_cutoff()`/`assert_snapshot_evidence_usable_by_cutoff()`
+  — a feature snapshot may use only evidence with `usable_at <=` its
+  cutoff, generalized beyond R3's earnings-actual-specific guard.
+- **9 data-quality gates** (`services/data_quality.py`): conflicting
+  dates/timing, too few analysts, stale quote/bars, missing split
+  adjustment, duplicate news, symbol mapping conflicts, guidance unit/
+  fiscal-period mismatch, implied-move timestamp inconsistency, market-
+  calendar/early-close mismatch — each a pure function returning a
+  `DataQualityFinding | None`, written into the existing
+  `DataQualityEvent` table (Phase 8) via `record_finding()`.
+- **Ingestion services** (`services/ingest_evidence.py`): one function
+  per evidence type, each idempotent (safe replay), each recording a
+  `ProviderIngestionRecord`. Earnings-calendar corrections write a new
+  `EarningsEventCorrection` + linked `Alert` rather than a silent
+  overwrite (live-verified — see Test Evidence).
+- **Provider diagnostics API** (`routers/provider_diagnostics.py`, API
+  area 20): status, last-sync, freshness, earnings-calendar verification
+  queue, symbol quarantine, conflicting-source review, raw-to-normalized
+  lineage — all read-only, no endpoint triggers ingestion.
+- **Tests:** 166 backend tests (up from 126), all 9 explicitly required
+  P4 tests present and passing (point-in-time cutoff/future-data
+  rejection, date/time corrections, BEFORE_OPEN/AFTER_CLOSE session
+  mapping, analyst revision history across 7/30/90-day windows,
+  synthetic-official-release guidance parsing, split-adjusted historical
+  gaps, provider outage/partial data, idempotent replay, prompt-
+  injection-in-news treated as untrusted data). `ruff`/`mypy --strict`
+  clean across all 137 `src/`+`tests/` files. Frontend untouched.
+- **Docs:** docs/PROVIDER_MATRIX.md, docs/DATA_DICTIONARY.md §10,
+  docs/ER_DIAGRAM.md §14, docs/API_CONTRACTS.md area 20, this entry,
+  docs/TEST_EVIDENCE.md.
 
 ## Revision Prompt R3 (2026-08-06) — backward-compatible schema and API migration
 

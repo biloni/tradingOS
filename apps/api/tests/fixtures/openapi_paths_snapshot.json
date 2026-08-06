@@ -277,6 +277,48 @@
     ]
   ],
   [
+    "/api/v1/provider-diagnostics/conflicting-sources",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/provider-diagnostics/earnings-calendar-verification-queue",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/provider-diagnostics/freshness",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/provider-diagnostics/last-sync",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/provider-diagnostics/lineage/{subject_type}/{subject_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/provider-diagnostics/status",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/provider-diagnostics/symbol-quarantine",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/recommendations",
     [
       "get"

@@ -12,7 +12,13 @@ additively extends this with ~35 more tables (decision taxonomy,
 investment thesis, earnings evidence, morning plan, order authority,
 strategy governance, ADR-050) plus two backward-compatible column adds
 on existing tables — no table is dropped, renamed, or has a column
-removed.
+removed. **Revision Prompt 4** (section 10 below) additively extends the
+market-evidence tables with `usable_at` point-in-time cutoff columns, two
+new columns each on `earnings_consensus_snapshots`/`earnings_guidance_items`,
+two new columns on `corporate_actions`, two new enum values on
+`earnings_timing_category`, and two new generic-ledger tables
+(`earnings_event_corrections`, `provider_ingestion_records`) — the same
+additive discipline, no table dropped or column removed.
 
 ## Shared column mixins (`db/mixins.py`)
 
@@ -247,6 +253,42 @@ backfill default for pre-existing rows (`recommendations.mode` ->
 | `strategy_eligibility_snapshots` | `strategy_version_id` FK, `instrument_id` FK, `as_of`, `eligible`, `reason` | |
 | `decision_policy_versions` | `owner_user_id`, `version_label`, `config` (JSON), `status` (reuses `StrategyVersionStatus`), `decided_at`, `decision_comment` | |
 | `risk_policy_versions` | `risk_policy_id` FK, the same five numeric fields as `risk_policy`, `changed_at` | Append-only snapshot history paralleling the singleton, mutable-in-place `risk_policy` row — `risk_policy` itself stays unversioned by design. |
+
+## 10. Revision Prompt 4 — point-in-time evidence layer
+
+Purely additive. Every column below is nullable (or, for the one
+NOT-NULL boolean, backfilled with a `server_default`) so no pre-existing
+row is invalidated.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `earnings_timing_category` (enum, new values) | `TIME_NOT_SUPPLIED`, `DATE_UNCONFIRMED` added alongside the existing `BEFORE_OPEN`/`AFTER_CLOSE`/`DURING_MARKET`/`UNKNOWN` | Two more precise "we don't know" states than the original catch-all `UNKNOWN`, which is kept, unremoved, for backward compatibility. Postgres has no `ALTER TYPE ... DROP VALUE`, so a downgrade leaves the two new values in the type (harmless — nothing references them once the migration's own columns are dropped). |
+| `news_items.usable_at` (new column, nullable) | point-in-time cutoff field | |
+| `earnings_guidance_items.usable_at`/`.guidance_midpoint`/`.units` (new columns, nullable) | cutoff field + the two remaining required guidance fields ("metric, period, low/high/midpoint, units, and source") | |
+| `earnings_consensus_snapshots.usable_at`/`.eps_dispersion` (new columns, nullable) | cutoff field + analyst estimate dispersion, when the provider supplies it | |
+| `earnings_revisions.usable_at` (new column, nullable) | cutoff field | |
+| `fundamentals_snapshots.usable_at` (new column, nullable) | cutoff field | |
+| `corporate_actions.invalidates_earnings_interpretation`/`.note` (new columns) | `invalidates_earnings_interpretation` boolean, backfilled `false`; `.note` nullable text | A corporate event (merger, large special dividend) that makes an "ordinary" earnings beat/miss interpretation meaningless for that print — a flag the earnings data-quality gates read, set explicitly by a human or a future rule, never inferred automatically. |
+| `earnings_event_corrections` (new table) | `earnings_event_id` FK, `version_number`, `corrected_field`, `previous_value`, `new_value`, `corrected_at`, `source`, `alert_id` FK (nullable, to `alerts`) | Append-only. A calendar-data provider revising an already-ingested event's date/timing writes a new row here (never a silent overwrite) plus a linked `Alert`. |
+| `provider_ingestion_records` (new table) | `subject_type`, `subject_id` (generic, not a FK — same shape as `audit_events`/`data_quality_events`), `source`, `provider_record_id`, `revision_id`, `raw_payload_hash`, `ingested_at` | The generic "raw provider payload" ledger — one table spans every evidence type rather than adding a hash/record-id/revision-id column to each one individually (ADR-015's reasoning applied again). `raw_payload_hash` is retained only where the provider's terms permit; `NULL` otherwise, never a fabricated placeholder. |
+
+**Provider interfaces** (`providers/*.py`, not a schema change but
+documented here since they're this revision's other half): 15 Protocol
+interfaces — `InstrumentReferenceProvider`, `MarketQuoteProvider`,
+`HistoricalBarsProvider`, `CorporateActionsProvider`, `NewsProvider`,
+`VolatilityIndexProvider`, `BrokerCapabilityProvider` (all backed for
+real by Alpaca, `providers/alpaca_evidence.py`), and
+`FundamentalsProvider`, `EarningsCalendarProvider`,
+`EarningsConsensusProvider`, `AnalystRevisionProvider`,
+`CompanyGuidanceProvider`, `OfficialFilingProvider`, `MacroProvider`,
+`OptionsExpectedMoveProvider` (all synthetic/fixture-backed,
+`providers/synthetic_evidence.py` — no vendor contracted,
+docs/BLOCKING_DECISIONS.md #1/#2 remain open; "do not purchase a paid
+service" is this revision's own explicit instruction). Every interface
+defines its own capability-metadata model and its own
+`NotConfigured`/`Unavailable` exception classes — capability and failure
+state are never shared across interfaces even where one vendor
+(Alpaca) implements several of them in the same class.
 
 ## Current-state derivation
 

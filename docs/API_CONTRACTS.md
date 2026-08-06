@@ -5,7 +5,8 @@ versioned, 12-area REST API against the new domain model (ADR-043/044).
 **Revision Prompt R3** additively extends this to 19 areas (13-19 below) —
 decision taxonomy, investment thesis, earnings evidence, morning plan,
 and order authority — with no removal or reshaping of any of the
-original 12 (verified by `tests/test_r3_backward_compatibility.py`). The
+original 12 (verified by `tests/test_r3_backward_compatibility.py`).
+**Revision Prompt 4** adds area 20 — provider diagnostics. The
 Phase 1-7 contracts (`/api/v1/symbols`, `/api/v1/paper-orders`,
 `/api/v1/ask`, `/api/v1/backtests` (old shape), `/api/v1/strategy-versions`
 (old shape)) are **retired** — their routers/schemas/services were deleted,
@@ -342,6 +343,35 @@ endpoint yet").
   recent `ExecutionKillSwitchEvent`; `is_active` iff it has no
   `deactivated_at` yet. No event row at all means the switch has never
   been activated (`is_active: false`).
+
+## 20. Provider diagnostics (`routers/provider_diagnostics.py`) — **added Revision Prompt 4**
+
+Read-only throughout — no endpoint here triggers ingestion (that is a
+scheduled-job concern, not a diagnostics-dashboard concern).
+
+- `GET /api/v1/provider-diagnostics/status` — all 15 provider interfaces'
+  capability metadata (`is_live_data`, `is_configured`, plus each
+  interface's own capability fields) — a missing credential or a
+  transient connection error surfaces as `is_configured: false` with an
+  `error` message, never an unhandled `500`.
+- `GET /api/v1/provider-diagnostics/last-sync` — per (subject type,
+  source), the most recent `ProviderIngestionRecord.ingested_at` and a
+  running count.
+- `GET /api/v1/provider-diagnostics/freshness` — most-recent-observation
+  age per evidence category, with a `2`-day staleness default.
+- `GET /api/v1/provider-diagnostics/earnings-calendar-verification-queue`
+  — every `EarningsEvent` whose timing isn't fully confirmed
+  (`UNKNOWN`/`TIME_NOT_SUPPLIED`/`DATE_UNCONFIRMED`) or that has a
+  recorded `EarningsEventCorrection`.
+- `GET /api/v1/provider-diagnostics/symbol-quarantine` — every
+  `QUARANTINED` `InstrumentValidationEvent` across all raw inputs (the
+  existing `GET /api/v1/instruments/{id}/validation-events`, area 1, is
+  scoped to one already-resolved instrument instead).
+- `GET /api/v1/provider-diagnostics/conflicting-sources` — every
+  `CONFLICTING`-status `DataQualityEvent`.
+- `GET /api/v1/provider-diagnostics/lineage/{subject_type}/{subject_id}`
+  — the full `ProviderIngestionRecord` history for one evidence row —
+  the raw-to-normalized lineage view.
 
 ## Authorization assumptions
 

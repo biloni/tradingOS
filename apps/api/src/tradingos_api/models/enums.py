@@ -469,12 +469,21 @@ class ThesisStatus(StrEnum):
 
 class EarningsTimingCategory(StrEnum):
     """docs/HYBRID_EARNINGS_STRATEGY.md HES-2 condition 1 (verified event
-    time) needs a closed vocabulary for "when," not a free-text guess."""
+    time) needs a closed vocabulary for "when," not a free-text guess.
+
+    Revision Prompt 4 adds `TIME_NOT_SUPPLIED` (the date is confirmed but
+    no session-timing was given by any source) and `DATE_UNCONFIRMED`
+    (not even the date itself is verified yet) — two more precise states
+    than the original `UNKNOWN`, which is kept, unremoved, for backward
+    compatibility with existing rows; new ingestion code should prefer
+    one of the two new values over `UNKNOWN` going forward."""
 
     BEFORE_OPEN = "BEFORE_OPEN"
     AFTER_CLOSE = "AFTER_CLOSE"
     DURING_MARKET = "DURING_MARKET"
     UNKNOWN = "UNKNOWN"
+    TIME_NOT_SUPPLIED = "TIME_NOT_SUPPLIED"
+    DATE_UNCONFIRMED = "DATE_UNCONFIRMED"
 
 
 class MorningPlanVersionLabel(StrEnum):

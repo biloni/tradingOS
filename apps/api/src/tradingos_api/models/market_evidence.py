@@ -60,6 +60,13 @@ class MarketBar(UUIDPkMixin, CreatedAtMixin, Base):
 
 
 class CorporateAction(UUIDPkMixin, CreatedAtMixin, Base):
+    """Revision Prompt 4 adds `invalidates_earnings_interpretation`/`note`
+    — a corporate event (e.g. a merger, a large special dividend) can
+    make an "ordinary" earnings beat/miss interpretation meaningless for
+    that print; this is a flag the earnings data-quality gates read, not
+    a judgment this table makes on its own (it defaults `False`/unset —
+    a human or a future rule sets it explicitly)."""
+
     __tablename__ = "corporate_actions"
 
     instrument_id: Mapped[uuid.UUID] = mapped_column(
@@ -75,6 +82,8 @@ class CorporateAction(UUIDPkMixin, CreatedAtMixin, Base):
     ingested_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )
+    invalidates_earnings_interpretation: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    note: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
 
 class TechnicalIndicatorSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
@@ -114,6 +123,7 @@ class FundamentalsSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
     quality_status: Mapped[DataQualityStatus] = mapped_column(
         sa.Enum(DataQualityStatus, name="data_quality_status"), default=DataQualityStatus.OK
     )
+    usable_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
 class EarningsEvent(UUIDPkMixin, CreatedAtMixin, Base):
@@ -177,9 +187,16 @@ class EarningsRevision(UUIDPkMixin, CreatedAtMixin, Base):
     ingested_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )
+    usable_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
 class EarningsConsensusSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
+    """Revision Prompt 4 adds `eps_dispersion` (the analyst estimate
+    spread, when the provider supplies it — nullable, "available" is
+    explicitly not guaranteed) and `usable_at` (the point-in-time cutoff
+    field a pre-event snapshot's evidence_cutoff must respect, same
+    discipline as `EarningsActual.usable_at`, R3)."""
+
     __tablename__ = "earnings_consensus_snapshots"
     __table_args__ = (
         sa.Index("ix_earnings_consensus_snapshots_lookup", "earnings_event_id", "as_of"),
@@ -192,14 +209,24 @@ class EarningsConsensusSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
     consensus_eps: Mapped[Decimal | None] = mapped_column(sa.Numeric(12, 4), nullable=True)
     consensus_revenue: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 2), nullable=True)
     num_analysts: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    eps_dispersion: Mapped[Decimal | None] = mapped_column(sa.Numeric(12, 4), nullable=True)
     source: Mapped[str] = mapped_column(sa.String(40))
     observed_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     ingested_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )
+    usable_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
 class EarningsGuidanceItem(UUIDPkMixin, CreatedAtMixin, Base):
+    """Revision Prompt 4 adds `guidance_midpoint` and `units` (the
+    required company-guidance fields "metric, period, low/high/midpoint,
+    units, and source") plus `usable_at`. Only a `CompanyGuidanceProvider`
+    sourced from an official investor-relations release or regulatory
+    filing may write this table (never a journalist's or analyst's
+    interpretation of guidance — those are `NewsItem`/`AnalystRevision`
+    evidence instead, a different evidence type entirely)."""
+
     __tablename__ = "earnings_guidance_items"
 
     earnings_event_id: Mapped[uuid.UUID] = mapped_column(
@@ -208,12 +235,15 @@ class EarningsGuidanceItem(UUIDPkMixin, CreatedAtMixin, Base):
     metric: Mapped[str] = mapped_column(sa.String(30))
     guidance_low: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 4), nullable=True)
     guidance_high: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 4), nullable=True)
+    guidance_midpoint: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 4), nullable=True)
+    units: Mapped[str | None] = mapped_column(sa.String(20), nullable=True)
     period: Mapped[str | None] = mapped_column(sa.String(20), nullable=True)
     issued_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     source: Mapped[str] = mapped_column(sa.String(40))
     ingested_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )
+    usable_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
 class EarningsActual(UUIDPkMixin, CreatedAtMixin, Base):
@@ -379,6 +409,7 @@ class NewsItem(UUIDPkMixin, CreatedAtMixin, Base):
     )
     dedup_hash: Mapped[str] = mapped_column(sa.String(64), unique=True, index=True)
     license_metadata: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON, default=dict)
+    usable_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
 
 
 class NewsItemInstrument(UUIDPkMixin, CreatedAtMixin, Base):
@@ -471,12 +502,66 @@ class DataQualityEvent(UUIDPkMixin, CreatedAtMixin, Base):
     detected_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
 
 
+class EarningsEventCorrection(UUIDPkMixin, CreatedAtMixin, Base):
+    """Revision Prompt 4 — append-only. A calendar-data provider revising
+    an already-ingested `EarningsEvent`'s date/timing/fiscal-period must
+    never silently overwrite the row in place; this table is the version
+    history of every such correction, and `services/ingest_evidence.py`
+    always pairs a new row here with a new `Alert` (linked via
+    `alert_id`) so a correction is never silent."""
+
+    __tablename__ = "earnings_event_corrections"
+    __table_args__ = (
+        sa.Index("ix_earnings_event_corrections_lookup", "earnings_event_id", "version_number"),
+    )
+
+    earnings_event_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id")
+    )
+    version_number: Mapped[int] = mapped_column(sa.Integer)
+    corrected_field: Mapped[str] = mapped_column(sa.String(40))
+    previous_value: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    new_value: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    corrected_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(sa.String(40))
+    alert_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("alerts.id"), nullable=True
+    )
+
+
+class ProviderIngestionRecord(UUIDPkMixin, CreatedAtMixin, Base):
+    """Revision Prompt 4 — the generic "raw provider payload" ledger
+    (same generic subject_type/subject_id shape as `AuditEvent`/
+    `DataQualityEvent`, ADR-015's reasoning applied again: one ledger
+    spans every evidence table rather than adding a hash/record-id/
+    revision-id column to each one individually). `raw_payload_hash` is
+    a SHA-256 of the exact bytes the provider returned, retained only
+    where the provider's terms permit (principle 12) — left `NULL`
+    otherwise, never a fabricated placeholder."""
+
+    __tablename__ = "provider_ingestion_records"
+    __table_args__ = (
+        sa.Index("ix_provider_ingestion_records_subject", "subject_type", "subject_id"),
+    )
+
+    subject_type: Mapped[str] = mapped_column(sa.String(50))
+    subject_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True), nullable=True)
+    source: Mapped[str] = mapped_column(sa.String(40))
+    provider_record_id: Mapped[str | None] = mapped_column(sa.String(200), nullable=True)
+    revision_id: Mapped[str | None] = mapped_column(sa.String(100), nullable=True)
+    raw_payload_hash: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    ingested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+
+
 __all__ = [
     "CorporateAction",
     "DataQualityEvent",
     "EarningsActual",
     "EarningsConsensusSnapshot",
     "EarningsEvent",
+    "EarningsEventCorrection",
     "EarningsFeatureSnapshot",
     "EarningsGuidanceItem",
     "EarningsHistoricalGap",
@@ -489,6 +574,7 @@ __all__ = [
     "NewsItem",
     "NewsItemInstrument",
     "PostEarningsConfirmationSnapshot",
+    "ProviderIngestionRecord",
     "SentimentSnapshot",
     "TechnicalIndicatorSnapshot",
 ]

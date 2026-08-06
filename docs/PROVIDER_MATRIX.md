@@ -31,6 +31,40 @@ call by `services/ask.py`'s orchestration loop.
 
 ---
 
+## Revision Prompt 4: point-in-time evidence provider interfaces
+
+15 provider Protocol interfaces now exist (`apps/api/src/tradingos_api/providers/*.py`)
+implementing the point-in-time evidence layer — **this pass does not
+resolve BLOCKING_DECISIONS.md #1 or #2**; no paid vendor was contracted
+("do not purchase a paid service" is this revision's own explicit
+instruction). 7 are backed for real by Alpaca (the only vendor this
+project has ever contracted, ADR-002); 8 are synthetic/fixture-backed,
+each honestly reporting `is_live_data: false` via its capability
+response so a diagnostics dashboard never confuses a fixture for a real
+feed.
+
+| Interface | Implementation | `is_live_data` |
+|---|---|---|
+| `InstrumentReferenceProvider` | Alpaca (`TradingClient.get_asset()`) | `true` |
+| `MarketQuoteProvider` / `HistoricalBarsProvider` | Alpaca (`StockHistoricalDataClient`) | `true` |
+| `CorporateActionsProvider` | Alpaca (`CorporateActionsClient`) | `true` |
+| `NewsProvider` | Alpaca (included news endpoint — this doc's existing MVP recommendation) | `true` |
+| `VolatilityIndexProvider` | Alpaca, VIXY bars (this doc's existing BLOCKING_DECISIONS.md #2 recommendation — an ETP proxy, `is_spot_index: false`, honestly reported) | `true` |
+| `BrokerCapabilityProvider` | Alpaca (`TradingClient.get_account()`) — diagnostics only, never submits an order | `true` |
+| `FundamentalsProvider` | Synthetic fixture (4 curated symbols) | `false` |
+| `EarningsCalendarProvider` | Synthetic fixture | `false` |
+| `EarningsConsensusProvider` | Synthetic fixture | `false` |
+| `AnalystRevisionProvider` | Synthetic fixture (7/30/90-day windowed history) | `false` |
+| `CompanyGuidanceProvider` | Synthetic — **parses** a synthetic official-release string (`providers/company_guidance_release_fixtures.py`), not a canned lookup | `false` |
+| `OfficialFilingProvider` | Synthetic fixture | `false` |
+| `MacroProvider` | Synthetic fixture (series beyond VIX) | `false` |
+| `OptionsExpectedMoveProvider` | Synthetic fixture (`is_available: true` on the fixture itself, honestly documenting that no real options-chain access exists) | `false` |
+
+Live status/capability for all 15 is queryable at
+`GET /api/v1/provider-diagnostics/status` (docs/API_CONTRACTS.md area 20).
+
+---
+
 ## Refinement: new evidence providers (candidates only — none selected)
 
 **No provider below has been chosen or contracted.** This section exists to

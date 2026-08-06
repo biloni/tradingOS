@@ -132,6 +132,15 @@ erDiagram
 
 ## 3. Market evidence
 
+Revision Prompt 4 adds a nullable `usable_at` point-in-time cutoff column
+to `news_items`, `earnings_guidance_items`, `earnings_consensus_snapshots`,
+`earnings_revisions`, and `fundamentals_snapshots` (not shown individually
+below to keep this diagram readable — see docs/DATA_DICTIONARY.md §10 for
+the full column list), plus `eps_dispersion`/`guidance_midpoint`/`units`
+on the consensus/guidance tables and `invalidates_earnings_interpretation`/
+`note` on `corporate_actions`. See §14 below for the two new P4 tables
+(`earnings_event_corrections`, `provider_ingestion_records`).
+
 ```mermaid
 erDiagram
     instruments ||--o{ market_bars : "priced by"
@@ -590,4 +599,42 @@ erDiagram
     operating_mode_history { uuid id PK, enum mode, string changed_by, datetime changed_at }
     execution_kill_switch_events { uuid id PK, string activated_by, datetime activated_at, datetime deactivated_at }
     broker_environment_attestations { uuid id PK, enum environment_label, uuid account_id FK, string broker_endpoint }
+```
+
+## 14. Revision Prompt 4 — calendar corrections & provider ingestion ledger
+
+`earnings_event_corrections` is append-only version history for an
+`EarningsEvent` row that already exists — the event's own identity never
+changes, only what a correction record says was different, each one
+paired with an `Alert` (never a silent overwrite). `provider_ingestion_records`
+is the generic raw-payload ledger every ingestion function
+(`services/ingest_evidence.py`) writes to, spanning every evidence table
+via `subject_type`/`subject_id` (the same non-FK generic-log shape
+`audit_events`/`data_quality_events` already established, ADR-015).
+
+```mermaid
+erDiagram
+    earnings_events ||--o{ earnings_event_corrections : "corrected_by"
+    alerts ||--o| earnings_event_corrections : "raises"
+
+    earnings_event_corrections {
+        uuid id PK
+        uuid earnings_event_id FK
+        int version_number
+        string corrected_field
+        text previous_value
+        text new_value
+        datetime corrected_at
+        uuid alert_id FK
+    }
+    provider_ingestion_records {
+        uuid id PK
+        string subject_type
+        uuid subject_id
+        string source
+        string provider_record_id
+        string revision_id
+        string raw_payload_hash
+        datetime ingested_at
+    }
 ```
