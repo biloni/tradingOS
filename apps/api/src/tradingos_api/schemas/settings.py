@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -63,3 +64,15 @@ class OperatingModeResponse(BaseModel):
     mode: str
     environment_label: str
     can_submit_orders: bool
+
+
+class KillSwitchStatusResponse(BaseModel):
+    """Revision Prompt R3, OA-9. Active iff the most recent
+    `ExecutionKillSwitchEvent` has no `deactivated_at` yet. No event
+    row at all means the kill switch has never been activated."""
+
+    is_active: bool
+    activated_by: str | None
+    activated_at: datetime | None
+    deactivated_at: datetime | None
+    reason: str | None

@@ -23,6 +23,8 @@ from tradingos_api.models.enums import (
     CorporateActionType,
     DataQualityStatus,
     EarningsRevisionDirection,
+    EarningsTimingCategory,
+    RecommendationConfidence,
     RegimeClassification,
     Timeframe,
 )
@@ -115,8 +117,19 @@ class FundamentalsSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
 
 
 class EarningsEvent(UUIDPkMixin, CreatedAtMixin, Base):
+    """Revision Prompt R3 adds `verified_date`/`exchange_local_date`/
+    `timing_category`/`verification_source`/`expected_report_period`/
+    `confidence` — all nullable, additive columns supporting
+    docs/HYBRID_EARNINGS_STRATEGY.md HES-2 condition 1 ("event time is
+    verified"). `report_date`/`report_time` (free text) are unchanged
+    for backward compatibility; `timing_category` is the closed-
+    vocabulary version new code should prefer."""
+
     __tablename__ = "earnings_events"
-    __table_args__ = (sa.Index("ix_earnings_events_lookup", "instrument_id", "report_date"),)
+    __table_args__ = (
+        sa.Index("ix_earnings_events_lookup", "instrument_id", "report_date"),
+        sa.Index("ix_earnings_events_report_date", "report_date"),
+    )
 
     instrument_id: Mapped[uuid.UUID] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("instruments.id")
@@ -130,9 +143,25 @@ class EarningsEvent(UUIDPkMixin, CreatedAtMixin, Base):
     ingested_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now()
     )
+    verified_date: Mapped[date | None] = mapped_column(sa.Date, nullable=True)
+    exchange_local_date: Mapped[date | None] = mapped_column(sa.Date, nullable=True)
+    timing_category: Mapped[EarningsTimingCategory] = mapped_column(
+        sa.Enum(EarningsTimingCategory, name="earnings_timing_category"),
+        default=EarningsTimingCategory.UNKNOWN,
+    )
+    verification_source: Mapped[str | None] = mapped_column(sa.String(40), nullable=True)
+    expected_report_period: Mapped[str | None] = mapped_column(sa.String(20), nullable=True)
+    confidence: Mapped[RecommendationConfidence | None] = mapped_column(
+        sa.Enum(RecommendationConfidence, name="recommendation_confidence"), nullable=True
+    )
 
 
 class EarningsRevision(UUIDPkMixin, CreatedAtMixin, Base):
+    """Fulfills Revision Prompt R3's "earnings_revision_snapshots" —
+    this existing Phase 8 table already has that shape (a timestamped
+    revision-in-time record); rather than create a duplicate table, R3
+    adds the one missing provenance field (`ingested_at`) additively."""
+
     __tablename__ = "earnings_revisions"
 
     earnings_event_id: Mapped[uuid.UUID] = mapped_column(
@@ -145,6 +174,190 @@ class EarningsRevision(UUIDPkMixin, CreatedAtMixin, Base):
         sa.Enum(EarningsRevisionDirection, name="earnings_revision_direction")
     )
     source: Mapped[str] = mapped_column(sa.String(40))
+    ingested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+
+
+class EarningsConsensusSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
+    __tablename__ = "earnings_consensus_snapshots"
+    __table_args__ = (
+        sa.Index("ix_earnings_consensus_snapshots_lookup", "earnings_event_id", "as_of"),
+    )
+
+    earnings_event_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id")
+    )
+    as_of: Mapped[date] = mapped_column(sa.Date)
+    consensus_eps: Mapped[Decimal | None] = mapped_column(sa.Numeric(12, 4), nullable=True)
+    consensus_revenue: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 2), nullable=True)
+    num_analysts: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    source: Mapped[str] = mapped_column(sa.String(40))
+    observed_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    ingested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+
+
+class EarningsGuidanceItem(UUIDPkMixin, CreatedAtMixin, Base):
+    __tablename__ = "earnings_guidance_items"
+
+    earnings_event_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id"), index=True
+    )
+    metric: Mapped[str] = mapped_column(sa.String(30))
+    guidance_low: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 4), nullable=True)
+    guidance_high: Mapped[Decimal | None] = mapped_column(sa.Numeric(20, 4), nullable=True)
+    period: Mapped[str | None] = mapped_column(sa.String(20), nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(sa.String(40))
+    ingested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+
+
+class EarningsActual(UUIDPkMixin, CreatedAtMixin, Base):
+    """The append-only, ground-truth record of a reported actual value.
+    `usable_at` (Revision Prompt R3) is the timestamp this value became
+    safely usable by any pre-event pipeline check — normally equal to
+    `reported_at`, but may trail it slightly to account for propagation
+    delay. `policy.earnings_evidence.assert_actual_not_leaked_into_pre_event_snapshot()`
+    is the enforcement point that reads this field against a pre-event
+    snapshot's `evidence_cutoff` (HES-7, no leakage from the future)."""
+
+    __tablename__ = "earnings_actuals"
+    __table_args__ = (sa.Index("ix_earnings_actuals_lookup", "earnings_event_id", "metric"),)
+
+    earnings_event_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id")
+    )
+    metric: Mapped[str] = mapped_column(sa.String(30))
+    actual_value: Mapped[Decimal] = mapped_column(sa.Numeric(20, 4))
+    reported_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    usable_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(sa.String(40))
+    ingested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+
+
+class EarningsHistoricalGap(UUIDPkMixin, CreatedAtMixin, Base):
+    """One historical post-earnings overnight/gap observation for an
+    instrument — the input docs/HYBRID_EARNINGS_STRATEGY.md HES-5's
+    gap-risk model draws its distribution from."""
+
+    __tablename__ = "earnings_historical_gaps"
+
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("instruments.id"), index=True
+    )
+    earnings_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id"), nullable=True
+    )
+    gap_pct: Mapped[Decimal] = mapped_column(sa.Numeric(10, 4))
+    session_date: Mapped[date] = mapped_column(sa.Date)
+    source: Mapped[str] = mapped_column(sa.String(40))
+
+
+class EventExpectedMoveSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
+    """A pre-event snapshot (Revision Prompt R3) — `evidence_cutoff` is
+    the explicit, recorded boundary this snapshot respects, the same
+    concept `earnings_feature_snapshots` uses, structurally distinct from
+    any post-event table (HES-7 no-leakage requirement, "pre-event and
+    post-event snapshots structurally distinguishable")."""
+
+    __tablename__ = "event_expected_move_snapshots"
+    __table_args__ = (
+        sa.Index("ix_event_expected_move_snapshots_lookup", "earnings_event_id", "as_of"),
+    )
+
+    earnings_event_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id")
+    )
+    as_of: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    evidence_cutoff: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    atr_based_move_pct: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 4), nullable=True)
+    historical_gap_move_pct: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(10, 4), nullable=True
+    )
+    option_implied_move_pct: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(10, 4), nullable=True
+    )
+    selected_expected_move_pct: Mapped[Decimal] = mapped_column(sa.Numeric(10, 4))
+    calculation_version: Mapped[str] = mapped_column(sa.String(20))
+
+
+class EarningsFeatureSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
+    """The pre-event, deterministic 8-factor earnings-direction score
+    (docs/HYBRID_EARNINGS_STRATEGY.md HES-1) — always `is_pre_event=True`
+    in this revision (no post-event equivalent writes this table; see
+    `PostEarningsConfirmationSnapshot` instead, a structurally separate
+    table, not a flag flip on this one). `linked_actual_id` is normally
+    NULL — a true pre-event snapshot has no reason to reference a
+    reported actual at all; the column exists specifically so
+    `policy.earnings_evidence` has something concrete to validate against
+    if it is ever set, catching a leakage bug rather than assuming one
+    can't happen."""
+
+    __tablename__ = "earnings_feature_snapshots"
+    __table_args__ = (
+        sa.Index("ix_earnings_feature_snapshots_lookup", "earnings_event_id", "as_of"),
+    )
+
+    earnings_event_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id")
+    )
+    as_of: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    evidence_cutoff: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    is_pre_event: Mapped[bool] = mapped_column(sa.Boolean, default=True)
+    component_price_trend: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+    component_analyst_revisions: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(6, 4), nullable=True
+    )
+    component_options_skew: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+    component_peer_reactions: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(6, 4), nullable=True
+    )
+    component_historical_drift: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(6, 4), nullable=True
+    )
+    component_guidance_momentum: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(6, 4), nullable=True
+    )
+    component_technical_setup: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(6, 4), nullable=True
+    )
+    component_sentiment: Mapped[Decimal | None] = mapped_column(sa.Numeric(6, 4), nullable=True)
+    total_score: Mapped[Decimal] = mapped_column(sa.Numeric(4, 2))
+    calculation_version: Mapped[str] = mapped_column(sa.String(20))
+    linked_actual_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_actuals.id"), nullable=True
+    )
+
+
+class PostEarningsConfirmationSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
+    """The post-event counterpart to `EarningsFeatureSnapshot` — a
+    structurally separate table (not the same table with a flag), per
+    docs/HYBRID_EARNINGS_STRATEGY.md HES-4's three independent gates
+    (reported results / forward guidance / market reaction), each
+    recorded individually so a partial pass is never conflated with a
+    full one."""
+
+    __tablename__ = "post_earnings_confirmation_snapshots"
+    __table_args__ = (
+        sa.Index("ix_post_earnings_confirmation_snapshots_lookup", "earnings_event_id", "as_of"),
+    )
+
+    earnings_event_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("earnings_events.id")
+    )
+    as_of: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    evidence_cutoff: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    results_gate_passed: Mapped[bool] = mapped_column(sa.Boolean)
+    guidance_gate_passed: Mapped[bool] = mapped_column(sa.Boolean)
+    market_reaction_gate_passed: Mapped[bool] = mapped_column(sa.Boolean)
+    all_gates_passed: Mapped[bool] = mapped_column(sa.Boolean)
+    notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
 
 class NewsItem(UUIDPkMixin, CreatedAtMixin, Base):
@@ -261,14 +474,21 @@ class DataQualityEvent(UUIDPkMixin, CreatedAtMixin, Base):
 __all__ = [
     "CorporateAction",
     "DataQualityEvent",
+    "EarningsActual",
+    "EarningsConsensusSnapshot",
     "EarningsEvent",
+    "EarningsFeatureSnapshot",
+    "EarningsGuidanceItem",
+    "EarningsHistoricalGap",
     "EarningsRevision",
+    "EventExpectedMoveSnapshot",
     "FundamentalsSnapshot",
     "MacroObservation",
     "MarketBar",
     "MarketRegimeSnapshot",
     "NewsItem",
     "NewsItemInstrument",
+    "PostEarningsConfirmationSnapshot",
     "SentimentSnapshot",
     "TechnicalIndicatorSnapshot",
 ]

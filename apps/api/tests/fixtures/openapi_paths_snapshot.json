@@ -1,40 +1,365 @@
 [
-  ["/api/v1/alerts", ["get"]],
-  ["/api/v1/alerts/{alert_id}", ["patch"]],
-  ["/api/v1/backtests", ["get"]],
-  ["/api/v1/backtests/{run_id}", ["get"]],
-  ["/api/v1/instruments", ["get"]],
-  ["/api/v1/instruments/validate", ["post"]],
-  ["/api/v1/instruments/{instrument_id}", ["get"]],
-  ["/api/v1/instruments/{instrument_id}/validation-events", ["get"]],
-  ["/api/v1/journal/trades", ["get"]],
-  ["/api/v1/journal/trades/{trade_id}", ["get"]],
-  ["/api/v1/journal/trades/{trade_id}/notes", ["post"]],
-  ["/api/v1/journal/trades/{trade_id}/reviews", ["post"]],
-  ["/api/v1/market/freshness", ["get"]],
-  ["/api/v1/market/instruments/{ticker}/bars", ["get"]],
-  ["/api/v1/market/instruments/{ticker}/indicators", ["get"]],
-  ["/api/v1/market/overview", ["get"]],
-  ["/api/v1/orders", ["get", "post"]],
-  ["/api/v1/orders/import", ["post"]],
-  ["/api/v1/orders/reconciliation/{account_id}", ["get"]],
-  ["/api/v1/orders/{order_id}", ["get"]],
-  ["/api/v1/orders/{order_id}/cancel", ["post"]],
-  ["/api/v1/orders/{order_id}/confirm", ["post"]],
-  ["/api/v1/performance/accounts/{account_id}", ["get"]],
-  ["/api/v1/performance/compare/{account_id}", ["get"]],
-  ["/api/v1/plans/daily", ["get"]],
-  ["/api/v1/portfolio/accounts", ["get"]],
-  ["/api/v1/portfolio/accounts/{account_id}", ["get"]],
-  ["/api/v1/recommendations", ["get"]],
-  ["/api/v1/recommendations/committee-sessions/{session_id}", ["get"]],
-  ["/api/v1/recommendations/{recommendation_id}", ["get"]],
-  ["/api/v1/settings/investment-profile", ["get"]],
-  ["/api/v1/settings/operating-mode", ["get"]],
-  ["/api/v1/settings/providers", ["get"]],
-  ["/api/v1/settings/risk-policy", ["get", "patch"]],
-  ["/api/v1/watchlists", ["get"]],
-  ["/api/v1/watchlists/items/{item_id}", ["patch"]],
-  ["/api/v1/watchlists/{watchlist_id}/items", ["get", "post"]],
-  ["/health", ["get"]]
+  [
+    "/api/v1/alerts",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/alerts/{alert_id}",
+    [
+      "patch"
+    ]
+  ],
+  [
+    "/api/v1/backtests",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/backtests/{run_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/earnings-events/calendar",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/earnings-events/{earnings_event_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/earnings-events/{earnings_event_id}/post-event-confirmation",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/instruments",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/instruments/validate",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/instruments/{instrument_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/instruments/{instrument_id}/validation-events",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/investment/recommendations",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/investment/recommendations/{recommendation_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/investment/theses/{thesis_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/journal/trades",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/journal/trades/{trade_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/journal/trades/{trade_id}/notes",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/journal/trades/{trade_id}/reviews",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/market/freshness",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/market/instruments/{ticker}/bars",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/market/instruments/{ticker}/indicators",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/market/overview",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/morning-plan/latest",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/morning-plan/rerun",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/morning-plan/versions",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/morning-plan/versions/{version_id}/quality-status",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/order-approvals",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/order-approvals/{approval_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/order-approvals/{approval_id}/approve",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/order-approvals/{approval_id}/expire",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/order-approvals/{approval_id}/invalidate",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/order-approvals/{approval_id}/reject",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/order-proposals",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/order-proposals/{proposal_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/order-proposals/{proposal_id}/policy-evaluation",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/orders",
+    [
+      "get",
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/orders/import",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/orders/reconciliation/{account_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/orders/{order_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/orders/{order_id}/cancel",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/orders/{order_id}/confirm",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/performance/accounts/{account_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/performance/compare/{account_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/plans/daily",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/portfolio/accounts",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/portfolio/accounts/{account_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/recommendations",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/recommendations/committee-sessions/{session_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/recommendations/{recommendation_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/settings/investment-profile",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/settings/kill-switch-status",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/settings/operating-mode",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/settings/providers",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/settings/risk-policy",
+    [
+      "get",
+      "patch"
+    ]
+  ],
+  [
+    "/api/v1/tactical/recommendations",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/tactical/recommendations/{recommendation_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/watchlists",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/watchlists/items/{item_id}",
+    [
+      "patch"
+    ]
+  ],
+  [
+    "/api/v1/watchlists/{watchlist_id}/items",
+    [
+      "get",
+      "post"
+    ]
+  ],
+  [
+    "/health",
+    [
+      "get"
+    ]
+  ]
 ]

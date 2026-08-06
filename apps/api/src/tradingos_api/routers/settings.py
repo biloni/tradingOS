@@ -13,9 +13,11 @@ from tradingos_api.core.dependencies import get_current_user_id
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import ProviderKind
 from tradingos_api.models.identity import InvestmentProfile, ProviderConfig, RiskPolicy
+from tradingos_api.models.order_authority import ExecutionKillSwitchEvent
 from tradingos_api.policy.order_authority import OrderAuthorityMode
 from tradingos_api.schemas.settings import (
     InvestmentProfileResponse,
+    KillSwitchStatusResponse,
     OperatingModeResponse,
     ProviderStatusResponse,
     RiskPolicyResponse,
@@ -51,6 +53,24 @@ def get_operating_mode() -> OperatingModeResponse:
         mode=mode.value,
         environment_label=_ENVIRONMENT_LABEL_BY_MODE[mode],
         can_submit_orders=mode is not OrderAuthorityMode.RESEARCH_ONLY,
+    )
+
+
+@router.get("/kill-switch-status", response_model=KillSwitchStatusResponse)
+def get_kill_switch_status(db: Session = Depends(get_db)) -> KillSwitchStatusResponse:
+    latest = db.scalar(
+        select(ExecutionKillSwitchEvent).order_by(ExecutionKillSwitchEvent.activated_at.desc())
+    )
+    if latest is None:
+        return KillSwitchStatusResponse(
+            is_active=False, activated_by=None, activated_at=None, deactivated_at=None, reason=None
+        )
+    return KillSwitchStatusResponse(
+        is_active=latest.deactivated_at is None,
+        activated_by=latest.activated_by,
+        activated_at=latest.activated_at,
+        deactivated_at=latest.deactivated_at,
+        reason=latest.reason,
     )
 
 

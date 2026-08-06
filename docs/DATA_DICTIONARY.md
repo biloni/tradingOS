@@ -7,7 +7,12 @@ existed before and exactly what was retired. Three table names survive the
 rewrite with reshaped columns (`recommendations`, `backtest_runs`,
 `audit_events`); everything else is new. Every table uses a UUID primary
 key (`sa.Uuid(as_uuid=True)`, `UUIDPkMixin`) and UTC timestamps
-(`sa.DateTime(timezone=True)`).
+(`sa.DateTime(timezone=True)`). **Revision Prompt R3** (section 9 below)
+additively extends this with ~35 more tables (decision taxonomy,
+investment thesis, earnings evidence, morning plan, order authority,
+strategy governance, ADR-050) plus two backward-compatible column adds
+on existing tables — no table is dropped, renamed, or has a column
+removed.
 
 ## Shared column mixins (`db/mixins.py`)
 
@@ -165,6 +170,83 @@ account are two rows of the same shape.
 | `prompt_versions` | `prompt_template_id` FK, `version_label`, `body`, `status` (enum) | Unique on `(prompt_template_id, version_label)`. |
 | `model_call_records` | `agent_run_id` FK (nullable, indexed), `prompt_version_label`, `model`, `input_tokens`/`output_tokens`, `cost_usd`, `latency_ms`, `stop_reason`, `response_excerpt` (≤500 chars) | Supersedes `LLMCallLog` — **deliberately narrower**: token/cost/latency metadata and a short truncated excerpt only, **no full request/response payload** ("no secrets or unnecessary private prompt content"). Evidence text is already durably stored at its source (`news_items`, etc.) and linked via `agent_evidence_links`, so it isn't duplicated here. |
 | `audit_events` | `record_type`, `ref_id` (generic, not a FK), `snapshot` (JSON), `created_at` | **Unchanged from the shipped MVP** — the one Phase 1-7 table kept as-is (ADR-043's single exception). |
+
+## 9. Revision Prompt R3 — decision taxonomy, investment thesis, earnings evidence, morning plan, order authority, strategy governance
+
+Purely additive (ADR-050): every table below is new, and the two
+existing-table changes are backward-compatible column adds with a
+backfill default for pre-existing rows (`recommendations.mode` ->
+`TACTICAL`, `strategy_definitions.family` -> `GENERIC`).
+
+**Decision taxonomy** (`models/recommendations.py`, `models/enums.py`)
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `recommendations.mode` (new column) | `RecommendationMode` enum (`INVESTMENT`\|`TACTICAL`) | ADR-046: a symbol may have both an Investment and a Tactical `Recommendation` row at once — always two separate rows, never one row with two lanes. |
+| `recommendation_versions.lane_action`/`horizon_days_min`/`horizon_days_max`/`review_date` (new columns) | `lane_action` is a plain `String(30)`, not a native enum | A single column can't cleanly type-check against "one of two enums (`InvestmentAction`/`TacticalAction`, `policy/recommendation_modes.py`) depending on another column's value" in Postgres without a trigger — validated at the API layer instead, the same trade-off this project already documents for mode-conditional vocabularies. |
+| `recommendation_invalidation_conditions` | `recommendation_version_id` FK, `condition_text` | One row per stated thesis-break/cancellation condition (DQ-1/DQ-2); append-only. |
+| `recommendation_attributions` | `recommendation_version_id` FK, `mode`, `position_lot_id` FK (nullable), `trade_id` FK (nullable) | Links a `PositionLot`/`Trade` back to the exact recommendation version (and lane) that produced it — the mechanism behind "how are investment and tactical positions attributed if they share one broker symbol." |
+
+**Investment thesis** (`models/investment_thesis.py`, new file)
+
+| Table | Key fields | Notes |
+|---|---|---|
+| `investment_theses` | `recommendation_id` FK (unique, 1:1), `instrument_id` FK, `status` (`ThesisStatus`) | One per Investment-lane `Recommendation` — stable identity, mirrors `Recommendation`/`RecommendationVersion`'s split. |
+| `investment_thesis_versions` | `investment_thesis_id` FK, `version_number` (unique together), `valuation_low`/`mid`/`high`, `thesis_text`, `horizon_days_min`/`max`, `review_date`, `generated_at` | Immutable once written. |
+| `valuation_snapshots` | `investment_thesis_id` FK, `as_of`, `method`, `fair_value_low`/`mid`/`high`, `source`, `observed_at`, `ingested_at` | Independently-timestamped valuation refresh, distinct from the thesis version's own stated range. |
+| `thesis_catalysts` / `thesis_risks` | `investment_thesis_version_id` FK, `catalyst_text`/`risk_text` | One row per catalyst/risk stated on a version. |
+| `thesis_review_events` | `investment_thesis_id` FK, `reviewed_at`, `outcome`, `notes` | A review can conclude "still intact" with no status change at all — distinct from `thesis_status_history`. |
+| `thesis_status_history` | `investment_thesis_id` FK, `from_status`/`to_status`, `reason`, `occurred_at` | Append-only, guarded by `THESIS_STATUS_TRANSITIONS`. |
+
+**Earnings evidence** (`models/market_evidence.py`, extended)
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `earnings_events` (new columns) | `verified_date`, `exchange_local_date`, `timing_category` (`EarningsTimingCategory`), `verification_source`, `expected_report_period`, `confidence` — all nullable | HES-2 condition 1: event time is verified, not guessed. |
+| `earnings_revisions.ingested_at` (new column) | server-default `now()` | The one missing provenance column on an already-right-shaped Phase 8 table — no redundant second table created. |
+| `earnings_consensus_snapshots` | `earnings_event_id` FK, `as_of`, `consensus_eps`/`revenue`, `num_analysts`, `source`, `observed_at`, `ingested_at` | |
+| `earnings_guidance_items` | `earnings_event_id` FK, `metric`, `guidance_low`/`high`, `period`, `issued_at`, `source` | |
+| `earnings_actuals` | `earnings_event_id` FK, `metric`, `actual_value`, `reported_at`, **`usable_at`**, `source`, `ingested_at` | `usable_at` is the ground-truth field `policy/earnings_evidence.py` checks a pre-event snapshot's `evidence_cutoff` against. |
+| `earnings_historical_gaps` | `instrument_id` FK, `earnings_event_id` FK (nullable), `gap_pct`, `session_date`, `source` | |
+| `event_expected_move_snapshots` | `earnings_event_id` FK, `as_of`, `evidence_cutoff`, `atr_based_move_pct`/`historical_gap_move_pct`/`option_implied_move_pct` (nullable), `selected_expected_move_pct`, `calculation_version` | |
+| `earnings_feature_snapshots` | `earnings_event_id` FK, `as_of`, `evidence_cutoff`, `is_pre_event` (always `true` this revision), 8 named `component_*` scores, `total_score`, `calculation_version`, `linked_actual_id` FK (nullable, to `earnings_actuals`) | Always pre-event — `PostEarningsConfirmationSnapshot` is the structurally separate post-event table, not a flag flip on this one. |
+| `post_earnings_confirmation_snapshots` | `earnings_event_id` FK, `as_of`, `evidence_cutoff`, `results_gate_passed`/`guidance_gate_passed`/`market_reaction_gate_passed`, `all_gates_passed`, `notes` | HES-4's three independent gates, each recorded so a partial pass is never conflated with a full one. |
+
+**Morning plan** (`models/morning_plan.py`, new file, ADR-047)
+
+| Table | Key fields | Notes |
+|---|---|---|
+| `morning_plan_runs` | `job_run_id` FK (nullable), `plan_date` (indexed), `triggered_by`, `status` (`MorningPlanRunStatus`), `idempotency_key` (unique, nullable), `started_at`/`completed_at` | One scheduler invocation. |
+| `morning_plan_versions` | `morning_plan_run_id` FK, `plan_date`, `version_label` (`PRELIMINARY`\|`FINAL`\|`AD_HOC`\|`CORRECTION`), `version_number`, `evidence_cutoff`, `generated_at`, `completeness_status` | Immutable once published — a rerun always adds a row (R3's required test). |
+| `morning_plan_input_links` | `morning_plan_version_id` FK, `input_type`, `input_id` (generic, not a FK) | The lineage manifest — which evidence/recommendation rows a version was built from. |
+| `morning_plan_sections` | `morning_plan_version_id` FK, `section_key` (`MorningPlanSectionKey`, unique with version), `display_order` | The fixed seven-section grouping (MDS-5). |
+| `morning_plan_items` | `morning_plan_section_id` FK, `recommendation_version_id` FK (nullable), `display_order`, `headline` | Nullable FK so a Data Problems item (naming what failed) is representable too. |
+| `morning_plan_quality_checks` | `morning_plan_version_id` FK, `check_name`, `passed`, `detail` (nullable) | Per-check detail behind `completeness_status`. |
+| `morning_plan_delivery_events` | `morning_plan_version_id` FK, `channel` (`DeliveryChannel`), `status` (reuses `AlertDeliveryStatus`), `delivered_at` | `channel=COWORK` rows only ever exist for an already-published `FINAL` version (ADR-049) — enforced at the service layer. |
+
+**Order authority** (`models/order_authority.py`, new file, ADR-048)
+
+| Table | Key fields | Notes |
+|---|---|---|
+| `operating_mode_history` | `mode` (`OrderAuthorityMode`), `changed_by`, `changed_at`, `reason` | Append-only log of every operating-mode change. |
+| `order_proposals` | `recommendation_version_id` FK, `account_id` FK, `instrument_id` FK, `mode`, `side`, `status` (`OrderProposalStatus`), `idempotency_key` (unique, nullable), `updated_at` | Stable identity, upstream of and distinct from `orders`. |
+| `order_proposal_versions` | `order_proposal_id` FK, `version_number` (unique together), `order_type`, `quantity`, `limit_price`/`stop_price`, `time_in_force`, `max_notional`, `rationale` | Immutable once written. |
+| `order_policy_evaluations` | `order_proposal_version_id` FK, `evaluated_at`, `requested_mode`, `authorized`, `denial_reason` | Append-only record of every `assert_order_authorized()` (R0) call and its outcome. |
+| `order_approvals` | `order_proposal_version_id` FK, `approved_by`, `requested_at`, `decided_at`, `expires_at`, `status` (`OrderApprovalStatus`), `integrity_hash`, `updated_at` | `EXPIRED`/`INVALIDATED` are terminal — never transition back to `APPROVED` (R3's required test). |
+| `approval_bound_fields` | `order_approval_id` FK (unique, 1:1), account/instrument/side/quantity/order_type/limit_price/stop_price/time_in_force/outside_hours/attached_legs/max_notional/recommendation_version_id | Immutable snapshot the parent approval's `integrity_hash` is computed over, in a fixed field order (`services/order_authority.py::compute_bound_fields_hash()`). |
+| `approval_invalidations` | `order_approval_id` FK, `reason` (`ApprovalInvalidationReason`), `detail`, `invalidated_at` | Distinct from a rejection — the system unilaterally refusing to honor an approval. |
+| `broker_submission_attempts` | `order_approval_id` FK, `attempted_at`, `environment_label`, `outcome` (`BrokerSubmissionOutcome`), `idempotency_key` (unique, nullable), `detail` | Schema-only this revision — no code path writes `SUCCEEDED` for `LIVE` ("do not add a live broker submission endpoint yet"). |
+| `execution_kill_switch_events` | `activated_by`, `activated_at`, `deactivated_at` (nullable), `reason` | Append-only (OA-9). |
+| `broker_environment_attestations` | `environment_label`, `account_id` FK (nullable), `broker_endpoint`, `attested_by`, `attested_at` | The recorded `(environment, account, broker_endpoint)` triple OA-6 requires be unambiguous. |
+
+**Strategy governance** (`models/learning.py`, `models/identity.py`, extended)
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `strategy_definitions.family` (new column) | `StrategyFamily` (`INVESTMENT_QUALITY`\|`EARNINGS_PRE_EVENT`\|`EARNINGS_POST_CONFIRMATION`\|`GENERIC`) | Backfilled to `GENERIC` for pre-existing rows. |
+| `strategy_eligibility_snapshots` | `strategy_version_id` FK, `instrument_id` FK, `as_of`, `eligible`, `reason` | |
+| `decision_policy_versions` | `owner_user_id`, `version_label`, `config` (JSON), `status` (reuses `StrategyVersionStatus`), `decided_at`, `decision_comment` | |
+| `risk_policy_versions` | `risk_policy_id` FK, the same five numeric fields as `risk_policy`, `changed_at` | Append-only snapshot history paralleling the singleton, mutable-in-place `risk_policy` row — `risk_policy` itself stays unversioned by design. |
 
 ## Current-state derivation
 

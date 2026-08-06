@@ -21,6 +21,7 @@ import sys
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tradingos_api.db.session import SessionLocal
@@ -45,26 +46,39 @@ from tradingos_api.models.enums import (
     CashLedgerEntryType,
     CommitteeSessionStatus,
     DataQualityStatus,
+    DeliveryChannel,
+    EarningsTimingCategory,
+    EnvironmentLabel,
     FeeType,
     InstrumentValidationStatus,
     JobRunStatus,
     ModelChangeProposalStatus,
     MonitoringFrequency,
+    MorningPlanRunStatus,
+    MorningPlanSectionKey,
+    MorningPlanVersionLabel,
     NotificationChannel,
+    OrderApprovalStatus,
+    OrderAuthorityMode,
     OrderLegRole,
+    OrderProposalStatus,
     OrderSide,
     OrderStatus,
     OrderType,
+    PlanCompletenessStatus,
     PromptTemplateStatus,
     ProviderKind,
     RecommendationAction,
     RecommendationConfidence,
     RecommendationLevelKind,
+    RecommendationMode,
     RecommendationOutcomeClassification,
     RecommendationStatus,
     RegimeClassification,
     RiskTolerance,
+    StrategyFamily,
     StrategyVersionStatus,
+    ThesisStatus,
     Timeframe,
     TimeInForce,
     TradeReviewRating,
@@ -90,10 +104,20 @@ from tradingos_api.models.identity import (
     NotificationPreference,
     ProviderConfig,
     RiskPolicy,
+    RiskPolicyVersion,
     UserProfile,
+)
+from tradingos_api.models.investment_thesis import (
+    InvestmentThesis,
+    InvestmentThesisVersion,
+    ThesisCatalyst,
+    ThesisRisk,
+    ThesisStatusHistory,
+    ValuationSnapshot,
 )
 from tradingos_api.models.learning import (
     BenchmarkSnapshot,
+    DecisionPolicyVersion,
     HypotheticalTradeOutcome,
     ModelChangeApproval,
     ModelChangeProposal,
@@ -101,20 +125,35 @@ from tradingos_api.models.learning import (
     RecommendationOutcome,
     ScoringWeightVersion,
     StrategyDefinition,
+    StrategyEligibilitySnapshot,
     StrategyVersion,
     TradeReview,
 )
 from tradingos_api.models.market_evidence import (
     DataQualityEvent,
+    EarningsActual,
+    EarningsConsensusSnapshot,
     EarningsEvent,
+    EarningsFeatureSnapshot,
+    EarningsGuidanceItem,
+    EventExpectedMoveSnapshot,
     FundamentalsSnapshot,
     MacroObservation,
     MarketBar,
     MarketRegimeSnapshot,
     NewsItem,
     NewsItemInstrument,
+    PostEarningsConfirmationSnapshot,
     SentimentSnapshot,
     TechnicalIndicatorSnapshot,
+)
+from tradingos_api.models.morning_plan import (
+    MorningPlanDeliveryEvent,
+    MorningPlanItem,
+    MorningPlanQualityCheck,
+    MorningPlanRun,
+    MorningPlanSection,
+    MorningPlanVersion,
 )
 from tradingos_api.models.operations import (
     Alert,
@@ -124,9 +163,21 @@ from tradingos_api.models.operations import (
     PromptTemplate,
     PromptVersion,
 )
+from tradingos_api.models.order_authority import (
+    ApprovalBoundFields,
+    BrokerEnvironmentAttestation,
+    ExecutionKillSwitchEvent,
+    OperatingModeHistory,
+    OrderApproval,
+    OrderPolicyEvaluation,
+    OrderProposal,
+    OrderProposalVersion,
+)
 from tradingos_api.models.recommendations import (
     ConfidenceCalibrationRecord,
     Recommendation,
+    RecommendationAttribution,
+    RecommendationInvalidationCondition,
     RecommendationLevel,
     RecommendationStatusEvent,
     RecommendationVersion,
@@ -139,6 +190,8 @@ from tradingos_api.models.security_master import (
     Watchlist,
     WatchlistItem,
 )
+from tradingos_api.policy.recommendation_modes import InvestmentAction, TacticalAction
+from tradingos_api.services.order_authority import BoundFieldsSnapshot, compute_bound_fields_hash
 
 TODAY = date(2026, 8, 3)
 NOW = datetime(2026, 8, 3, 13, 0, tzinfo=UTC)
@@ -1182,6 +1235,473 @@ def _seed_operations(db: Session, user: UserProfile, instruments: dict[str, Inst
     )
 
 
+def _seed_r3(
+    db: Session,
+    user: UserProfile,
+    instruments: dict[str, Instrument],
+    watchlist_items: dict[str, WatchlistItem],
+    recommendation: Recommendation,
+    rec_version: RecommendationVersion,
+    manual_account: Account,
+) -> None:
+    """Revision Prompt R3: one representative, synthetic example of every
+    new bounded context (decision taxonomy, investment thesis, earnings
+    evidence, morning plan, order authority, strategy governance), so
+    every new `/api/v1/*` endpoint has real data — no live provider call,
+    no plan-generation or trading logic, matching the rest of this
+    script's scope."""
+    # --- Decision taxonomy: tag the existing AAPL tactical version, add
+    # an investment-lane recommendation for AMD ---
+    rec_version.lane_action = TacticalAction.TRADE_ENTER.value
+    rec_version.horizon_days_min = 1
+    rec_version.horizon_days_max = 10
+    rec_version.review_date = TODAY + timedelta(days=5)
+    db.add(
+        RecommendationInvalidationCondition(
+            recommendation_version_id=rec_version.id,
+            condition_text="Close below the 50-day SMA on above-average volume.",
+        )
+    )
+    aapl_lot = db.scalar(
+        select(PositionLot).where(
+            PositionLot.account_id == manual_account.id,
+            PositionLot.instrument_id == instruments["AAPL"].id,
+        )
+    )
+    if aapl_lot is not None:
+        db.add(
+            RecommendationAttribution(
+                recommendation_version_id=rec_version.id,
+                mode=RecommendationMode.TACTICAL,
+                position_lot_id=aapl_lot.id,
+            )
+        )
+
+    amd_recommendation = Recommendation(
+        instrument_id=instruments["AMD"].id,
+        watchlist_item_id=watchlist_items["AMD"].id,
+        mode=RecommendationMode.INVESTMENT,
+        opened_at=NOW - timedelta(days=30),
+        status=RecommendationStatus.ACTIVE,
+    )
+    db.add(amd_recommendation)
+    db.flush()
+    amd_rec_version = RecommendationVersion(
+        recommendation_id=amd_recommendation.id,
+        version_number=1,
+        action=RecommendationAction.BUY,
+        lane_action=InvestmentAction.INVEST_BUY.value,
+        confidence=RecommendationConfidence.HIGH,
+        score=Decimal("74.00"),
+        rationale=(
+            "AMD's data-center GPU roadmap and margin trajectory support a multi-quarter "
+            "accumulation thesis independent of near-term price action (seed placeholder)."
+        ),
+        deterministic_inputs_snapshot={"sma_20": "172.40"},
+        generated_at=NOW - timedelta(days=30),
+        horizon_days_min=180,
+        horizon_days_max=730,
+        review_date=TODAY + timedelta(days=90),
+    )
+    db.add(amd_rec_version)
+    db.flush()
+
+    # --- Investment thesis ---
+    thesis = InvestmentThesis(
+        recommendation_id=amd_recommendation.id,
+        owner_user_id=user.id,
+        instrument_id=instruments["AMD"].id,
+        status=ThesisStatus.ACTIVE,
+    )
+    db.add(thesis)
+    db.flush()
+    thesis_version = InvestmentThesisVersion(
+        investment_thesis_id=thesis.id,
+        version_number=1,
+        valuation_low=Decimal("150.000000"),
+        valuation_mid=Decimal("190.000000"),
+        valuation_high=Decimal("230.000000"),
+        thesis_text=(
+            "Data-center GPU attach and gross-margin expansion drive multi-year earnings "
+            "growth ahead of consensus (seed placeholder thesis)."
+        ),
+        horizon_days_min=180,
+        horizon_days_max=730,
+        review_date=TODAY + timedelta(days=90),
+        generated_at=NOW - timedelta(days=30),
+    )
+    db.add(thesis_version)
+    db.flush()
+    db.add(
+        ThesisCatalyst(
+            investment_thesis_version_id=thesis_version.id,
+            catalyst_text="Next-generation accelerator launch.",
+            expected_date=TODAY + timedelta(days=120),
+        )
+    )
+    db.add(
+        ThesisRisk(
+            investment_thesis_version_id=thesis_version.id,
+            risk_text="Customer concentration among a small number of hyperscalers.",
+        )
+    )
+    db.add(
+        ValuationSnapshot(
+            investment_thesis_id=thesis.id,
+            as_of=TODAY - timedelta(days=1),
+            method="DCF",
+            fair_value_low=Decimal("150.000000"),
+            fair_value_mid=Decimal("190.000000"),
+            fair_value_high=Decimal("230.000000"),
+            source="internal_model",
+            observed_at=NOW - timedelta(days=1),
+        )
+    )
+    db.add(
+        ThesisStatusHistory(
+            investment_thesis_id=thesis.id,
+            from_status=None,
+            to_status=ThesisStatus.ACTIVE,
+            reason="Initial thesis generation.",
+            occurred_at=NOW - timedelta(days=30),
+        )
+    )
+
+    # --- Earnings evidence: one upcoming (pre-event only) event, one
+    # already-reported event (actual + post-event confirmation) ---
+    upcoming_earnings = EarningsEvent(
+        instrument_id=instruments["AMD"].id,
+        fiscal_period="Q3-2026",
+        report_date=TODAY + timedelta(days=10),
+        report_time="AMC",
+        eps_estimate=Decimal("1.15"),
+        source="finnhub_free_tier",
+        verified_date=TODAY - timedelta(days=1),
+        exchange_local_date=TODAY + timedelta(days=10),
+        timing_category=EarningsTimingCategory.AFTER_CLOSE,
+        verification_source="company_ir_page",
+        expected_report_period="Q3-2026",
+        confidence=RecommendationConfidence.HIGH,
+    )
+    db.add(upcoming_earnings)
+    db.flush()
+    db.add(
+        EarningsConsensusSnapshot(
+            earnings_event_id=upcoming_earnings.id,
+            as_of=TODAY - timedelta(days=1),
+            consensus_eps=Decimal("1.1500"),
+            consensus_revenue=Decimal("8200000000.00"),
+            num_analysts=32,
+            source="finnhub_free_tier",
+            observed_at=NOW - timedelta(days=1),
+        )
+    )
+    db.add(
+        EarningsGuidanceItem(
+            earnings_event_id=upcoming_earnings.id,
+            metric="revenue",
+            guidance_low=Decimal("8000000000.0000"),
+            guidance_high=Decimal("8400000000.0000"),
+            period="Q3-2026",
+            issued_at=NOW - timedelta(days=45),
+            source="company_ir_page",
+        )
+    )
+    db.add(
+        EventExpectedMoveSnapshot(
+            earnings_event_id=upcoming_earnings.id,
+            as_of=NOW,
+            evidence_cutoff=NOW,
+            atr_based_move_pct=Decimal("6.2000"),
+            historical_gap_move_pct=Decimal("7.1000"),
+            option_implied_move_pct=Decimal("6.8000"),
+            selected_expected_move_pct=Decimal("6.8000"),
+            calculation_version="v1",
+        )
+    )
+    db.add(
+        EarningsFeatureSnapshot(
+            earnings_event_id=upcoming_earnings.id,
+            as_of=NOW,
+            evidence_cutoff=NOW,
+            is_pre_event=True,
+            component_price_trend=Decimal("0.7200"),
+            component_analyst_revisions=Decimal("0.6500"),
+            component_options_skew=Decimal("0.5000"),
+            component_peer_reactions=Decimal("0.5800"),
+            component_historical_drift=Decimal("0.6100"),
+            component_guidance_momentum=Decimal("0.7000"),
+            component_technical_setup=Decimal("0.5500"),
+            component_sentiment=Decimal("0.6000"),
+            total_score=Decimal("7.20"),
+            calculation_version="v1",
+        )
+    )
+
+    reported_earnings = EarningsEvent(
+        instrument_id=instruments["MRVL"].id,
+        fiscal_period="Q2-2026",
+        report_date=TODAY - timedelta(days=5),
+        report_time="AMC",
+        eps_estimate=Decimal("0.65"),
+        eps_actual=Decimal("0.71"),
+        source="finnhub_free_tier",
+        verified_date=TODAY - timedelta(days=6),
+        exchange_local_date=TODAY - timedelta(days=5),
+        timing_category=EarningsTimingCategory.AFTER_CLOSE,
+        verification_source="company_ir_page",
+        expected_report_period="Q2-2026",
+        confidence=RecommendationConfidence.HIGH,
+    )
+    db.add(reported_earnings)
+    db.flush()
+    actual_usable_at = datetime.combine(
+        TODAY - timedelta(days=5), datetime.min.time(), tzinfo=UTC
+    ) + timedelta(hours=16, minutes=5)
+    db.add(
+        EarningsActual(
+            earnings_event_id=reported_earnings.id,
+            metric="eps",
+            actual_value=Decimal("0.7100"),
+            reported_at=actual_usable_at - timedelta(minutes=5),
+            usable_at=actual_usable_at,
+            source="company_ir_page",
+        )
+    )
+    db.add(
+        PostEarningsConfirmationSnapshot(
+            earnings_event_id=reported_earnings.id,
+            as_of=NOW - timedelta(days=4),
+            evidence_cutoff=actual_usable_at + timedelta(hours=1),
+            results_gate_passed=True,
+            guidance_gate_passed=True,
+            market_reaction_gate_passed=True,
+            all_gates_passed=True,
+            notes="Beat on EPS with raised forward guidance and a confirmed positive reaction "
+            "(seed placeholder).",
+        )
+    )
+
+    # --- Morning plan ---
+    plan_run = MorningPlanRun(
+        plan_date=TODAY,
+        triggered_by="seed_fixture",
+        status=MorningPlanRunStatus.COMPLETED,
+        started_at=NOW - timedelta(minutes=10),
+        completed_at=NOW - timedelta(minutes=9),
+    )
+    db.add(plan_run)
+    db.flush()
+    plan_version = MorningPlanVersion(
+        morning_plan_run_id=plan_run.id,
+        plan_date=TODAY,
+        version_label=MorningPlanVersionLabel.FINAL,
+        version_number=1,
+        evidence_cutoff=NOW - timedelta(minutes=9),
+        generated_at=NOW - timedelta(minutes=9),
+        completeness_status=PlanCompletenessStatus.COMPLETE,
+    )
+    db.add(plan_version)
+    db.flush()
+    act_now_section = MorningPlanSection(
+        morning_plan_version_id=plan_version.id,
+        section_key=MorningPlanSectionKey.ACT_NOW,
+        display_order=1,
+    )
+    data_problems_section = MorningPlanSection(
+        morning_plan_version_id=plan_version.id,
+        section_key=MorningPlanSectionKey.DATA_PROBLEMS,
+        display_order=7,
+    )
+    db.add_all([act_now_section, data_problems_section])
+    db.flush()
+    db.add(
+        MorningPlanItem(
+            morning_plan_section_id=act_now_section.id,
+            recommendation_version_id=rec_version.id,
+            display_order=1,
+            headline="AAPL — tactical entry near the 50-day SMA (seed placeholder).",
+        )
+    )
+    db.add(
+        MorningPlanItem(
+            morning_plan_section_id=data_problems_section.id,
+            recommendation_version_id=None,
+            display_order=1,
+            headline="SMCI fundamentals snapshot is 9 days stale — vendor rate-limited.",
+        )
+    )
+    db.add(
+        MorningPlanQualityCheck(
+            morning_plan_version_id=plan_version.id,
+            check_name="all_watchlist_instruments_have_fresh_bars",
+            passed=True,
+        )
+    )
+    db.add(
+        MorningPlanQualityCheck(
+            morning_plan_version_id=plan_version.id,
+            check_name="no_stale_fundamentals_beyond_7_days",
+            passed=False,
+            detail="SMCI fundamentals snapshot is 9 days old (see Data Problems section).",
+        )
+    )
+    db.add(
+        MorningPlanDeliveryEvent(
+            morning_plan_version_id=plan_version.id,
+            channel=DeliveryChannel.IN_APP,
+            status=AlertDeliveryStatus.DELIVERED,
+            delivered_at=NOW - timedelta(minutes=8),
+        )
+    )
+
+    # --- Order authority: one full proposal -> policy evaluation ->
+    # pending approval chain, plus mode-history/kill-switch/attestation
+    # rows ---
+    proposal = OrderProposal(
+        recommendation_version_id=rec_version.id,
+        account_id=manual_account.id,
+        instrument_id=instruments["AAPL"].id,
+        mode=RecommendationMode.TACTICAL,
+        side=OrderSide.BUY,
+        status=OrderProposalStatus.EVALUATED,
+    )
+    db.add(proposal)
+    db.flush()
+    proposal_version = OrderProposalVersion(
+        order_proposal_id=proposal.id,
+        version_number=1,
+        order_type=OrderType.MARKET,
+        quantity=Decimal("5"),
+        time_in_force=TimeInForce.DAY,
+        rationale="Seed placeholder proposal from the AAPL tactical recommendation.",
+    )
+    db.add(proposal_version)
+    db.flush()
+    db.add(
+        OrderPolicyEvaluation(
+            order_proposal_version_id=proposal_version.id,
+            evaluated_at=NOW - timedelta(minutes=5),
+            requested_mode=OrderAuthorityMode.PAPER_MANUAL_APPROVAL,
+            authorized=True,
+        )
+    )
+
+    bound_fields_input = BoundFieldsSnapshot(
+        account_id=manual_account.id,
+        instrument_id=instruments["AAPL"].id,
+        side=OrderSide.BUY.value,
+        quantity=Decimal("5"),
+        order_type=OrderType.MARKET.value,
+        limit_price=None,
+        stop_price=None,
+        time_in_force=TimeInForce.DAY.value,
+        outside_hours=False,
+        attached_legs={},
+        max_notional=None,
+        recommendation_version_id=rec_version.id,
+    )
+    approval = OrderApproval(
+        order_proposal_version_id=proposal_version.id,
+        requested_at=NOW - timedelta(minutes=4),
+        expires_at=NOW + timedelta(minutes=1),
+        status=OrderApprovalStatus.PENDING,
+        integrity_hash=compute_bound_fields_hash(bound_fields_input),
+    )
+    db.add(approval)
+    db.flush()
+    db.add(
+        ApprovalBoundFields(
+            order_approval_id=approval.id,
+            account_id=manual_account.id,
+            instrument_id=instruments["AAPL"].id,
+            side=OrderSide.BUY,
+            quantity=Decimal("5"),
+            order_type=OrderType.MARKET,
+            time_in_force=TimeInForce.DAY,
+            outside_hours=False,
+            attached_legs={},
+            recommendation_version_id=rec_version.id,
+        )
+    )
+    db.add(
+        OperatingModeHistory(
+            mode=OrderAuthorityMode.PAPER_MANUAL_APPROVAL,
+            changed_by="seed_fixture",
+            changed_at=NOW - timedelta(days=1),
+            reason="Initial mode selection (seed placeholder).",
+        )
+    )
+    db.add(
+        ExecutionKillSwitchEvent(
+            activated_by="seed_fixture",
+            activated_at=NOW - timedelta(days=30),
+            deactivated_at=NOW - timedelta(days=30) + timedelta(minutes=15),
+            reason="Manual test activation, immediately deactivated (seed placeholder).",
+        )
+    )
+    db.add(
+        BrokerEnvironmentAttestation(
+            environment_label=EnvironmentLabel.PAPER,
+            account_id=None,
+            broker_endpoint="https://paper-api.alpaca.markets",
+            attested_by="seed_fixture",
+            attested_at=NOW - timedelta(days=1),
+        )
+    )
+
+    # --- Strategy governance ---
+    earnings_strategy_def = StrategyDefinition(
+        owner_user_id=user.id,
+        name="Earnings Pre-Event Momentum",
+        description="Pre-event earnings-direction scoring strategy (seed placeholder).",
+        family=StrategyFamily.EARNINGS_PRE_EVENT,
+    )
+    db.add(earnings_strategy_def)
+    db.flush()
+    earnings_strategy_version = StrategyVersion(
+        strategy_definition_id=earnings_strategy_def.id,
+        config={"min_total_score": "6.00"},
+        status=StrategyVersionStatus.ACTIVE,
+        decided_at=NOW - timedelta(days=30),
+        decision_comment="Initial version, activated without a prior comparison.",
+    )
+    db.add(earnings_strategy_version)
+    db.flush()
+    db.add(
+        StrategyEligibilitySnapshot(
+            strategy_version_id=earnings_strategy_version.id,
+            instrument_id=instruments["AMD"].id,
+            as_of=TODAY,
+            eligible=True,
+            reason="Upcoming earnings within the 10-14 day pre-event window.",
+        )
+    )
+    db.add(
+        DecisionPolicyVersion(
+            owner_user_id=user.id,
+            version_label="r3-seed-v1",
+            config={"lanes_enabled": ["INVESTMENT", "TACTICAL"]},
+            status=StrategyVersionStatus.ACTIVE,
+            decided_at=NOW - timedelta(days=1),
+            decision_comment="Initial decision-policy version (seed placeholder).",
+        )
+    )
+    risk_policy = db.scalar(select(RiskPolicy).where(RiskPolicy.owner_user_id == user.id))
+    assert risk_policy is not None
+    db.add(
+        RiskPolicyVersion(
+            risk_policy_id=risk_policy.id,
+            risk_budget_pct=risk_policy.risk_budget_pct,
+            max_position_pct=risk_policy.max_position_pct,
+            max_sector_pct=risk_policy.max_sector_pct,
+            max_correlation=risk_policy.max_correlation,
+            speculative_position_pct_cap=risk_policy.speculative_position_pct_cap,
+            changed_at=NOW - timedelta(days=1),
+        )
+    )
+
+
 def _seed(db: Session) -> None:
     if db.query(UserProfile).first() is not None:
         print("Seed data already present (UserProfile exists) — skipping.")
@@ -1198,12 +1718,15 @@ def _seed(db: Session) -> None:
     _seed_learning(db, user, instruments)
     _seed_performance(db, manual_account)
     _seed_operations(db, user, instruments)
+    _seed_r3(db, user, instruments, watchlist_items, recommendation, rec_version, manual_account)
 
     db.commit()
     print(
         f"Seeded {len(TIER1_RESOLVED)} resolved + {len(TIER1_QUARANTINED)} quarantined "
         "Tier 1 instruments, 2 accounts, 1 committee session (8 agent runs), "
-        "2 recommendations, 1 backtest run, and operations fixtures."
+        "2 recommendations, 1 backtest run, operations fixtures, and Revision "
+        "Prompt R3's decision taxonomy / investment thesis / earnings evidence / "
+        "morning plan / order authority / strategy governance fixtures."
     )
 
 

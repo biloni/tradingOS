@@ -49,6 +49,23 @@ class TestColumnsAreNumericNeverFloat:
             data_type = self._column_type(db_session, "market_bars", column)
             assert data_type == "numeric"
 
+    def test_r3_order_authority_money_and_quantity_columns_are_numeric(
+        self, db_session: Session
+    ) -> None:
+        """Revision Prompt R3's proposal -> approval chain must hold the
+        same no-float discipline as the pre-existing `orders` table."""
+        for table, column in (
+            ("order_proposal_versions", "quantity"),
+            ("order_proposal_versions", "limit_price"),
+            ("order_proposal_versions", "stop_price"),
+            ("approval_bound_fields", "quantity"),
+            ("approval_bound_fields", "limit_price"),
+            ("earnings_actuals", "actual_value"),
+            ("investment_thesis_versions", "valuation_low"),
+        ):
+            data_type = self._column_type(db_session, table, column)
+            assert data_type == "numeric", f"{table}.{column} is {data_type}, expected numeric"
+
 
 class TestFractionalShareRoundTrip:
     """Fractional shares (project brief requirement) must round-trip

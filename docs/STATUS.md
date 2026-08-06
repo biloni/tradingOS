@@ -2,11 +2,83 @@
 
 **Current phase:** Phase 8 (shipped), Revision Prompt R0 (binding policy
 amendment, shipped), Revision Prompt R1 (product/architecture delta
-review, approved by proceeding to R2), and Revision Prompt R2 (scaffold/
+review, approved by proceeding to R2), Revision Prompt R2 (scaffold/
 navigation compatibility patch, shipped — `apps/web` route/nav/UI-
 primitive scaffolding only, no provider calls, strategy calculations,
-recommendations, scheduling, or broker submission).
+recommendations, scheduling, or broker submission), and Revision Prompt
+R3 (backward-compatible schema and API migration, shipped — additive
+migration + 19 new endpoints across 7 new bounded contexts, no provider
+integration, no trading/scoring logic, no live broker submission
+endpoint).
 **Last updated:** 2026-08-06
+
+## Revision Prompt R3 (2026-08-06) — backward-compatible schema and API migration
+
+**No "Prompt 3" implementation existed to inspect** — same documented
+gap as R2's "no Prompt 2" — R3's own scope (additive migration against
+the real Phase 8 schema + new API areas) doesn't depend on it.
+
+- **Domain model (additive, ADR-050):** ~35 new tables + 2 backward-
+  compatible column adds (`recommendations.mode`, `strategy_definitions.family`,
+  both backfilled for existing rows) across 6 new/extended model files —
+  decision taxonomy, investment thesis, earnings evidence, morning plan,
+  order authority, strategy governance. Full detail:
+  docs/DATA_DICTIONARY.md §9, docs/ER_DIAGRAM.md §§10-13.
+- **Migration** (`ce0a85382604_r3_*.py`, revises `ece90645a84b`): hand-
+  verified upgrade -> downgrade -> upgrade round trip against the real
+  seeded dev database; every native-enum reuse across the migration
+  (`order_side`, `order_type`, `time_in_force`, `recommendation_confidence`,
+  `alert_delivery_status`, `strategy_version_status`) uses
+  `create_type=False` to avoid a duplicate-type error, and every brand-
+  new enum type added via `op.add_column()` (rather than
+  `op.create_table()`) is explicitly `.create()`d first — both gotchas
+  this project has hit before (`eed7cb451bdc`) and now avoided the same
+  way. Backfill defaults verified to populate every pre-existing row
+  (`recommendations`: 2/2 now `TACTICAL`, `strategy_definitions`: 1/1
+  `GENERIC`, `earnings_events`: 1/1 `UNKNOWN` timing).
+- **Policy** (`policy/earnings_evidence.py`, new): pure, DB-agnostic
+  `assert_actual_not_leaked_into_pre_event_snapshot()` (HES-7) — rejects
+  linking an `EarningsActual` to a pre-event snapshot whose
+  `evidence_cutoff` predates the actual's `usable_at`.
+- **Services** (`services/order_authority.py`, new): `compute_bound_fields_hash()`
+  (fixed-order SHA-256 over `ApprovalBoundFields`, ADR-048) and
+  `assert_can_transition_to_approved()` (combined legal-transition +
+  wall-clock-expiry guard — an approval past `expires_at` is denied even
+  if nothing has marked it `EXPIRED` yet).
+- **API — 19 areas total, 7 new** (docs/API_CONTRACTS.md §§13-19): morning
+  plan (latest/version-history/rerun/quality-status), investment
+  recommendations + thesis detail, tactical recommendations, earnings
+  events (calendar/detail/post-event-confirmation), order proposals
+  (create/get/policy-evaluation), order approvals (create/get/approve/
+  reject/expire/invalidate), kill-switch status (added to the existing
+  settings area). **No live broker submission endpoint added** — an
+  `OrderApproval` reaching `APPROVED` is this revision's final state.
+- **Seed data**: `scripts/seed_phase8.py::_seed_r3()` — one representative
+  example of every new bounded context (an AMD investment thesis with
+  full valuation/catalyst/risk/status-history detail; an upcoming AMD
+  earnings event pre-event-only, and an already-reported MRVL earnings
+  event with an actual + post-event confirmation, demonstrating the
+  structural pre/post-event distinction; a `FINAL`/`COMPLETE` morning
+  plan version; a full proposal -> policy-evaluation -> pending-approval
+  chain with a real computed `integrity_hash`; kill-switch/mode-history/
+  attestation rows; an earnings-strategy definition + eligibility
+  snapshot; a decision-policy version and a risk-policy version echo).
+  Applied to the real dev database (idempotent — the whole-script guard
+  means it only runs once; `_seed_r3` itself was verified separately
+  against a rollback-wrapped transaction before being applied for real).
+- **Tests:** 126 backend tests (up from 100), all 8 explicitly required
+  R3 tests present and passing (migration round trip verified manually;
+  existing-clients-compatible + investment/tactical-cannot-be-confused in
+  `test_r3_backward_compatibility.py`; pre-event-rejects-future-actuals in
+  `test_policy_earnings_evidence.py`; approval-hash-changes +
+  expired-cannot-approve in `test_services_order_authority.py`;
+  reruns-create-versions in `test_morning_plan_endpoints.py`; money/
+  quantity precision extended in `test_precision.py`). `ruff`/`mypy
+  --strict` clean across all new/edited `src/` files. Frontend untouched
+  (0 new frontend tests this pass — R3 is backend-only).
+- **Docs:** docs/DATA_DICTIONARY.md §9, docs/ER_DIAGRAM.md §§10-13,
+  docs/API_CONTRACTS.md §§13-19 + intro paragraph, this entry,
+  docs/TEST_EVIDENCE.md.
 
 ## Revision Prompt R2 (2026-08-06) — scaffold and navigation compatibility patch
 

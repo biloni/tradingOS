@@ -4,16 +4,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from tradingos_api.routers import (
     alerts,
     backtests,
+    earnings,
     health,
     instruments,
+    investment,
     journal,
     market,
+    morning_plan,
+    order_authority,
     orders,
     performance,
     plans,
     portfolio,
     recommendations,
     settings,
+    tactical,
     watchlists,
 )
 
@@ -39,3 +44,9 @@ app.include_router(alerts.router)
 app.include_router(plans.router)
 app.include_router(backtests.router)
 app.include_router(settings.router)
+app.include_router(morning_plan.router)
+app.include_router(investment.router)
+app.include_router(tactical.router)
+app.include_router(earnings.router)
+app.include_router(order_authority.proposals_router)
+app.include_router(order_authority.approvals_router)

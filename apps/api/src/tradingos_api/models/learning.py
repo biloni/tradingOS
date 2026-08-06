@@ -22,6 +22,7 @@ from tradingos_api.db.mixins import CreatedAtMixin, OwnedMixin, TimestampMixin, 
 from tradingos_api.models.enums import (
     ModelChangeProposalStatus,
     RecommendationOutcomeClassification,
+    StrategyFamily,
     StrategyVersionStatus,
     TradeReviewRating,
 )
@@ -107,10 +108,20 @@ class BenchmarkSnapshot(UUIDPkMixin, CreatedAtMixin, Base):
 
 
 class StrategyDefinition(UUIDPkMixin, OwnedMixin, CreatedAtMixin, Base):
+    """`family` (Revision Prompt R3, additive, nullable) classifies which
+    decision workflow this strategy governs — `INVESTMENT_QUALITY`,
+    `EARNINGS_PRE_EVENT`, `EARNINGS_POST_CONFIRMATION`, or `GENERIC` for
+    anything not yet categorized (including every Phase 1-7/8 strategy
+    definition already in the database, which this revision's migration
+    backfills to `GENERIC` rather than leaving NULL)."""
+
     __tablename__ = "strategy_definitions"
 
     name: Mapped[str] = mapped_column(sa.String(80))
     description: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    family: Mapped[StrategyFamily] = mapped_column(
+        sa.Enum(StrategyFamily, name="strategy_family"), default=StrategyFamily.GENERIC
+    )
 
 
 class StrategyVersion(UUIDPkMixin, CreatedAtMixin, Base):
@@ -180,8 +191,51 @@ class ModelChangeApproval(UUIDPkMixin, CreatedAtMixin, Base):
     decided_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
 
 
+class StrategyEligibilitySnapshot(UUIDPkMixin, CreatedAtMixin, Base):
+    """Whether a given instrument currently qualifies for a strategy
+    version's own eligibility rule (e.g. a liquidity floor, a sector
+    exclusion) — append-only, one row per evaluation, so "why wasn't this
+    name considered" is answerable from stored data."""
+
+    __tablename__ = "strategy_eligibility_snapshots"
+    __table_args__ = (
+        sa.Index("ix_strategy_eligibility_snapshots_lookup", "strategy_version_id", "as_of"),
+    )
+
+    strategy_version_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("strategy_versions.id")
+    )
+    instrument_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("instruments.id")
+    )
+    as_of: Mapped[date] = mapped_column(sa.Date)
+    eligible: Mapped[bool] = mapped_column(sa.Boolean)
+    reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+
+
+class DecisionPolicyVersion(UUIDPkMixin, OwnedMixin, CreatedAtMixin, Base):
+    """A versioned, governed configuration distinct from `StrategyVersion`
+    (which holds scoring weights) — e.g. the committee pre-filter bar, the
+    hybrid-earnings AND-gate's specific thresholds, or the Morning
+    Decision Plan's `INCOMPLETE`-labeling percentage. Same
+    propose-> review -> approve/reject governance mechanism as
+    `StrategyVersion` (principle 16, FR-45/46 — a decision-policy change
+    is a strategy change like any other), reused rather than duplicated."""
+
+    __tablename__ = "decision_policy_versions"
+
+    version_label: Mapped[str] = mapped_column(sa.String(60))
+    config: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON)
+    status: Mapped[StrategyVersionStatus] = mapped_column(
+        sa.Enum(StrategyVersionStatus, name="strategy_version_status")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    decision_comment: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+
+
 __all__ = [
     "BenchmarkSnapshot",
+    "DecisionPolicyVersion",
     "HypotheticalTradeOutcome",
     "ModelChangeApproval",
     "ModelChangeProposal",
@@ -189,6 +243,7 @@ __all__ = [
     "RecommendationOutcome",
     "ScoringWeightVersion",
     "StrategyDefinition",
+    "StrategyEligibilitySnapshot",
     "StrategyVersion",
     "TradeReview",
 ]

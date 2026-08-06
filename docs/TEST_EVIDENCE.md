@@ -1089,3 +1089,217 @@ the fill exactly once (`4`, not `8`).
 No new secrets this phase — no credential value is ever a column
 (`provider_config`), and `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt R3 — backward-compatible schema and API migration (2026-08-06)
+
+### Migration — hand-verified round trip against the real seeded dev DB
+
+```
+$ .venv/Scripts/alembic.exe upgrade head
+INFO  [alembic.runtime.migration] Running upgrade ece90645a84b -> ce0a85382604, ...
+$ .venv/Scripts/alembic.exe current
+ce0a85382604 (head)
+$ .venv/Scripts/alembic.exe downgrade -1
+INFO  [alembic.runtime.migration] Running downgrade ce0a85382604 -> ece90645a84b, ...
+$ .venv/Scripts/alembic.exe upgrade head
+INFO  [alembic.runtime.migration] Running upgrade ece90645a84b -> ce0a85382604, ...
+$ .venv/Scripts/alembic.exe current
+ce0a85382604 (head)
+```
+Backfill defaults verified directly against the real pre-existing rows
+after `upgrade head`:
+```
+recommendations total/tactical: 2 2
+strategy_definitions total/generic: 1 1
+earnings_events total/unknown_timing: 1 1
+```
+
+Two classes of gotcha this project has hit before were hit again and
+fixed the same way: (1) `op.create_table()` reusing an already-existing
+native Postgres enum (`order_side`, `order_type`, `time_in_force`,
+`recommendation_confidence`, `alert_delivery_status`,
+`strategy_version_status`) needs `postgresql.ENUM(..., create_type=False)`
+or Postgres raises `DuplicateObject`; (2) `op.add_column()` (unlike
+`op.create_table()`) does **not** implicitly `CREATE TYPE` a brand-new
+enum — it must be `.create(op.get_bind(), checkfirst=True)`'d explicitly
+first, or the `ALTER TABLE` fails with `UndefinedObject` (same pattern as
+`eed7cb451bdc_add_strategy_version_status_lifecycle.py`). The generated
+migration's `downgrade()` also needed the standard manual addition
+(matching every prior migration touching a new native enum type): an
+explicit `sa.Enum(name=...).drop(op.get_bind(), checkfirst=True)` for
+each of the 14 brand-new enum types this revision adds — Alembic's
+autogenerate never emits these.
+
+### `apps/api` full suite
+
+```
+$ .venv/Scripts/python.exe -m pytest -v
+======================= 126 passed, 1 warning in 16.95s =======================
+```
+126/126 passing: 100 carried over from Phase 8/R0/R2 plus 26 new —
+`test_policy_earnings_evidence.py` (4), `test_services_order_authority.py`
+(11), `test_r3_backward_compatibility.py` (6), `test_morning_plan_endpoints.py`
+(3), `test_seed_r3.py` (1), plus one new case added to
+`test_precision.py`'s existing `TestColumnsAreNumericNeverFloat`.
+
+All 8 of R3's explicitly required tests present and passing: migration
+upgrade from the current head (above); existing API clients remain
+compatible (`test_r3_backward_compatibility.py::test_every_pre_r3_path_and_method_still_present`,
+checking all 38 pre-R3 path/method pairs individually, plus the general
+`test_openapi_snapshot.py` fixture updated to the new 60-path superset);
+investment and tactical recommendations cannot be confused
+(`TestInvestmentAndTacticalCannotBeConfused`, 4 cases: cross-lane 404 both
+directions, cross-lane list exclusion both directions); pre-event
+evidence rejects future earnings actuals (`test_policy_earnings_evidence.py`);
+approval hash changes when any bound field changes
+(`TestApprovalHashChangesWithBoundFields`, 5 cases: quantity, limit
+price, side, attached legs, recommendation version id); expired approval
+cannot return an approved state (`TestExpiredApprovalCannotReturnToApproved`,
+5 cases, including the critical one — a `PENDING` row whose `expires_at`
+has passed but which nothing has yet marked `EXPIRED`); plan reruns
+create versions rather than overwrite (`test_morning_plan_endpoints.py`);
+all money and quantity precision tests still pass (`test_precision.py`,
+extended with 7 new R3 table/column checks, all still `numeric`).
+
+```
+$ .venv/Scripts/ruff.exe check .
+All checks passed!
+$ .venv/Scripts/ruff.exe format --check .
+110 files already formatted
+$ .venv/Scripts/mypy.exe .
+Success: no issues found in 109 source files
+```
+
+### Seed data — verified in isolation before being applied for real
+
+`scripts/seed_phase8.py::_seed_r3()` was first exercised via
+`test_seed_r3.py` against the real seeded DB inside `db_session`'s
+rollback-wrapped transaction (proving it runs cleanly and produces
+coherent, cross-referencing rows without touching the persistent dev
+data), then applied for real via a one-off invocation (idempotency
+guarded — a re-run is a no-op once an `investment_theses` row exists).
+Confirmed after applying: `126 passed` unchanged, and the live API calls
+below return real data.
+
+### Live API verification (real seeded Postgres, all 7 new areas + kill switch)
+
+Every call below ran against a live `uvicorn` process serving the real
+Phase 8 + R3 schema with the seed data applied — not mocked, not against
+`TestClient`.
+
+**13. Morning plan**
+```
+$ curl -s http://localhost:8000/api/v1/morning-plan/latest
+{"plan_date":"2026-08-03","version_label":"FINAL","version_number":1,"completeness_status":"COMPLETE",
+ "sections":[{"section_key":"ACT_NOW","items":[{"headline":"AAPL — tactical entry near the 50-day SMA..."}]},
+             {"section_key":"DATA_PROBLEMS","items":[{"headline":"SMCI fundamentals snapshot is 9 days stale..."}]}],
+ "quality_checks":[{"check_name":"all_watchlist_instruments_have_fresh_bars","passed":true},
+                    {"check_name":"no_stale_fundamentals_beyond_7_days","passed":false,"detail":"..."}]}
+```
+
+**14. Investment recommendations & thesis detail**
+```
+$ curl -s "http://localhost:8000/api/v1/investment/recommendations?limit=5"
+{"items":[{"instrument":{"ticker":"AMD"},"status":"ACTIVE","thesis_id":"842838e0-..."}],"total":1,...}
+$ curl -s http://localhost:8000/api/v1/investment/theses/842838e0-...
+{"instrument":{"ticker":"AMD"},"status":"ACTIVE",
+ "latest_version":{"valuation_low":"150.000000","valuation_mid":"190.000000","valuation_high":"230.000000",
+                    "horizon_days_min":180,"horizon_days_max":730,"review_date":"2026-11-01",
+                    "catalysts":[{"catalyst_text":"Next-generation accelerator launch."}],
+                    "risks":[{"risk_text":"Customer concentration among a small number of hyperscalers."}]},
+ "valuation_snapshots":[{"method":"DCF","fair_value_mid":"190.000000"}],
+ "status_history":[{"from_status":null,"to_status":"ACTIVE"}]}
+```
+
+**15. Tactical recommendations** — the *same* API surface pattern as
+area 14, returning a structurally distinct shape (`lane_action`,
+`horizon_days_min/max` on the version, no thesis) for `mode=TACTICAL`
+rows only:
+```
+$ curl -s "http://localhost:8000/api/v1/tactical/recommendations?limit=5"
+{"items":[{"instrument":{"ticker":"AAPL"},"latest_version":{"lane_action":"TRADE_ENTER","confidence":"MEDIUM",
+           "horizon_days_min":1,"horizon_days_max":10,"review_date":"2026-08-08"}},
+          {"instrument":{"ticker":"PLTR"},"latest_version":{"lane_action":null,"confidence":"LOW"}}],"total":2,...}
+```
+
+**16. Earnings events** — calendar shows both the legacy Phase 8 TSLA
+event (backfilled `timing_category:"UNKNOWN"`, backward compatible) and
+the new fully-populated AMD event side by side:
+```
+$ curl -s "http://localhost:8000/api/v1/earnings-events/calendar?days=30&as_of=2026-08-03"
+[{"instrument":{"ticker":"TSLA"},"report_date":"2026-08-07","timing_category":"UNKNOWN","confidence":null},
+ {"instrument":{"ticker":"AMD"},"report_date":"2026-08-13","timing_category":"AFTER_CLOSE","confidence":"HIGH"}]
+$ curl -s http://localhost:8000/api/v1/earnings-events/{amd_id}
+{"timing_category":"AFTER_CLOSE","verified_date":"2026-08-02",
+ "consensus_snapshots":[{"consensus_eps":"1.1500","num_analysts":32}],
+ "guidance_items":[{"metric":"revenue","guidance_low":"8000000000.0000"}],
+ "actuals":[],
+ "latest_expected_move":{"selected_expected_move_pct":"6.8000"},
+ "latest_feature_snapshot":{"is_pre_event":true,"total_score":"7.20"}}
+$ curl -s http://localhost:8000/api/v1/earnings-events/{mrvl_id}/post-event-confirmation
+{"results_gate_passed":true,"guidance_gate_passed":true,"market_reaction_gate_passed":true,
+ "all_gates_passed":true,"notes":"Beat on EPS with raised forward guidance..."}
+```
+The AMD event (`report_date` in the future) has an empty `actuals` list
+and a pre-event feature snapshot only; the MRVL event (`report_date` in
+the past) has an `EarningsActual` and a `PostEarningsConfirmationSnapshot`
+instead — structurally, not just data-wise, distinct tables.
+
+**17/18. Order proposal → policy evaluation → approval → decision, full chain:**
+```
+$ curl -s -X POST http://localhost:8000/api/v1/order-proposals -d '{"recommendation_version_id":"679ed50c-...","account_id":"41d020ae-...","side":"BUY","order_type":"MARKET","quantity":"3"}'
+{"status":"DRAFT","latest_version":{"quantity":"3.00000000"}}
+
+$ curl -s -X POST http://localhost:8000/api/v1/order-proposals/{id}/policy-evaluation -d '{"requested_mode":"PAPER_MANUAL_APPROVAL","is_live":false,"confirmation":{"confirmed_at":"...","account_id":"...","environment":"paper","broker_endpoint":"https://paper-api.alpaca.markets"}}'
+{"requested_mode":"PAPER_MANUAL_APPROVAL","authorized":true,"denial_reason":null}
+$ curl -s http://localhost:8000/api/v1/order-proposals/{id}
+{"status":"EVALUATED", ...}
+
+$ curl -s -X POST http://localhost:8000/api/v1/order-approvals -d '{"order_proposal_version_id":"...","approved_by":"demo_user","expires_in_seconds":300}'
+{"status":"PENDING","integrity_hash":"ce20ebc342994367efd41526168e536071487d7c2ae85fe5157e2a0c459119cd", ...}
+
+$ curl -s -X POST http://localhost:8000/api/v1/order-approvals/{id}/approve -d '{}'
+{"status":"APPROVED","decided_at":"2026-08-06T12:52:07..."}
+
+$ curl -s -X POST http://localhost:8000/api/v1/order-approvals/{id}/invalidate -d '{"reason":"PRICE_MOVED","detail":"..."}'
+{"status":"INVALIDATED"}
+$ curl -s -X POST http://localhost:8000/api/v1/order-approvals/{id}/approve -d '{}'
+{"detail":"OrderApproval: cannot transition from INVALIDATED to APPROVED"}
+HTTP_STATUS:400
+```
+
+**Live proof of the "expired cannot approve" invariant** — a second
+approval created with `expires_in_seconds:0`, left with its DB `status`
+still `PENDING` (nothing ran an expiry sweep), then an approve attempt:
+```
+$ curl -s -X POST http://localhost:8000/api/v1/order-approvals/{id}/approve -d '{}'
+{"detail":"approval expired at 2026-08-06T12:52:31.139479-07:00 (now 2026-08-06T19:52:33.323420+00:00) — an expired approval cannot transition to APPROVED"}
+HTTP_STATUS:400
+```
+Then the explicit `expire` endpoint and a separate `reject` endpoint,
+each demonstrated once more on fresh proposals:
+```
+$ curl -s -X POST http://localhost:8000/api/v1/order-approvals/{id}/expire
+{"status":"EXPIRED"}
+$ curl -s -X POST http://localhost:8000/api/v1/order-approvals/{id}/reject
+{"status":"REJECTED"}
+```
+
+**19. Kill-switch status**
+```
+$ curl -s http://localhost:8000/api/v1/settings/kill-switch-status
+{"is_active":false,"activated_by":"seed_fixture","activated_at":"2026-07-04T06:00:00-07:00","deactivated_at":"2026-07-04T06:15:00-07:00","reason":"Manual test activation, immediately deactivated (seed placeholder)."}
+```
+
+**No live broker submission endpoint exists** — verified directly
+against the running OpenAPI schema:
+```
+$ curl -s http://localhost:8000/openapi.json | python -c "... paths containing 'broker'/'submit' ..."
+broker/submit paths: []
+```
+
+### Secrets check before commit
+
+No new secrets this revision — no credential value is ever a column,
+and `.env`/`.env.local` remain absent from `git status --porcelain`
+before staging.

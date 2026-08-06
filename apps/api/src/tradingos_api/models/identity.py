@@ -9,6 +9,8 @@ inventing ownership later against already-populated tables.
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -70,6 +72,29 @@ class RiskPolicy(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
     )
 
 
+class RiskPolicyVersion(UUIDPkMixin, CreatedAtMixin, Base):
+    """Revision Prompt R3 — append-only snapshot history paralleling the
+    singleton, mutable-in-place `risk_policy` row above. Every time
+    `PATCH /api/v1/settings/risk-policy` changes a field, this revision's
+    service layer also writes one of these rows, so "what were the limits
+    on a given past date" is answerable without `risk_policy` itself
+    needing to become a versioned/approved entity (which it deliberately
+    is not — see `RiskPolicy`'s own docstring)."""
+
+    __tablename__ = "risk_policy_versions"
+    __table_args__ = (sa.Index("ix_risk_policy_versions_lookup", "risk_policy_id", "changed_at"),)
+
+    risk_policy_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("risk_policy.id")
+    )
+    risk_budget_pct: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4))
+    max_position_pct: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4))
+    max_sector_pct: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4))
+    max_correlation: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4))
+    speculative_position_pct_cap: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4))
+    changed_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+
+
 class NotificationPreference(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
     """One row per (channel, category). MVP only ever has `IN_APP` rows
     enabled (BLOCKING_DECISIONS.md #9) — the schema doesn't assume that
@@ -109,5 +134,6 @@ __all__ = [
     "NotificationPreference",
     "ProviderConfig",
     "RiskPolicy",
+    "RiskPolicyVersion",
     "UserProfile",
 ]

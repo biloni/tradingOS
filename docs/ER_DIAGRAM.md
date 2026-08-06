@@ -6,7 +6,11 @@ one detailed Mermaid `erDiagram` per bounded context. Every table name
 below matches `apps/api/src/tradingos_api/models/*.py` and
 `docs/DATA_DICTIONARY.md` exactly. Attributes shown are the ones relevant
 to relationships and key business rules — see the data dictionary for the
-full column list of every table.
+full column list of every table. Sections 10-13 are Revision Prompt R3's
+additive bounded contexts (decision taxonomy & investment thesis,
+earnings evidence, morning plan, order authority); strategy governance's
+additions are two extra columns/rows on §7's existing tables, not a new
+diagram.
 
 ## Context map
 
@@ -391,4 +395,199 @@ erDiagram
         numeric cost_usd
     }
     audit_events { uuid id PK, string record_type, uuid ref_id, json snapshot }
+```
+
+## 10. Revision Prompt R3 — decision taxonomy & investment thesis
+
+`recommendations.mode` (new column, ADR-046) is the lane discriminator —
+an Investment and a Tactical `Recommendation` for the same instrument are
+always two separate rows, never one row wearing two hats.
+
+```mermaid
+erDiagram
+    recommendations ||--o| investment_theses : "has (mode=INVESTMENT only)"
+    recommendation_versions ||--o{ recommendation_invalidation_conditions : states
+    recommendation_versions ||--o{ recommendation_attributions : "attributed to"
+    position_lots ||--o{ recommendation_attributions : "attributed from (nullable)"
+    trades ||--o{ recommendation_attributions : "attributed from (nullable)"
+    investment_theses ||--o{ investment_thesis_versions : "has history of"
+    investment_theses ||--o{ valuation_snapshots : refreshed_by
+    investment_theses ||--o{ thesis_review_events : reviewed_by
+    investment_theses ||--o{ thesis_status_history : "transitions logged in"
+    investment_thesis_versions ||--o{ thesis_catalysts : names
+    investment_thesis_versions ||--o{ thesis_risks : names
+
+    recommendations { uuid id PK, uuid instrument_id FK, enum mode, enum status }
+    recommendation_versions {
+        uuid id PK
+        uuid recommendation_id FK
+        string lane_action
+        int horizon_days_min
+        int horizon_days_max
+        date review_date
+    }
+    recommendation_invalidation_conditions { uuid id PK, uuid recommendation_version_id FK, text condition_text }
+    recommendation_attributions {
+        uuid id PK
+        uuid recommendation_version_id FK
+        enum mode
+        uuid position_lot_id FK
+        uuid trade_id FK
+    }
+    investment_theses { uuid id PK, uuid recommendation_id FK UK, uuid instrument_id FK, enum status }
+    investment_thesis_versions {
+        uuid id PK
+        uuid investment_thesis_id FK
+        int version_number
+        numeric valuation_low
+        numeric valuation_mid
+        numeric valuation_high
+        date review_date
+    }
+    valuation_snapshots { uuid id PK, uuid investment_thesis_id FK, date as_of, string method }
+    thesis_catalysts { uuid id PK, uuid investment_thesis_version_id FK, text catalyst_text }
+    thesis_risks { uuid id PK, uuid investment_thesis_version_id FK, text risk_text }
+    thesis_review_events { uuid id PK, uuid investment_thesis_id FK, datetime reviewed_at }
+    thesis_status_history { uuid id PK, uuid investment_thesis_id FK, enum from_status, enum to_status }
+```
+
+## 11. Revision Prompt R3 — earnings evidence
+
+`earnings_feature_snapshots` (always pre-event) and
+`post_earnings_confirmation_snapshots` are two entirely separate tables —
+the structural distinction HES-4 requires, not a flag on one shared row.
+`earnings_actuals.usable_at` is the field
+`policy/earnings_evidence.py::assert_actual_not_leaked_into_pre_event_snapshot()`
+checks a pre-event snapshot's `evidence_cutoff` against via the nullable
+`linked_actual_id` FK.
+
+```mermaid
+erDiagram
+    earnings_events ||--o{ earnings_consensus_snapshots : has
+    earnings_events ||--o{ earnings_guidance_items : has
+    earnings_events ||--o{ earnings_actuals : has
+    earnings_events ||--o{ earnings_historical_gaps : "has (nullable)"
+    earnings_events ||--o{ event_expected_move_snapshots : has
+    earnings_events ||--o{ earnings_feature_snapshots : "has (pre-event only)"
+    earnings_events ||--o{ post_earnings_confirmation_snapshots : "has (post-event only)"
+    earnings_actuals |o--o{ earnings_feature_snapshots : "linked_actual_id (nullable)"
+
+    earnings_events {
+        uuid id PK
+        uuid instrument_id FK
+        date report_date
+        date verified_date
+        enum timing_category
+        enum confidence
+    }
+    earnings_actuals {
+        uuid id PK
+        uuid earnings_event_id FK
+        string metric
+        numeric actual_value
+        datetime usable_at
+    }
+    event_expected_move_snapshots {
+        uuid id PK
+        uuid earnings_event_id FK
+        datetime evidence_cutoff
+        numeric selected_expected_move_pct
+    }
+    earnings_feature_snapshots {
+        uuid id PK
+        uuid earnings_event_id FK
+        datetime evidence_cutoff
+        bool is_pre_event
+        numeric total_score
+        uuid linked_actual_id FK
+    }
+    post_earnings_confirmation_snapshots {
+        uuid id PK
+        uuid earnings_event_id FK
+        datetime evidence_cutoff
+        bool all_gates_passed
+    }
+```
+
+## 12. Revision Prompt R3 — morning plan
+
+A `MorningPlanRun` can produce more than one `MorningPlanVersion`; a
+rerun always inserts a new version row, never edits an existing one
+(ADR-047, R3's required test).
+
+```mermaid
+erDiagram
+    job_runs |o--o{ morning_plan_runs : "triggers (nullable)"
+    morning_plan_runs ||--o{ morning_plan_versions : produces
+    morning_plan_versions ||--o{ morning_plan_input_links : "built from"
+    morning_plan_versions ||--o{ morning_plan_sections : has
+    morning_plan_versions ||--o{ morning_plan_quality_checks : has
+    morning_plan_versions ||--o{ morning_plan_delivery_events : "delivered via"
+    morning_plan_sections ||--o{ morning_plan_items : contains
+    recommendation_versions |o--o{ morning_plan_items : "features (nullable)"
+
+    morning_plan_runs { uuid id PK, uuid job_run_id FK, date plan_date, enum status }
+    morning_plan_versions {
+        uuid id PK
+        uuid morning_plan_run_id FK
+        date plan_date
+        enum version_label
+        int version_number
+        enum completeness_status
+    }
+    morning_plan_sections { uuid id PK, uuid morning_plan_version_id FK, enum section_key, int display_order }
+    morning_plan_items { uuid id PK, uuid morning_plan_section_id FK, uuid recommendation_version_id FK, string headline }
+    morning_plan_quality_checks { uuid id PK, uuid morning_plan_version_id FK, string check_name, bool passed }
+    morning_plan_delivery_events { uuid id PK, uuid morning_plan_version_id FK, enum channel, enum status }
+```
+
+## 13. Revision Prompt R3 — order authority
+
+Upstream of and distinct from `orders`/`executions` (§6) — a proposal
+never becomes an `Order` in this revision ("do not add a live broker
+submission endpoint yet"). `approval_bound_fields` is the immutable
+snapshot the parent approval's `integrity_hash` is computed over
+(ADR-048); `EXPIRED`/`INVALIDATED` are terminal states for
+`order_approvals.status`.
+
+```mermaid
+erDiagram
+    recommendation_versions ||--o{ order_proposals : "proposed from"
+    accounts ||--o{ order_proposals : "for"
+    order_proposals ||--o{ order_proposal_versions : "has history of"
+    order_proposal_versions ||--o{ order_policy_evaluations : evaluated_by
+    order_proposal_versions ||--o| order_approvals : "may bind to"
+    order_approvals ||--|| approval_bound_fields : binds
+    order_approvals ||--o{ approval_invalidations : "invalidated_by (nullable)"
+    order_approvals ||--o{ broker_submission_attempts : "attempted_by (nullable, schema-only)"
+
+    order_proposals {
+        uuid id PK
+        uuid recommendation_version_id FK
+        uuid account_id FK
+        enum mode
+        enum side
+        enum status
+    }
+    order_proposal_versions {
+        uuid id PK
+        uuid order_proposal_id FK
+        int version_number
+        enum order_type
+        numeric quantity
+    }
+    order_policy_evaluations { uuid id PK, uuid order_proposal_version_id FK, enum requested_mode, bool authorized }
+    order_approvals {
+        uuid id PK
+        uuid order_proposal_version_id FK
+        datetime expires_at
+        enum status
+        string integrity_hash
+    }
+    approval_bound_fields { uuid id PK, uuid order_approval_id FK UK, enum side, numeric quantity }
+    approval_invalidations { uuid id PK, uuid order_approval_id FK, enum reason }
+    broker_submission_attempts { uuid id PK, uuid order_approval_id FK, enum environment_label, enum outcome }
+    operating_mode_history { uuid id PK, enum mode, string changed_by, datetime changed_at }
+    execution_kill_switch_events { uuid id PK, string activated_by, datetime activated_at, datetime deactivated_at }
+    broker_environment_attestations { uuid id PK, enum environment_label, uuid account_id FK, string broker_endpoint }
 ```

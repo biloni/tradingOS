@@ -432,3 +432,199 @@ class PromptTemplateStatus(StrEnum):
     DRAFT = "DRAFT"
     ACTIVE = "ACTIVE"
     RETIRED = "RETIRED"
+
+
+# ---------------------------------------------------------------------------
+# Revision Prompt R3 — decision taxonomy, investment thesis, earnings
+# evidence, morning plan, order authority, strategy governance. Additive
+# to the Phase 8 schema (ADR-050) — every enum below is brand new, no
+# existing enum type is altered or renamed.
+# ---------------------------------------------------------------------------
+
+
+class RecommendationMode(StrEnum):
+    """PROJECT_INSTRUCTIONS.md v2 amendment PM-1/PM-2 (adopted R0's
+    `policy/recommendation_modes.py`), now schema-backed per ADR-046:
+    two rows in `recommendations`/`recommendation_versions`, distinguished
+    by this column, rather than two separate tables."""
+
+    INVESTMENT = "INVESTMENT"
+    TACTICAL = "TACTICAL"
+
+
+THESIS_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "ACTIVE": {"UNDER_REVIEW", "INVALIDATED", "CLOSED"},
+    "UNDER_REVIEW": {"ACTIVE", "INVALIDATED", "CLOSED"},
+    "INVALIDATED": {"CLOSED"},
+    "CLOSED": set(),
+}
+
+
+class ThesisStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    UNDER_REVIEW = "UNDER_REVIEW"
+    INVALIDATED = "INVALIDATED"
+    CLOSED = "CLOSED"
+
+
+class EarningsTimingCategory(StrEnum):
+    """docs/HYBRID_EARNINGS_STRATEGY.md HES-2 condition 1 (verified event
+    time) needs a closed vocabulary for "when," not a free-text guess."""
+
+    BEFORE_OPEN = "BEFORE_OPEN"
+    AFTER_CLOSE = "AFTER_CLOSE"
+    DURING_MARKET = "DURING_MARKET"
+    UNKNOWN = "UNKNOWN"
+
+
+class MorningPlanVersionLabel(StrEnum):
+    """docs/MORNING_PLAN_SPEC.md — PRELIMINARY (05:45) and FINAL (06:10)
+    are distinct, separately-stored artifacts; AD_HOC is a manual
+    "run now"; CORRECTION is a later, clearly-superseding artifact that
+    never edits an already-published version in place."""
+
+    PRELIMINARY = "PRELIMINARY"
+    FINAL = "FINAL"
+    AD_HOC = "AD_HOC"
+    CORRECTION = "CORRECTION"
+
+
+MORNING_PLAN_RUN_TRANSITIONS: dict[str, set[str]] = {
+    "RUNNING": {"COMPLETED", "FAILED"},
+    "COMPLETED": set(),
+    "FAILED": set(),
+}
+
+
+class MorningPlanRunStatus(StrEnum):
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class PlanCompletenessStatus(StrEnum):
+    """docs/MORNING_PLAN_SPEC.md MDS-4 — publish INCOMPLETE rather than
+    fabricate certainty."""
+
+    COMPLETE = "COMPLETE"
+    INCOMPLETE = "INCOMPLETE"
+
+
+class MorningPlanSectionKey(StrEnum):
+    """The fixed seven-section grouping, in this exact order (R0 MDS-5)."""
+
+    ACT_NOW = "ACT_NOW"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    HOLD_MANAGE = "HOLD_MANAGE"
+    INVESTMENT_WATCH = "INVESTMENT_WATCH"
+    TACTICAL_WATCH = "TACTICAL_WATCH"
+    AVOID = "AVOID"
+    DATA_PROBLEMS = "DATA_PROBLEMS"
+
+
+class DeliveryChannel(StrEnum):
+    """Distinct from `NotificationChannel` (alerts) — this is specifically
+    which surface received a *plan* delivery, and includes `COWORK`
+    (ADR-049, read-only, off by default), which `NotificationChannel`
+    doesn't need to know about."""
+
+    IN_APP = "IN_APP"
+    COWORK = "COWORK"
+
+
+class OrderAuthorityMode(StrEnum):
+    """Schema-backed mirror of `policy.order_authority.OrderAuthorityMode`
+    (R0) — kept as a second, independent enum definition rather than a
+    shared import, since `models/enums.py` defines native Postgres enum
+    types and must not import from the `policy/` package (which is
+    deliberately DB-agnostic, pure-Python, with no SQLAlchemy dependency
+    at all — importing a model type into it, or vice versa, would blur
+    that boundary). `operating_mode_history` rows use this enum; call
+    sites are responsible for keeping the two enums' value sets in sync,
+    checked by `tests/test_policy_order_authority.py`'s exact-four-modes
+    assertion and this file's own equivalent."""
+
+    RESEARCH_ONLY = "RESEARCH_ONLY"
+    PAPER_MANUAL_APPROVAL = "PAPER_MANUAL_APPROVAL"
+    PAPER_AUTO_POLICY = "PAPER_AUTO_POLICY"
+    LIVE_CONFIRM_EACH_ORDER = "LIVE_CONFIRM_EACH_ORDER"
+
+
+class EnvironmentLabel(StrEnum):
+    RESEARCH = "RESEARCH"
+    PAPER = "PAPER"
+    LIVE = "LIVE"
+
+
+ORDER_PROPOSAL_TRANSITIONS: dict[str, set[str]] = {
+    "DRAFT": {"UNDER_EVALUATION", "WITHDRAWN"},
+    "UNDER_EVALUATION": {"EVALUATED", "WITHDRAWN"},
+    "EVALUATED": {"SUPERSEDED", "WITHDRAWN"},
+    "SUPERSEDED": set(),
+    "WITHDRAWN": set(),
+}
+
+
+class OrderProposalStatus(StrEnum):
+    """A proposal's own lifecycle, upstream of and distinct from
+    `OrderStatus` (which begins only once a proposal is approved and
+    actually submitted, docs/ORDER_AUTHORITY_MODEL.md)."""
+
+    DRAFT = "DRAFT"
+    UNDER_EVALUATION = "UNDER_EVALUATION"
+    EVALUATED = "EVALUATED"
+    SUPERSEDED = "SUPERSEDED"
+    WITHDRAWN = "WITHDRAWN"
+
+
+ORDER_APPROVAL_TRANSITIONS: dict[str, set[str]] = {
+    "PENDING": {"APPROVED", "REJECTED", "EXPIRED", "INVALIDATED"},
+    "APPROVED": {"INVALIDATED"},
+    "REJECTED": set(),
+    "EXPIRED": set(),
+    "INVALIDATED": set(),
+}
+
+
+class OrderApprovalStatus(StrEnum):
+    """`EXPIRED`/`INVALIDATED` are terminal and, once reached, can never
+    transition back to `APPROVED` — docs/ORDER_AUTHORITY_MODEL.md's
+    approval-binding section and this revision's required test ("expired
+    approval cannot return an approved state")."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    INVALIDATED = "INVALIDATED"
+
+
+class ApprovalInvalidationReason(StrEnum):
+    PRICE_MOVED = "PRICE_MOVED"
+    EXPIRED = "EXPIRED"
+    MANUAL = "MANUAL"
+    AMBIGUOUS_IDENTITY = "AMBIGUOUS_IDENTITY"
+    KILL_SWITCH = "KILL_SWITCH"
+    BOUND_FIELD_CHANGED = "BOUND_FIELD_CHANGED"
+
+
+class BrokerSubmissionOutcome(StrEnum):
+    """`SUCCEEDED` exists in the vocabulary for schema completeness, but no
+    code path in this revision ever writes it for a `LIVE` environment —
+    "do not add a live broker submission endpoint yet"."""
+
+    NOT_ATTEMPTED = "NOT_ATTEMPTED"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    DENIED = "DENIED"
+
+
+class StrategyFamily(StrEnum):
+    """Classifies an existing `strategy_definitions` row by which decision
+    workflow it governs — additive column, not a new table, since a
+    strategy definition already has exactly one family for its lifetime."""
+
+    INVESTMENT_QUALITY = "INVESTMENT_QUALITY"
+    EARNINGS_PRE_EVENT = "EARNINGS_PRE_EVENT"
+    EARNINGS_POST_CONFIRMATION = "EARNINGS_POST_CONFIRMATION"
+    GENERIC = "GENERIC"

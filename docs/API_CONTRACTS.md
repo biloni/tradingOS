@@ -1,7 +1,11 @@
 # API Contracts
 
 **Phase 8 (current)** replaced the entire Phase 1-7 API surface with a
-versioned, 12-area REST API against the new domain model (ADR-043/044). The
+versioned, 12-area REST API against the new domain model (ADR-043/044).
+**Revision Prompt R3** additively extends this to 19 areas (13-19 below) —
+decision taxonomy, investment thesis, earnings evidence, morning plan,
+and order authority — with no removal or reshaping of any of the
+original 12 (verified by `tests/test_r3_backward_compatibility.py`). The
 Phase 1-7 contracts (`/api/v1/symbols`, `/api/v1/paper-orders`,
 `/api/v1/ask`, `/api/v1/backtests` (old shape), `/api/v1/strategy-versions`
 (old shape)) are **retired** — their routers/schemas/services were deleted,
@@ -244,6 +248,100 @@ the self-consistency reconciliation check.
   router yet, so `can_submit_orders` reflects configuration, not an
   enforced authorization decision (see docs/ORDER_AUTHORITY_MODEL.md's
   traceability table for when it becomes one).
+
+## 13. Morning plan (`routers/morning_plan.py`) — **added Revision Prompt R3**
+
+No plan-generation logic exists yet — these endpoints are the manifest/
+audit-trail contract a future scheduler job writes into and every
+dashboard client reads from (ADR-047).
+
+- `GET /api/v1/morning-plan/latest` — the most recent `MorningPlanVersion`
+  (by `plan_date` then `version_number`), with its sections/items/quality-
+  checks/delivery-events nested.
+- `GET /api/v1/morning-plan/versions?plan_date=` — every version ever
+  written for a date, newest first (`Page[...]`) — since a rerun always
+  adds a row, this is the full revision history for that day.
+- `GET /api/v1/morning-plan/versions/{version_id}/quality-status` — the
+  per-check detail behind a version's `completeness_status`.
+- `POST /api/v1/morning-plan/rerun` — records a new `MorningPlanRun` +
+  `MorningPlanVersion` for a `plan_date`; **never** edits or replaces an
+  existing version. Starts empty/`INCOMPLETE` with one quality-check row
+  explaining why (no generation logic runs here). Idempotent via an
+  optional `idempotency_key`.
+
+## 14. Investment-lane recommendations & thesis (`routers/investment.py`) — **added R3**
+
+- `GET /api/v1/investment/recommendations` / `GET .../recommendations/{id}`
+  — every `Recommendation` with `mode == INVESTMENT` (ADR-046); 404s on a
+  `TACTICAL` id rather than returning it.
+- `GET /api/v1/investment/theses/{thesis_id}` — the full thesis detail:
+  latest `InvestmentThesisVersion` (valuation range, thesis text, horizon,
+  review date, catalysts, risks), all `ValuationSnapshot`s, and full
+  `ThesisStatusHistory`.
+
+## 15. Tactical-lane recommendations (`routers/tactical.py`) — **added R3**
+
+- `GET /api/v1/tactical/recommendations` / `GET .../recommendations/{id}`
+  — every `Recommendation` with `mode == TACTICAL`; 404s on an
+  `INVESTMENT` id. Never shares a response shape with area 14 (R3's
+  required test: "investment and tactical recommendations cannot be
+  confused").
+
+## 16. Earnings events (`routers/earnings.py`) — **added R3**
+
+- `GET /api/v1/earnings-events/calendar?days=&as_of=` — every earnings
+  event with `report_date` in `[as_of, as_of + days]` (default `as_of`
+  today, `days` 14).
+- `GET /api/v1/earnings-events/{id}` — verified/exchange-local date,
+  timing category, confidence, consensus snapshots, guidance items,
+  actuals, latest expected-move snapshot, latest (always pre-event)
+  feature snapshot.
+- `GET /api/v1/earnings-events/{id}/post-event-confirmation` — the latest
+  `PostEarningsConfirmationSnapshot` (`404` if none exists yet) — a
+  structurally separate table from the pre-event feature snapshot, not a
+  flag on the same row (HES-4).
+
+## 17. Order proposals (`routers/order_authority.py`) — **added R3**
+
+Upstream of and distinct from area 6's `orders` — a proposal never
+becomes an `Order` in this revision ("do not add a live broker submission
+endpoint yet").
+
+- `POST /api/v1/order-proposals` — creates a `DRAFT` proposal from a
+  `recommendation_version_id` + order terms. Idempotent via an optional
+  `idempotency_key`.
+- `GET /api/v1/order-proposals/{id}`.
+- `POST /api/v1/order-proposals/{id}/policy-evaluation` — runs
+  `policy.order_authority.assert_order_authorized()` (R0) for the
+  proposal's latest version and records the outcome (win or lose) as an
+  append-only `OrderPolicyEvaluation`; advances the proposal
+  `DRAFT -> UNDER_EVALUATION -> EVALUATED`. A denial is a completed
+  evaluation (`authorized: false`), not a `4xx`.
+
+## 18. Order approvals (`routers/order_authority.py`) — **added R3**
+
+- `POST /api/v1/order-approvals` — from an `EVALUATED` proposal version
+  with an `authorized: true` policy evaluation, binds an immutable
+  `ApprovalBoundFields` snapshot and computes `integrity_hash`
+  (`services/order_authority.py::compute_bound_fields_hash()`, ADR-048).
+- `GET /api/v1/order-approvals/{id}`.
+- `POST /api/v1/order-approvals/{id}/approve` — `400` if the transition
+  is illegal **or** `expires_at` has already passed, even if nothing has
+  marked the row `EXPIRED` yet (R3's required test).
+- `POST /api/v1/order-approvals/{id}/reject`.
+- `POST /api/v1/order-approvals/{id}/expire` — administrative/sweep
+  endpoint, legal from `PENDING` regardless of the wall clock.
+- `POST /api/v1/order-approvals/{id}/invalidate` — body: `reason`
+  (`ApprovalInvalidationReason`), optional `detail`; writes an append-only
+  `ApprovalInvalidation` row.
+
+## 19. Operating mode & kill switch (`routers/settings.py`) — **extended R3**
+
+- `GET /api/v1/settings/operating-mode` — unchanged from R2.
+- `GET /api/v1/settings/kill-switch-status` — **added R3**. The most
+  recent `ExecutionKillSwitchEvent`; `is_active` iff it has no
+  `deactivated_at` yet. No event row at all means the switch has never
+  been activated (`is_active: false`).
 
 ## Authorization assumptions
 
