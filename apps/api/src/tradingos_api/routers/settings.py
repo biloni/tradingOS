@@ -13,14 +13,45 @@ from tradingos_api.core.dependencies import get_current_user_id
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import ProviderKind
 from tradingos_api.models.identity import InvestmentProfile, ProviderConfig, RiskPolicy
+from tradingos_api.policy.order_authority import OrderAuthorityMode
 from tradingos_api.schemas.settings import (
     InvestmentProfileResponse,
+    OperatingModeResponse,
     ProviderStatusResponse,
     RiskPolicyResponse,
     RiskPolicyUpdateRequest,
 )
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+
+_ENVIRONMENT_LABEL_BY_MODE: dict[OrderAuthorityMode, str] = {
+    OrderAuthorityMode.RESEARCH_ONLY: "RESEARCH",
+    OrderAuthorityMode.PAPER_MANUAL_APPROVAL: "PAPER",
+    OrderAuthorityMode.PAPER_AUTO_POLICY: "PAPER",
+    OrderAuthorityMode.LIVE_CONFIRM_EACH_ORDER: "LIVE",
+}
+
+
+@router.get("/operating-mode", response_model=OperatingModeResponse)
+def get_operating_mode() -> OperatingModeResponse:
+    """Revision Prompt R2 scaffold — the one server-side source of truth
+    the frontend's environment banner and operating-mode status component
+    read (PROJECT_INSTRUCTIONS.md's v2 amendment: "whose display value
+    comes from the API, not client storage"). Reports configuration only;
+    `assert_order_authorized()` (policy/order_authority.py, R0) is not
+    wired into any order-mutating router yet, so `can_submit_orders` here
+    is informational, not an active gate — see
+    docs/ORDER_AUTHORITY_MODEL.md for the traceability to when it becomes
+    one."""
+    try:
+        mode = OrderAuthorityMode(get_settings().operating_mode)
+    except ValueError:
+        mode = OrderAuthorityMode.RESEARCH_ONLY
+    return OperatingModeResponse(
+        mode=mode.value,
+        environment_label=_ENVIRONMENT_LABEL_BY_MODE[mode],
+        can_submit_orders=mode is not OrderAuthorityMode.RESEARCH_ONLY,
+    )
 
 
 @router.get("/providers", response_model=list[ProviderStatusResponse])

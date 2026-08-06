@@ -1,11 +1,96 @@
 # Status
 
-**Current phase:** Phase 8 (shipped), plus Revision Prompt R0 — a binding
-policy amendment (PROJECT_INSTRUCTIONS.md's new "TradingOS v2 Decision and
-Execution Amendment") layered on top, documentation- and policy-check-only
-per R0's own instruction ("do not implement future provider, scoring,
-dashboard, or broker features in this revision").
-**Last updated:** 2026-08-05
+**Current phase:** Phase 8 (shipped), Revision Prompt R0 (binding policy
+amendment, shipped), Revision Prompt R1 (product/architecture delta
+review, approved by proceeding to R2), and Revision Prompt R2 (scaffold/
+navigation compatibility patch, shipped — `apps/web` route/nav/UI-
+primitive scaffolding only, no provider calls, strategy calculations,
+recommendations, scheduling, or broker submission).
+**Last updated:** 2026-08-06
+
+## Revision Prompt R2 (2026-08-06) — scaffold and navigation compatibility patch
+
+**No "Prompt 2" implementation existed to inspect** — docs/TASKS.md's
+Prompt 2-17 roadmap (dual decision-lane schema migration, etc.) is still
+entirely unimplemented as of this pass; R2's own scope (frontend scaffold
++ one minimal read-only backend endpoint) doesn't depend on it, so this
+was a documented gap, not a blocker.
+
+- **Backend (minimal, additive):** `GET /api/v1/settings/operating-mode`
+  (`routers/settings.py`) — a config passthrough
+  (`Settings.operating_mode`, default `RESEARCH_ONLY`) reporting the
+  current `OrderAuthorityMode` and a derived RESEARCH/PAPER/LIVE
+  `environment_label`. This is the one and only source of truth the
+  frontend's environment banner and operating-mode status component
+  read — never client storage. Reporting only; not wired into any
+  order-mutating router. 4 new tests; OpenAPI snapshot updated.
+- **Frontend — new routes** (all synthetic placeholders, `apps/web/app/`):
+  `/` (Morning Dashboard, now the default landing route, replacing the
+  old Phase 1-7 Dashboard which moved to `/legacy-dashboard` rather than
+  being deleted), `/investment`, `/tactical`, `/earnings`, `/approvals`,
+  `/orders`, `/journal`, `/performance`, `/watchlists`, `/alerts`,
+  `/agent-review`, `/settings`. Every pre-existing route (`/symbols`,
+  `/portfolio`, `/ask`, `/backtests`, `/strategy-versions`) is untouched.
+- **Frontend — persistent environment banner** (`EnvironmentBanner.tsx`,
+  mounted in `app/layout.tsx`): shows RESEARCH/PAPER/LIVE from the new
+  API endpoint, in every state (loading/success/error — never
+  unmounts), with no code path that reads a URL/query parameter at all
+  (proven by a structural source-inspection test, not just absence of a
+  bug today).
+- **Frontend — nonfunctional operating-mode status** (`OperatingModeStatus.tsx`):
+  read-only readout of the exact mode string, from the API.
+- **Frontend — 8 new reusable UI primitives** (`components/ui/`):
+  `DecisionLaneBadge`, `DataFreshnessBadge`, `EvidenceCompletenessIndicator`,
+  `ApprovalRequiredBadge`, `EventRiskWarning`, `IncompletePlanBanner`,
+  `SourceTimestamp`, `OrderStateTimeline` — plus a shared `PageState`
+  component covering all 7 required non-happy-path states (empty,
+  loading, stale, disconnected, permission, market-closed, no-action).
+  Every primitive conveys meaning through text, not color alone
+  (`__tests__/ui-primitives-a11y.test.tsx`).
+- **No submission behavior added** — no new page calls any order-
+  mutating endpoint; verified structurally (no new `apiPost` call
+  targets `/orders` anywhere in this revision's diff).
+- **Tests:** 53 frontend tests (up from 20), 100 backend tests (up from
+  96) — all passing. `pnpm typecheck`/`pnpm lint` and `ruff`/`mypy`
+  clean.
+- **Docs:** docs/UX_MAP.md reconciled (R1's placeholder paths vs. R2's
+  actual scaffolded paths, itemized), docs/API_CONTRACTS.md (new
+  endpoint), this entry.
+
+## Revision Prompt R1 (2026-08-05) — product and architecture delta review, approved
+
+Documents-only, per R1's own instruction ("do not implement application
+code ... stop for approval without changing code"). Delivers:
+
+- New: docs/MORNING_PLAN_SPEC.md, docs/HYBRID_EARNINGS_STRATEGY.md,
+  docs/ORDER_AUTHORITY_MODEL.md.
+- Updated: docs/PRODUCT_REQUIREMENTS.md (FR-51–FR-61 + new AC-09–AC-26),
+  docs/ARCHITECTURE.md (R1 trust-boundary diagram + all 10 architecture
+  questions answered), docs/UX_MAP.md (Morning Decision Dashboard rename,
+  new Orders page, operating-mode selector, lane badges, buy-and-hold-vs-
+  tactical explainer, earnings-workflow callout), docs/MVP_PLAN.md
+  (explicit paper-release vs. live-confirmed-release split).
+- docs/DECISIONS.md — ADR-046 (dual decision lanes: two rows + a `mode`
+  column, not two tables), ADR-047 (scheduler owns job lineage via a new
+  `MorningPlanRun` entity), ADR-048 (order approval binds an immutable
+  snapshot, not the live order row), ADR-049 (Cowork delivery is
+  one-way/read-only/post-publication only).
+- docs/RISK_REGISTER.md (R-11–R-15) and docs/THREAT_MODEL.md (boundaries
+  5-6: Cowork delivery, Order Authority Gate/broker-adapter isolation).
+- docs/BLOCKING_DECISIONS.md #11 (new) — **one confirmed conflict**: R1's
+  recommended 15%/25% max-position/max-sector defaults vs. Phase 8's
+  already-shipped, already-seeded 20%/40% `RiskPolicy` defaults.
+  Recommended resolution is backward-compatible (update the seed/model
+  default values when the sizing gates are actually wired, Prompt 6 — no
+  migration needed, the column is already user-configurable) and is not
+  acted on pending your confirmation.
+- Full per-requirement traceability to a recommended Prompt 2–17
+  roadmap and a planned acceptance-test id, embedded in each affected
+  document rather than duplicated in one master table.
+
+**Nothing is implemented.** No migration, model, router, or test changed.
+Waiting for explicit approval before any numbered implementation prompt
+begins.
 
 ## Revision Prompt R0 (2026-08-05) — v2 Decision and Execution Amendment
 

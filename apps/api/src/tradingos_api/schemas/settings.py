@@ -49,3 +49,17 @@ class RiskPolicyUpdateRequest(BaseModel):
     max_sector_pct: Decimal | None = None
     max_correlation: Decimal | None = None
     speculative_position_pct_cap: Decimal | None = None
+
+
+class OperatingModeResponse(BaseModel):
+    """Revision Prompt R2 scaffold. `mode` is one of
+    `models.enums`-equivalent `policy.order_authority.OrderAuthorityMode`'s
+    four values; `environment_label` is the coarser RESEARCH/PAPER/LIVE
+    band PROJECT_INSTRUCTIONS.md's environment-banner requirement names.
+    This endpoint reports configuration only — it does not gate anything
+    yet (`assert_order_authorized()` is not wired into any router this
+    pass, docs/ORDER_AUTHORITY_MODEL.md's traceability table)."""
+
+    mode: str
+    environment_label: str
+    can_submit_orders: bool

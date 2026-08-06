@@ -231,6 +231,19 @@ the self-consistency reconciliation check.
   the numeric risk limits (`risk_budget_pct`, `max_position_pct`,
   `max_sector_pct`, `max_correlation`, `speculative_position_pct_cap`).
   Every field in the PATCH body is optional — only provided fields change.
+- `GET /api/v1/settings/operating-mode` — **added Revision Prompt R2**.
+  `{"mode": "RESEARCH_ONLY"|"PAPER_MANUAL_APPROVAL"|"PAPER_AUTO_POLICY"|
+  "LIVE_CONFIRM_EACH_ORDER", "environment_label": "RESEARCH"|"PAPER"|
+  "LIVE", "can_submit_orders": bool}`. This is the one and only source of
+  truth `apps/web`'s environment banner and operating-mode status
+  component read (PROJECT_INSTRUCTIONS.md's v2 amendment — the display
+  value must come from the API, never client storage). It is a config
+  passthrough (`Settings.operating_mode`, `core/config.py`) — reporting
+  only, not an active gate: `assert_order_authorized()`
+  (`policy/order_authority.py`, R0) is not wired into any order-mutating
+  router yet, so `can_submit_orders` reflects configuration, not an
+  enforced authorization decision (see docs/ORDER_AUTHORITY_MODEL.md's
+  traceability table for when it becomes one).
 
 ## Authorization assumptions
 

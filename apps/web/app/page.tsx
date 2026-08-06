@@ -1,115 +1,113 @@
-"use client";
-
-import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
-import { getHealth } from "@/lib/api/health";
-import { usePortfolio } from "@/lib/hooks/usePortfolio";
+import { ScaffoldNotice } from "@/components/layout/ScaffoldNotice";
+import { OperatingModeStatus } from "@/components/layout/OperatingModeStatus";
+import { IncompletePlanBanner } from "@/components/ui/IncompletePlanBanner";
+import { DecisionLaneBadge } from "@/components/ui/DecisionLaneBadge";
+import { DataFreshnessBadge } from "@/components/ui/DataFreshnessBadge";
+import { ApprovalRequiredBadge } from "@/components/ui/ApprovalRequiredBadge";
+import { EvidenceCompletenessIndicator } from "@/components/ui/EvidenceCompletenessIndicator";
+import { EventRiskWarning } from "@/components/ui/EventRiskWarning";
+import { SourceTimestamp } from "@/components/ui/SourceTimestamp";
+import { PageState } from "@/components/ui/PageState";
 import { Card } from "@/components/ui/Card";
-import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
-import { ErrorBanner } from "@/components/ui/ErrorBanner";
 
-const QUICK_LINKS = [
-  {
-    href: "/symbols",
-    label: "Symbols & Charts",
-    description: "Browse tracked symbols and price/indicator history.",
-  },
-  {
-    href: "/portfolio",
-    label: "Paper Portfolio",
-    description: "Holdings, reconciliation, and the propose→confirm order flow.",
-  },
-  {
-    href: "/ask",
-    label: "Ask",
-    description: "Natural-language questions grounded in the deterministic data model.",
-  },
-  {
-    href: "/backtests",
-    label: "Backtests",
-    description: "Run a historical replay of the scoring engine.",
-  },
-  {
-    href: "/strategy-versions",
-    label: "Strategy Versions",
-    description: "Propose, compare, and approve scoring-config changes.",
-  },
-];
+/**
+ * The default landing route (docs/MORNING_PLAN_SPEC.md, FR-54). Fixed
+ * seven-section grouping, rendered with synthetic example entries only —
+ * no scheduler, no plan-assembly service, no recommendation data exists
+ * yet (Revision Prompt R2 is scaffold/navigation only).
+ */
+const SECTIONS = [
+  { key: "act-now", title: "Act Now", cap: 3 },
+  { key: "approval-required", title: "Approval Required", cap: undefined },
+  { key: "hold-manage", title: "Hold / Manage", cap: undefined },
+  { key: "investment-watch", title: "Investment Watch", cap: undefined },
+  { key: "tactical-watch", title: "Tactical Watch", cap: undefined },
+  { key: "avoid", title: "Avoid", cap: undefined },
+  { key: "data-problems", title: "Data Problems", cap: undefined },
+] as const;
 
-function formatUsd(value: string): string {
-  return `$${Number(value).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-xs uppercase text-zinc-500 dark:text-zinc-400">{label}</div>
-      <div className="text-xl font-semibold text-black dark:text-zinc-50">{value}</div>
-    </div>
-  );
-}
-
-export default function DashboardPage() {
-  const health = useQuery({ queryKey: ["health"], queryFn: getHealth, retry: false });
-  const portfolio = usePortfolio();
-
+export default function MorningDashboardPage() {
   return (
     <div className="flex flex-col gap-6 p-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-black dark:text-zinc-50">
-          Dashboard
+          Morning Decision Dashboard
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-          Decision-support for 2&ndash;10 day swing trades. Research and paper-trading mode
-          only &mdash; no live orders are placed.
+          One official plan per U.S. trading day (docs/MORNING_PLAN_SPEC.md). Target: 06:10
+          America/Los_Angeles, 20 minutes before the open.
         </p>
       </div>
 
-      <div
-        data-testid="api-status"
-        className="rounded-lg border border-zinc-200 bg-white px-4 py-3 text-sm dark:border-zinc-800 dark:bg-zinc-900"
-      >
-        {health.isLoading && <span className="text-zinc-500">Checking API status&hellip;</span>}
-        {health.error && (
-          <span className="text-red-600 dark:text-red-400">
-            API unreachable: {(health.error as Error).message}
-          </span>
-        )}
-        {health.data && (
-          <span className="text-emerald-600 dark:text-emerald-400">
-            API status: {health.data.status} (as of {health.data.time_utc})
-          </span>
-        )}
-      </div>
+      <ScaffoldNotice>
+        No scheduler, plan-assembly service, or recommendation data exists yet — every card
+        below is a synthetic example of the target layout.
+      </ScaffoldNotice>
 
-      <Card>
-        <h2 className="mb-4 text-lg font-medium text-black dark:text-zinc-50">
-          Portfolio snapshot
-        </h2>
-        {portfolio.isLoading && <LoadingSpinner label="Loading portfolio…" />}
-        {portfolio.error && <ErrorBanner error={portfolio.error} />}
-        {portfolio.data && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Metric label="Cash" value={formatUsd(portfolio.data.cash_usd)} />
-            <Metric label="Positions" value={String(portfolio.data.positions.length)} />
-            <Metric label="Total equity" value={formatUsd(portfolio.data.total_equity)} />
-          </div>
-        )}
+      <Card className="flex flex-wrap items-center gap-4">
+        <SourceTimestamp
+          source="Synthetic example"
+          timestamp="2026-08-06T06:10:00-07:00"
+          freshness="STALE"
+        />
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">Version: FINAL (example)</span>
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">Next refresh: 05:45 tomorrow</span>
+        <OperatingModeStatus />
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {QUICK_LINKS.map((link) => (
-          <Link key={link.href} href={link.href}>
-            <Card className="h-full transition-colors hover:border-zinc-400 dark:hover:border-zinc-600">
-              <h3 className="font-medium text-black dark:text-zinc-50">{link.label}</h3>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{link.description}</p>
-            </Card>
-          </Link>
-        ))}
-      </div>
+      <IncompletePlanBanner
+        reasons={["Example: fundamentals vendor unavailable for 2 of 48 watchlist names"]}
+      />
+
+      {SECTIONS.map((section) => (
+        <Card key={section.key}>
+          <h2 className="mb-3 text-lg font-medium text-black dark:text-zinc-50">
+            {section.title}
+            {section.cap ? (
+              <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">
+                (max {section.cap} shown)
+              </span>
+            ) : null}
+          </h2>
+
+          {section.key === "act-now" && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+                <span className="font-medium">AAPL (example)</span>
+                <DecisionLaneBadge lane="TACTICAL" />
+                <DataFreshnessBadge status="FRESH" asOf="06:08" />
+                <EvidenceCompletenessIndicator available={5} total={5} />
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+                <span className="font-medium">MSFT (example)</span>
+                <DecisionLaneBadge lane="INVESTMENT" />
+                <ApprovalRequiredBadge expiresAt="06:40" />
+              </div>
+            </div>
+          )}
+
+          {section.key === "approval-required" && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+              <span className="font-medium">NVDA (example)</span>
+              <DecisionLaneBadge lane="TACTICAL" />
+              <ApprovalRequiredBadge />
+              <EventRiskWarning eventLabel="Earnings in 3 trading days (example)" />
+            </div>
+          )}
+
+          {section.key === "data-problems" && (
+            <PageState
+              variant="disconnected"
+              title="Example: fundamentals vendor unreachable"
+              description="Affected names route here instead of being silently dropped or shown as complete."
+            />
+          )}
+
+          {!["act-now", "approval-required", "data-problems"].includes(section.key) && (
+            <PageState variant="no-action" title="No example entries for this section" />
+          )}
+        </Card>
+      ))}
     </div>
   );
 }

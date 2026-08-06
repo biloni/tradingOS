@@ -269,16 +269,69 @@ docs/STATUS.md for the full summary.
       tests) passing
 - [x] R0 checkpoint commit
 
-## Phase 9+ — not yet planned
+## Revision Prompt R1 (2026-08-05) — product and architecture delta review
 
-Not yet done, explicitly out of scope for Phase 8 and R0 alike:
+Documents-only, no code changed. Approved (Revision Prompt R2 proceeded
+to build against it). See docs/STATUS.md for the full summary.
+
+- [x] docs/MORNING_PLAN_SPEC.md (new)
+- [x] docs/HYBRID_EARNINGS_STRATEGY.md (new)
+- [x] docs/ORDER_AUTHORITY_MODEL.md (new)
+- [x] docs/PRODUCT_REQUIREMENTS.md — FR-51–FR-61, AC-09–AC-26, traceability
+- [x] docs/ARCHITECTURE.md — R1 trust-boundary diagram, 10 architecture
+      questions answered
+- [x] docs/UX_MAP.md — Morning Decision Dashboard, Orders page,
+      operating-mode selector, lane badges, earnings callout
+- [x] docs/MVP_PLAN.md — paper release vs. live-confirmed release split
+- [x] docs/DECISIONS.md — ADR-046, ADR-047, ADR-048, ADR-049
+- [x] docs/RISK_REGISTER.md — R-11–R-15
+- [x] docs/THREAT_MODEL.md — boundaries 5 (Cowork) and 6 (Order Authority
+      Gate/broker-adapter isolation)
+- [x] docs/BLOCKING_DECISIONS.md #11 — max-position/max-sector default
+      conflict recorded, not acted on
+- [x] **Approved** — Revision Prompt R2 proceeded to build against this
+      delta.
+
+## Revision Prompt R2 (2026-08-06) — scaffold and navigation compatibility patch
+
+`apps/web` route/navigation/UI-primitive scaffolding, plus one minimal
+read-only backend endpoint. No provider calls, strategy calculations,
+recommendations, scheduling, or broker submission. See docs/STATUS.md
+for the full summary. Note: no "Prompt 2" implementation existed to
+inspect — the Prompt 2-17 roadmap below remains entirely unbuilt.
+
+- [x] `GET /api/v1/settings/operating-mode` (new, backend) + 4 tests +
+      OpenAPI snapshot + API_CONTRACTS.md entry
+- [x] New routes: `/` (Morning Dashboard, now default landing route),
+      `/investment`, `/tactical`, `/earnings`, `/approvals`, `/orders`,
+      `/journal`, `/performance`, `/watchlists`, `/alerts`,
+      `/agent-review`, `/settings` — synthetic placeholders only
+- [x] Old Phase 1-7 Dashboard relocated to `/legacy-dashboard` (kept, not
+      deleted); every other pre-existing route untouched
+- [x] Persistent `EnvironmentBanner` (RESEARCH/PAPER/LIVE, from the API,
+      structurally provable it can't be hidden by a query parameter)
+- [x] Nonfunctional `OperatingModeStatus` (exact mode string, from the API)
+- [x] 8 new reusable UI primitives + a 7-variant `PageState` component,
+      all text-accessible (not color-only)
+- [x] 53 frontend tests (up from 20), 100 backend tests (up from 96) —
+      all passing; `pnpm typecheck`/`pnpm lint`, `ruff`/`mypy` clean
+- [x] docs/UX_MAP.md route-naming reconciliation (R1 placeholder paths
+      vs. R2 actual scaffolded paths)
+- [x] Desktop + mobile shell demonstrated
+- [x] R2 checkpoint commit
+
+## Phase 9+ / Prompt 2–17 — not yet planned or approved
+
+Not yet done, explicitly out of scope for Phase 8, R0, R1, and R2 alike:
 re-implementing scoring/backtest-execution/LLM tool-use orchestration
 against the new schema; wiring up real Anthropic/Alpaca calls ("do not
-integrate external providers yet"); rebuilding `apps/web` against the new
-API (the existing frontend still targets the retired Phase 1-7 contracts
-and will not build against the current backend); wiring
-`assert_order_authorized()` into `routers/orders.py`; a real `mode`
-column on `recommendations`; the morning-plan generator; the earnings-
-strategy engine; the kill switch's actual control surface. No phase
-number is assigned to this work yet — it would be proposed and confirmed
-before starting, following the same pattern as every prior phase.
+integrate external providers yet"); wiring `assert_order_authorized()`
+into `routers/orders.py`; a real `mode` column on `recommendations`
+(ADR-046); the `MorningPlanRun` scheduler/lineage model (ADR-047); the
+`OrderApproval` snapshot model (ADR-048); the Cowork delivery integration
+(ADR-049); the earnings-strategy engine; the kill switch's actual control
+surface; a functional operating-mode selector; a live broker adapter
+(Prompt 17). docs/ORDER_AUTHORITY_MODEL.md, docs/MORNING_PLAN_SPEC.md,
+and docs/HYBRID_EARNINGS_STRATEGY.md each carry a recommended Prompt
+2–17 mapping for this work, but no prompt number is approved to start
+until explicitly confirmed.

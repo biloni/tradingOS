@@ -15,6 +15,15 @@ class Settings(BaseSettings):
 
     environment: str = "local"
 
+    # Revision Prompt R2 scaffold: the server-side source of truth the
+    # frontend's environment banner / operating-mode status component
+    # reads (never client storage, per PROJECT_INSTRUCTIONS.md's v2
+    # amendment OA-*). Deliberately just a config passthrough this pass —
+    # `assert_order_authorized()` (policy/order_authority.py, R0) is not
+    # yet wired to any router, so this value does not yet gate anything;
+    # it only reports what mode the deployment is configured for.
+    operating_mode: str = "RESEARCH_ONLY"
+
     database_url: str = "postgresql+psycopg://tradingos_app:@localhost:5432/tradingos"
 
     alpaca_api_key_id: str | None = None

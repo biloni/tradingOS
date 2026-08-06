@@ -30,6 +30,7 @@
   ["/api/v1/recommendations/committee-sessions/{session_id}", ["get"]],
   ["/api/v1/recommendations/{recommendation_id}", ["get"]],
   ["/api/v1/settings/investment-profile", ["get"]],
+  ["/api/v1/settings/operating-mode", ["get"]],
   ["/api/v1/settings/providers", ["get"]],
   ["/api/v1/settings/risk-policy", ["get", "patch"]],
   ["/api/v1/watchlists", ["get"]],

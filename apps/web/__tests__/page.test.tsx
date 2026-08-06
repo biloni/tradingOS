@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import DashboardPage from "@/app/page";
+import MorningDashboardPage from "@/app/page";
 
 function renderWithQueryClient(ui: React.ReactElement) {
   const queryClient = new QueryClient({
@@ -10,63 +10,68 @@ function renderWithQueryClient(ui: React.ReactElement) {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
-function mockFetchByUrl(responses: Record<string, unknown>) {
+function mockOperatingMode() {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((url: string) => {
-      const path = url.replace(/^https?:\/\/[^/]+/, "");
-      const body = responses[path];
-      if (body === undefined) {
-        return Promise.reject(new Error(`No mock response for ${path}`));
+      if (url.includes("/api/v1/settings/operating-mode")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              mode: "RESEARCH_ONLY",
+              environment_label: "RESEARCH",
+              can_submit_orders: false,
+            }),
+        });
       }
-      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+      return Promise.reject(new Error(`No mock response for ${url}`));
     }),
   );
 }
 
-describe("DashboardPage", () => {
+describe("MorningDashboardPage", () => {
   beforeEach(() => {
-    mockFetchByUrl({
-      "/health": { status: "ok", time_utc: "2026-08-03T00:00:00+00:00" },
-      "/api/v1/portfolio": {
-        cash_usd: "9245.080000",
-        positions: [{ ticker: "SPY", quantity: 1, avg_entry_price: "754.920000", current_price: "747.030000", market_value: "747.030000", unrealized_pl: "-7.890000" }],
-        total_market_value: "747.030000",
-        total_equity: "9992.110000",
-      },
-    });
+    mockOperatingMode();
   });
 
-  it("renders the dashboard heading and reports healthy API status", async () => {
-    renderWithQueryClient(<DashboardPage />);
-
-    expect(screen.getByText("Dashboard")).toBeInTheDocument();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("api-status")).toHaveTextContent("API status: ok");
-    });
+  it("renders the Morning Decision Dashboard heading", () => {
+    renderWithQueryClient(<MorningDashboardPage />);
+    expect(screen.getByText("Morning Decision Dashboard")).toBeInTheDocument();
   });
 
-  it("renders the portfolio snapshot", async () => {
-    renderWithQueryClient(<DashboardPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText("$9,992.11")).toBeInTheDocument();
-    });
-    expect(screen.getByText("$9,245.08")).toBeInTheDocument();
-  });
-
-  it("links to every other section", () => {
-    renderWithQueryClient(<DashboardPage />);
-
-    for (const label of [
-      "Symbols & Charts",
-      "Paper Portfolio",
-      "Ask",
-      "Backtests",
-      "Strategy Versions",
-    ]) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+  it("renders all seven fixed sections in order", () => {
+    renderWithQueryClient(<MorningDashboardPage />);
+    const expected = [
+      "Act Now",
+      "Approval Required",
+      "Hold / Manage",
+      "Investment Watch",
+      "Tactical Watch",
+      "Avoid",
+      "Data Problems",
+    ];
+    const headings = screen.getAllByRole("heading", { level: 2 }).map((el) => el.textContent);
+    for (const label of expected) {
+      expect(headings.some((h) => h?.startsWith(label))).toBe(true);
     }
+  });
+
+  it("shows the scaffold notice", () => {
+    renderWithQueryClient(<MorningDashboardPage />);
+    expect(screen.getByText(/Scaffold page \(Revision Prompt R2\)/)).toBeInTheDocument();
+  });
+
+  it("shows the incomplete-plan banner as an alert", () => {
+    renderWithQueryClient(<MorningDashboardPage />);
+    expect(screen.getByText("This plan is INCOMPLETE").closest('[role="alert"]')).not.toBeNull();
+  });
+
+  it("renders the operating-mode status from the API", async () => {
+    renderWithQueryClient(<MorningDashboardPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("operating-mode-status")).toHaveTextContent("Research only");
+    });
   });
 });
