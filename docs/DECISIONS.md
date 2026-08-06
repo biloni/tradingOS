@@ -1393,3 +1393,199 @@ PROJECT_INSTRUCTIONS.md's new section first and reconcile its design
 against every applicable rule before writing code (the same
 architecture-approval-gate working-method rule that already governs
 vendor/security-boundary changes).
+
+---
+
+## ADR-046: Investment and Tactical recommendations are always two separate records, never one row with a mode flag consumers must branch on
+
+**Context.** Revision Prompt R1's PRODUCT MODES delta requires a symbol
+to be able to carry both a 3-24 month investment thesis and a 1-10 day
+tactical setup simultaneously, with separate identity, risk budget,
+horizon, invalidation condition, and accounting attribution (R0's
+`PM-2`). The question this ADR resolves: does "separate" mean two rows in
+the same table distinguished by a `mode` column, or something more
+structurally separated (e.g. two different tables, or a shared base
+table with mode-specific extension tables)?
+
+**Decision.** Two rows in the same `recommendations`/
+`recommendation_versions` tables (Phase 8, unchanged shape), distinguished
+by a new `mode` column (`INVESTMENT`/`TACTICAL`) — not two separate
+tables, and not a shared-base/extension-table split. The mode-exclusive
+action vocabularies (`policy/recommendation_modes.py`, R0) become the
+valid-value set for `recommendation_versions.action` once `mode` exists,
+replacing today's single `RecommendationAction` enum with two enums
+selected by `mode` (a migration, not done by this revision). Every other
+Phase 8 relationship (levels, status events, outcomes) is unchanged —
+they already key off `recommendation_id`, which is exactly the "separate
+identity" `PM-2` requires once two rows exist for the same symbol.
+
+**Alternatives considered.** Two entirely separate tables
+(`investment_recommendations`/`tactical_recommendations`) (rejected: every
+downstream consumer — committee runs, outcomes, journal linkage,
+performance rollups — would need two parallel code paths instead of one
+table with a discriminator column, a real cost for a distinction that
+doesn't otherwise change *what* a recommendation is, only which action
+vocabulary and horizon apply to it). A shared base table with mode-specific
+extension tables (rejected: over-engineered for two modes with mostly-
+identical shape — `recommendation_versions` already varies its `action`
+value's meaning by context via nothing more than an enum; adding
+inheritance-style extension tables for two modes is the kind of
+enterprise-grade complexity PROJECT_INSTRUCTIONS.md's "do not add
+infrastructure merely because it sounds enterprise-grade" warns against).
+A single shared action vocabulary covering both modes with mode implied
+by which values are used (rejected: this is exactly what R0's `PM-1`
+already forbids — the two vocabularies must be structurally exclusive,
+not merely conventionally so, and a single enum can't enforce that
+without application code doing the enforcement anyway, at which point a
+`mode` column plus two enums is simpler and self-documenting).
+
+**Consequences.** The eventual migration (Prompt 2) is additive to Phase
+8's schema — a new nullable-then-backfilled `mode` column plus two new
+Postgres enum types replacing `recommendation_action`'s single enum
+follows the exact `postgresql.ENUM(..., create_type=False)` pattern
+already used once in Phase 8's own migration (ADR-043's supersession
+strategy) — no new migration technique needs to be invented. Until that
+migration exists, `policy/recommendation_modes.py` (R0) is the only place
+this distinction is enforceable, and it is enforced only for callers that
+choose to use it, not for the live schema.
+
+---
+
+## ADR-047: The scheduler owns job lineage as a first-class artifact, not an implicit side effect of `job_runs`
+
+**Context.** Phase 8's `job_runs` table (docs/DATA_DICTIONARY.md) already
+records that a named job ran, when, and with what status — but it does
+not record *what the job produced* in a form a later reader can use to
+reconstruct exactly which evidence/recommendation rows a specific
+artifact (the Morning Decision Plan) was built from. R1's `MDS-1`/`FR-60`
+and docs/MORNING_PLAN_SPEC.md's reproducibility requirement need that
+stronger guarantee.
+
+**Decision.** Introduce a new `MorningPlanRun` entity (future migration,
+not built by this revision) owned by the scheduler bounded context, not
+by the recommendation or evidence contexts — the scheduler is the one
+component that knows, at generation time, exactly which job invocation
+produced which plan version, so it is the natural owner of the lineage
+record linking `job_runs` → the plan version → the exact set of
+`recommendation_version_id`s, evidence-item ids, and
+`regime_snapshot_id` included. Every future artifact this scheduler
+produces (premarket/intraday/EOD, once those exist per
+docs/PRODUCT_REQUIREMENTS.md FR-28-FR-31) gets the same lineage-record
+treatment — this is a general pattern for "scheduler-produced artifact,"
+not a one-off table for the morning plan specifically.
+
+**Alternatives considered.** Deriving lineage after the fact by querying
+"what evidence/recommendations existed as of this timestamp" (rejected:
+this is exactly the live-re-derivation trap docs/MORNING_PLAN_SPEC.md's
+reproducibility section explicitly rejects — a later correction or
+backfill to evidence data would silently change what a historical
+lineage query returns, defeating the entire point of an immutable,
+reproducible artifact). Storing the lineage as a JSON blob on the
+existing `job_runs` row instead of a new entity (rejected: `job_runs` is
+a generic, cross-job-type table — cramming plan-specific lineage fields
+into its schema would either require a large generic JSON column with no
+query support, or job-type-specific nullable columns that pollute a
+table every other job type also uses; a dedicated `MorningPlanRun` table
+keeps `job_runs` generic and gives the lineage record real, indexable,
+foreign-keyed structure).
+
+**Consequences.** `MorningPlanRun` becomes a new table in the scheduling
+bounded context (docs/ARCHITECTURE.md context 9) once implemented
+(Prompt 3) — additive, no existing table's shape changes. The morning
+plan UI (Prompt 4) becomes a read-only render of a `MorningPlanRun` plus
+its referenced child rows, never a live query against `recommendations`/
+`market_bars` filtered by date — a discipline worth stating now, before
+the temptation to "just query for today's recommendations" produces a
+page that quietly stops being reproducible.
+
+---
+
+## ADR-048: Order approval binds an immutable snapshot, not a live reference to the mutable order row
+
+**Context.** R0's `OA-8`/`SS-2`/`SS-3` require an approval to bind the
+exact account, symbol, side, quantity, order type, prices, time in force,
+outside-hours flag, attached legs, maximum notional, recommendation
+version, and an expiration — and require any material change to any of
+these to invalidate the approval. This ADR resolves *how* that binding is
+represented: does "approval" mean a boolean flag plus a timestamp on the
+existing `Order` row, or a separate, immutable record?
+
+**Decision.** A separate, immutable `OrderApproval` snapshot record
+(future entity, not built by this revision) — created once, at the
+moment of approval, copying every OA-8 field's value at that instant.
+The live `Order` row may continue to change status
+(docs/ORDER_AUTHORITY_MODEL.md's lifecycle diagram) and even be
+re-quoted/re-validated, but the `OrderApproval` snapshot itself is never
+edited — a re-approval after an `INVALIDATED` state creates a **new**
+`OrderApproval` row, never mutates the old one. This mirrors the exact
+pattern `RecommendationVersion` already established in Phase 8 (append-
+only, immutable-once-written child record) — no new persistence pattern
+is invented, an existing one is reused for a new purpose.
+
+**Alternatives considered.** Boolean `is_approved` + `approved_at` fields
+directly on `Order` (rejected: cannot represent "approved, then
+invalidated, then re-approved with different terms" without either
+losing the history of the first approval or needing a parallel history
+table anyway — at which point a dedicated snapshot table from the start
+is simpler). Deriving "what was approved" from the `Order` row's state
+at approval time via an audit-event snapshot alone, without a dedicated
+table (rejected: `AuditEvent`'s existing shape — `record_type`/`ref_id`/
+generic JSON `snapshot` — could technically hold this, but OA-8's fields
+are exactly the fields a future invalidation check needs to query
+structurally and repeatedly, e.g. "is the current quote within threshold
+of the approved price" — a generic audit-log JSON blob is the wrong shape
+for a value a hot code path re-reads on every submission attempt).
+
+**Consequences.** `OrderApproval` becomes a new table in the portfolio/
+execution bounded context (docs/ARCHITECTURE.md context 6) once
+implemented (Prompt 13) — additive. The invalidation check
+(docs/ORDER_AUTHORITY_MODEL.md's "Approval binding" section) becomes a
+straightforward comparison between an `OrderApproval` row's snapshot
+fields and current market/account state, not a diff against a mutable
+`Order` row that may have already changed for unrelated reasons.
+
+---
+
+## ADR-049: Cowork delivery is a one-way, read-only, post-publication channel with no code path into order creation
+
+**Context.** R1 asks for "optional read-only Cowork recurring delivery
+after the official plan is finalized." R0's `SS-1`/`SS-5` already
+establish that Cowork may never hold a broker credential and that a
+Cowork task is a read-only consumer of the morning plan. This ADR
+resolves the concrete integration shape.
+
+**Decision.** Cowork delivery is implemented as a scheduled task that
+calls one existing-shaped, read-only endpoint
+(`GET /api/v1/plans/daily`, extended for plan version per
+docs/MORNING_PLAN_SPEC.md) **only after** that day's `FINAL` plan has
+published, and does nothing else — no new endpoint is added specifically
+for Cowork, no write-capable credential or session is ever issued to a
+Cowork task, and the task's own output (a summary/notification) is
+consumed entirely outside `apps/api`'s trust zone (docs/ARCHITECTURE.md's
+R1 trust-boundary diagram draws this as a one-directional, dotted arrow
+out of the API, never a bidirectional one). Enabling Cowork delivery is
+an explicit, off-by-default opt-in setting; disabling it removes the
+scheduled task's trigger entirely, not just a UI element that could be
+re-enabled by a stale client.
+
+**Alternatives considered.** Giving Cowork a broader, authenticated API
+session that happens to only be *used* read-only by today's task
+(rejected: `SS-1`/`SS-5` require the read-only property to be structural,
+not a matter of the current task's good behavior — a broader session
+would be one prompt-authored task away from attempting a write, and
+"attempting" is already a policy violation regardless of whether it would
+succeed). Pushing the plan *to* Cowork proactively from `apps/api` on a
+timer, rather than Cowork pulling it (rejected: functionally similar, but
+"Cowork pulls a read-only GET after publication" is simpler to reason
+about as strictly read-only than "apps/api pushes to an external
+scheduled-task webhook," which would require `apps/api` to hold a Cowork-
+specific outbound credential/webhook URL as a new secret — the pull model
+needs no new secret on either side beyond whatever Cowork's own
+scheduling mechanism already requires to call a URL it's given).
+
+**Consequences.** No new inbound endpoint, no new outbound credential,
+and no new write path exists anywhere in `apps/api` because of this
+feature — the entire integration is "an existing read endpoint, called
+later than it currently would be, by a caller that already couldn't
+write to anything." docs/THREAT_MODEL.md's new Cowork boundary (this
+revision) documents the STRIDE analysis this decision implies.

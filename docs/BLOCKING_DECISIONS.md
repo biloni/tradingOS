@@ -1,13 +1,16 @@
 # Blocking Decisions
 
-Ten decisions that materially affect architecture, vendor selection, cost, or
-security boundaries — exactly the categories PROJECT_INSTRUCTIONS.md's
-working method requires stopping for. Each has a recommended default so
-implementation isn't blocked on an answer; **no default here has been acted
-on** — nothing is scaffolded, no vendor is contracted, no paid tier is
-selected. Silence is not consent: these stay open until you confirm or
-override them explicitly, most importantly #1, #2, and #6 (the ones with
-real recurring cost or new secrets).
+Eleven decisions (ten from the original refinement pass, plus #11 added in
+Revision Prompt R1) that materially affect architecture, vendor selection,
+cost, or security boundaries — exactly the categories
+PROJECT_INSTRUCTIONS.md's working method requires stopping for. Each has a
+recommended default so implementation isn't blocked on an answer; **no
+default here has been acted on** — nothing is scaffolded, no vendor is
+contracted, no paid tier is selected, no config value has been changed.
+Silence is not consent: these stay open until you confirm or override them
+explicitly, most importantly #1, #2, and #6 (the ones with real recurring
+cost or new secrets) and #11 (the one confirmed conflict against an
+already-shipped default).
 
 ## 1. Which vendor(s) supply news, sentiment, fundamentals, and earnings-calendar data?
 
@@ -174,3 +177,37 @@ docs/MVP_PLAN.md frames the refined scope as an additive "Phase 8+" body of
 work on top of the existing shipped MVP, and docs/ARCHITECTURE.md's bounded
 contexts are drawn as new/extended contexts alongside the existing ones,
 not a rewrite.
+
+## 11. (Revision Prompt R1) `RiskPolicy` default position/sector caps conflict with R1's recommended defaults
+
+R1's recommended defaults name **maximum single position: 15%** and
+**maximum sector exposure: 25%**. Phase 8's already-shipped, already-
+seeded `RiskPolicy` schema (`apps/api/src/tradingos_api/models/identity.py`,
+confirmed live via `GET /api/v1/settings/risk-policy`) defaults
+`max_position_pct` to **20%** and `max_sector_pct` to **40%** — a real
+conflict between a Prompt 0–3 artifact and this revision's recommended
+numbers, not a hypothetical one.
+
+**Recommended default (backward-compatible):** no schema or migration
+change. `risk_policy` is already modeled as a single, user-owned,
+mutable-in-place settings row — not versioned/approved like a strategy
+(docs/DATA_DICTIONARY.md: "a user changing their own risk tolerance
+doesn't need a backtest comparison to take effect") — and it is already
+fully user-configurable via the existing `PATCH /api/v1/settings/risk-policy`
+endpoint. The Python model defaults and the seed script's values (which
+simply use those defaults, `scripts/seed_phase8.py::RiskPolicy(owner_user_id=user.id)`)
+are a **starting point**, not a locked-in product decision. Resolution:
+whichever future prompt actually wires deterministic position-sizing/
+concentration gates against `RiskPolicy` (Prompt 6, per
+docs/ORDER_AUTHORITY_MODEL.md's traceability table) updates the seed
+script's/model's default values from 20%→15% and 40%→25% to match R1's
+recommendation, as a plain value change with no migration required (the
+column types and constraints are unaffected) — and documents that change
+in that prompt's own commit, not silently. Until then, the shipped 20%/
+40% defaults remain in effect and are not a bug, just an unconfirmed
+default pending this decision.
+
+**Not acted on.** No seed value or model default has been changed by this
+revision — this entry exists so the conflict is recorded and requires
+your explicit confirm/override before whichever future prompt implements
+the gates that actually enforce these numbers.

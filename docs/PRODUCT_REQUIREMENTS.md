@@ -405,3 +405,151 @@ Written as the persona above; each maps to the `FR-*` ids it exercises.
   with that category marked unavailable and the recommendation's confidence
   measurably lower than an otherwise-identical run with that category
   present.
+
+## Revision Prompt R1 delta — dual decision lanes, Morning Decision Dashboard, hybrid earnings, order lifecycle
+
+**Status: architecture-only.** Everything below is new functional
+requirement scope layered on top of FR-01–FR-50 above, per
+PROJECT_INSTRUCTIONS.md's "TradingOS v2 Decision and Execution Amendment"
+(adopted Revision Prompt R0). None of it is implemented — see
+docs/MORNING_PLAN_SPEC.md, docs/HYBRID_EARNINGS_STRATEGY.md, and
+docs/ORDER_AUTHORITY_MODEL.md for the full design each item below
+summarizes, and the traceability table at the end of this section for
+which future prompt builds it.
+
+### Dual decision lanes (FR-51–FR-53)
+
+- **FR-51.** Every recommendation is tagged `INVESTMENT` (≈3-24 month
+  thesis) or `TACTICAL` (≈1-10 trading-day setup), using the mode-
+  exclusive action vocabularies PROJECT_INSTRUCTIONS.md's `PM-1` defines.
+  A single symbol may carry both simultaneously, always as two separate
+  `Recommendation` identities (PM-2) — never one row wearing two hats.
+- **FR-52.** Every surface that displays a recommendation (Morning
+  Decision Dashboard, Committee detail, Journal) shows the lane
+  explicitly and never merges an Investment and a Tactical entry for the
+  same symbol into one visual row.
+- **FR-53.** No code path changes a recommendation's lane as a side effect
+  of a price, indicator, or regime update (PM-3) — a lane change is only
+  ever an explicit, journaled user action.
+
+### Morning Decision Dashboard (FR-54)
+
+- **FR-54.** The default landing page is the Morning Decision Dashboard
+  (superseding docs/UX_MAP.md's original "Premarket Plan" naming, same
+  page concept, formalized against docs/MORNING_PLAN_SPEC.md): one
+  official plan per valid U.S. trading day, a 05:45 `PRELIMINARY` and a
+  06:10 `FINAL` refresh (both configurable), the fixed seven-section
+  grouping (Act Now / Approval Required / Hold-Manage / Investment Watch /
+  Tactical Watch / Avoid / Data Problems), a 3-entry cap on headline "Act
+  Now" items, and visible generation/evidence-cutoff/provider-health/
+  freshness metadata (MDS-3) on every load.
+
+### Hybrid earnings-event workflow (FR-55–FR-56)
+
+- **FR-55.** A pre-earnings position may be proposed only when
+  docs/HYBRID_EARNINGS_STRATEGY.md's six-condition AND gate passes in
+  full, sized to the 0.25% (default) / 0.50% (approved-max) risk budget,
+  capped at 3 concurrent earnings trades portfolio-wide.
+- **FR-56.** A post-earnings add-on (`TRADE_ADD_CONFIRMED`) may be
+  proposed only when the reported-results, forward-guidance, and market-
+  reaction gates (docs/HYBRID_EARNINGS_STRATEGY.md) all independently
+  pass — never on a single combined "results looked good" judgment.
+
+### Order lifecycle (FR-57)
+
+- **FR-57.** Every order passes through the lifecycle
+  docs/ORDER_AUTHORITY_MODEL.md defines (`DRAFT` → `APPROVAL_REQUIRED`/
+  `AUTO_APPROVED` → `APPROVED` → paper or live submission → terminal
+  state), gated at every transition by the caller's current
+  `OrderAuthorityMode` (PROJECT_INSTRUCTIONS.md `OA-1`–`OA-6`). A live
+  order additionally requires a fresh, per-order confirmation with no
+  policy-grant substitute (`OA-5`).
+
+### Visible, server-enforced operating-mode selector (FR-58)
+
+- **FR-58.** The UI shows the current operating mode
+  (`RESEARCH_ONLY`/`PAPER_MANUAL_APPROVAL`/`PAPER_AUTO_POLICY`/
+  `LIVE_CONFIRM_EACH_ORDER`) at all times an order or recommendation
+  action is visible. Changing the displayed mode changes only what the UI
+  *offers*; it can never widen what the server will actually authorize —
+  `assert_order_authorized()` (already implemented, R0) is the sole source
+  of truth server-side, and the selector is a read/request surface over
+  it, never a client-trusted override. A UI bug or a compromised frontend
+  that lies about the mode cannot cause the server to authorize an order
+  it otherwise wouldn't.
+
+### Decision-quality explanations (FR-59)
+
+- **FR-59.** Every Investment recommendation's detail view includes an
+  explicit "why this is a buy-and-hold-style thesis, not a tactical trade"
+  explanation (and the tactical equivalent for Tactical recommendations) —
+  restating `DQ-1`/`DQ-2`'s required fields (valuation range/thesis/
+  horizon/review date/catalysts/risks/thesis-break conditions for
+  Investment; entry/size/stop/targets/time-exit/event-risk/cancellation
+  for Tactical) as visible UI content, not just a stored data requirement.
+
+### Scheduler and job lineage (FR-60)
+
+- **FR-60.** The in-process scheduler (BLOCKING_DECISIONS.md #4,
+  unchanged choice) produces a `MorningPlanRun` lineage record per
+  generation (docs/MORNING_PLAN_SPEC.md) sufficient to fully reconstruct
+  which evidence/recommendation/regime rows a given day's plan was built
+  from, without re-querying any live vendor (NFR-04, applied specifically
+  to this artifact).
+
+### Optional read-only Cowork delivery (FR-61)
+
+- **FR-61.** A Cowork scheduled task may read and summarize the `FINAL`
+  Morning Decision Plan only after it publishes, via a read-only endpoint
+  with no code path into order creation, approval, or execution
+  (docs/DECISIONS.md ADR-049). This capability is optional (off by
+  default) and, if enabled, cannot be configured in a way that grants it
+  write access — the read-only property is structural, not a permission
+  flag that could be misconfigured on.
+
+### Traceability
+
+| Requirement | Future prompt | Acceptance test |
+|---|---|---|
+| FR-51–FR-53 (dual decision lanes) | Prompt 2 | AC-09 |
+| FR-54 (Morning Decision Dashboard) | Prompt 3 (backend), Prompt 4 (UI) | AC-10 |
+| FR-55 (pre-earnings gate) | Prompt 8 | AC-19, AC-20 |
+| FR-56 (post-earnings confirmation) | Prompt 9 | AC-24 |
+| FR-57 (order lifecycle) | Prompt 7 | AC-11 |
+| FR-58 (operating-mode selector, server-enforced) | Prompt 7 | AC-25 |
+| FR-59 (buy-and-hold vs. tactical explanations) | Prompt 4 | AC-26 |
+| FR-60 (scheduler + job lineage) | Prompt 3 | AC-09 |
+| FR-61 (Cowork read-only delivery) | Prompt 15 | AC-17 |
+
+New acceptance criteria this section introduces (AC-09 continues the
+existing AC-01–AC-08 numbering above):
+
+- **AC-09.** Given a symbol with both an Investment and a Tactical
+  recommendation open simultaneously, a fixture test asserts they carry
+  distinct `recommendation_id`s and that changing one's lane without an
+  explicit user-action flag raises/rejects (already provable today via
+  `apps/api/src/tradingos_api/policy/recommendation_modes.py` — this AC
+  additionally requires the *schema-backed* version, once it exists, to
+  behave identically).
+- **AC-10.** A simulated partial evidence outage affecting more than the
+  configured `INCOMPLETE` threshold share of Tier 1 produces a plan
+  labeled `INCOMPLETE`; an outage affecting one name produces a `COMPLETE`
+  plan with that one name routed to Data Problems — two fixture tests,
+  two distinct outcomes.
+- **AC-11.** A fixture order approval that goes stale (price moves beyond
+  the configured invalidation threshold before submission) transitions to
+  `INVALIDATED`, not silently submitted at the old approved price.
+- **AC-25.** A fixture test asserts that setting the UI-facing "mode"
+  request to a value the authenticated session isn't actually authorized
+  for is rejected server-side with the same `OrderAuthorityDenied` the
+  policy module already raises — proving the selector cannot widen
+  server-side authorization.
+- **AC-26.** A fixture Investment recommendation and a fixture Tactical
+  recommendation each render every field `DQ-1`/`DQ-2` requires; a
+  recommendation missing any required field fails the fixture, not just a
+  visual review.
+
+See docs/HYBRID_EARNINGS_STRATEGY.md and docs/ORDER_AUTHORITY_MODEL.md
+for AC-18–AC-24's full definitions (earnings-specific and order-lifecycle-
+specific acceptance criteria live in those documents rather than
+duplicated here).

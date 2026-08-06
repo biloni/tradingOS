@@ -291,3 +291,159 @@ TradingOS/
 No file above is created by this pass — this is the target structure for
 whichever implementation phase follows, once docs/BLOCKING_DECISIONS.md is
 confirmed.
+
+---
+
+## Revision Prompt R1 delta: trust-boundary diagram and architecture questions resolved
+
+**Status: architecture-only.** Extends the bounded contexts above with the
+order-authority/scheduler/Cowork boundaries PROJECT_INSTRUCTIONS.md's v2
+amendment (Revision Prompt R0) requires. Nothing below changes what's
+already implemented (Phase 8's schema/API, the standalone R0 policy
+module) — it places those existing pieces on an explicit boundary diagram
+and adds the new boundaries a future implementation phase must respect.
+
+### Trust-boundary diagram
+
+```mermaid
+flowchart TB
+    User(["Retail investor\n(sole user)"])
+    Cowork["Claude Cowork\n(scheduled task, READ-ONLY)"]
+
+    subgraph TradingOS["apps/api trust zone"]
+        Web["apps/web\n(Next.js)"]
+        API["FastAPI routes"]
+        Scheduler["In-process scheduler\n(premarket/intraday/EOD +\nMorningPlanRun lineage)"]
+        Policy["Order Authority Gate\nassert_order_authorized()\n(implemented, R0)"]
+        ExecSvc["Order Execution Service\n(single entry point,\nnot yet implemented)"]
+        DB[("PostgreSQL")]
+    end
+
+    Broker["Broker adapter\n(paper today; live = Prompt 17)"]
+    Vendors["Market data / evidence /\nAnthropic vendors (existing)"]
+
+    User -- "reads plan, approves orders,\nsets/observes operating mode" --> Web
+    Web -- "HTTP/JSON" --> API
+    API -- "SQLAlchemy" --> DB
+    Scheduler -- "writes MorningPlanRun,\ncalls same service layer" --> API
+    API -- "evidence, committee calls" --> Vendors
+    API -- "proposes a DRAFT order only" --> Policy
+    Policy -- "authorized order snapshot only" --> ExecSvc
+    ExecSvc -- "submit/replace/cancel\n(the ONE caller)" --> Broker
+    API -. "read-only FINAL plan\n(after publish only)" .-> Cowork
+
+    style Cowork fill:#fee,stroke:#a88
+    style ExecSvc fill:#eef,stroke:#88a
+    style Policy fill:#eef,stroke:#88a
+    style Broker fill:#efe,stroke:#8a8
+```
+
+The two new hard boundaries this revision adds, both drawn with a
+one-directional arrow on purpose:
+
+- **`API` → `Cowork`** is one-directional and read-only (dotted, to mark
+  it as the optional/off-by-default path) — there is no arrow the other
+  way. Cowork cannot invoke anything; it can only be handed a finished,
+  published artifact to summarize (SS-5, ADR-049).
+- **`Policy` → `ExecSvc` → `Broker`** is the only path that can ever
+  reach a broker adapter (OA-7). Every other component in the diagram —
+  including `API`'s own recommendation/evidence code, the scheduler, and
+  by extension any future Cowork or LLM-driven surface — can produce at
+  most a `DRAFT` order or a plan artifact, never a submission.
+
+### Architecture questions resolved
+
+1. **Which services own market evidence, feature snapshots, strategy
+   decisions, order proposals, approvals, and broker submission?**
+   Unchanged bounded-context ownership from the table above, with two
+   new/renamed owners this revision adds: the **Order Authority Gate**
+   (`policy/order_authority.py`, implemented) owns *whether* a proposal
+   may advance, and the **Order Execution Service** (not yet built, see
+   docs/ORDER_AUTHORITY_MODEL.md) owns the *single* call path to a broker
+   adapter. Market evidence remains context 2; feature snapshots for the
+   earnings workflow are a new, narrow slice of context 2 (a `snapshot`
+   table scoped to one event, not a new context); strategy decisions
+   remain context 5 (the committee) plus context 6 (deterministic gates);
+   order proposals are drafted by context 6/5's output, never by the
+   evidence or scheduler layers directly.
+2. **How are investment and tactical positions attributed if they share
+   one broker symbol?** By `Recommendation` identity, not by broker
+   symbol. A `Position`/`PositionLot` (Phase 8, unchanged) is keyed by
+   `(account_id, instrument_id)` and remains a single aggregate at the
+   account level — this revision does **not** split broker-level
+   position tracking by lane (that would require the broker to understand
+   a concept it has no notion of). Instead, attribution happens one layer
+   up: each `Order` carries `linked_recommendation_version_id` (Phase 8,
+   existing column), and that recommendation's `mode` (PM-1, once
+   schema-backed) is what lets the journal/performance views compute
+   "how much of this position's cost basis came from the Investment
+   thesis vs. the Tactical setup" as a derived attribution report over
+   the existing lot data — a new *read model*, not a new broker-facing
+   concept.
+3. **How will a morning plan remain reproducible when market data or
+   news changes later?** Answered fully in docs/MORNING_PLAN_SPEC.md's
+   "Reproducibility" section — snapshot-by-reference to already-immutable
+   evidence/recommendation rows plus a `MorningPlanRun` lineage manifest,
+   never live re-derivation.
+4. **What data is required before the plan can be labeled COMPLETE?**
+   Answered fully in docs/MORNING_PLAN_SPEC.md's "What data is required"
+   section — per-symbol freshness/gate-completion checks, with an
+   aggregate threshold deciding whether the whole plan is `INCOMPLETE`.
+5. **What price movement invalidates an order approval?** Answered fully
+   in docs/ORDER_AUTHORITY_MODEL.md's "Approval binding" section — a
+   configurable threshold anchored to the position's own ATR-derived stop
+   width, evaluated at submission time against the approval-time snapshot.
+6. **How will the application prevent a Cowork task or LLM output from
+   reaching the broker adapter directly?** Structurally, not by
+   convention: the Order Execution Service is the only caller of any
+   broker adapter method anywhere in the codebase (a property already
+   proven for today's simpler `_apply_fill()` by
+   `tests/test_policy_order_authority.py::TestBrokerBoundaryIsSingleEntryPoint`,
+   and required to remain true for the future execution service by the
+   same kind of structural test). Cowork and any LLM surface are wired
+   only to read endpoints and to `DRAFT`-order-proposing code paths —
+   neither is ever given a reference to the execution service, so there
+   is no code path to remove, only one that was never granted.
+7. **What happens when a recommendation is valid but the broker, quote,
+   or scheduler is unavailable?** Answered fully in
+   docs/ORDER_AUTHORITY_MODEL.md's dedicated section — the order stays in
+   a pending/`APPROVED` state and either retries with bounded backoff or
+   expires; nothing is ever submitted on an assumption in place of a
+   missing fact.
+8. **How are early-market, after-hours, and earnings-announcement timing
+   handled?** `time_in_force`/`extended_hours` fields already exist on
+   `Order` (Phase 8, `time_in_force`; an `outside_hours` flag is part of
+   the approval-binding field set, OA-8) — early/after-hours submission
+   requires that flag to be explicitly set and bound into the approval,
+   never inferred silently from wall-clock time at submission. Earnings-
+   announcement timing is handled entirely by
+   docs/HYBRID_EARNINGS_STRATEGY.md's verified-event-time requirement
+   (HES-2 condition 1) — an order for a name with an unverified or
+   ambiguous announcement time/window cannot pass the pre-event gate at
+   all, regardless of what session it would otherwise execute in.
+9. **What deployment is required for reliable premarket scheduling?**
+   Unchanged from BLOCKING_DECISIONS.md #4/R-07 (docs/RISK_REGISTER.md):
+   the in-process scheduler requires the single personal machine to be
+   on and awake at 05:45/06:10 America/Los_Angeles. This revision does
+   not change that deployment requirement or upgrade it to a hosted
+   always-on process — it is named again here because the Morning
+   Decision Dashboard formalizes the plan as *the* default landing page,
+   which raises the cost of a missed run from "inconvenient" to "the
+   whole point of opening the app that morning didn't work," without
+   changing the underlying mitigation (yesterday's plan + manual "run
+   now," docs/UX_MAP.md). A move to a small always-on host remains a
+   named, deferred option (R-07), not adopted by this pass.
+10. **What acceptance gate must be passed before Prompt 17 can add a live
+    adapter?** See docs/MVP_PLAN.md's "Paper release vs. live-confirmed
+    release" section for the full gate — summarized here: every
+    deterministic policy test (`tests/test_policy_order_authority.py` and
+    its future schema-backed extensions) passing; a demonstrated paper-
+    trading soak period with zero reconciliation discrepancies; the
+    Order Execution Service's single-entry-point property re-verified by
+    a structural test against the then-current codebase; the kill switch
+    and cancel-open-orders controls (OA-9/SS-4) built and independently
+    tested; and explicit, recorded user sign-off treating live capital
+    risk as a distinct decision from "the paper feature set works" — no
+    amount of paper-mode reliability alone satisfies this gate, since paper
+    correctness and live-money authorization are deliberately different
+    questions (principle 10/11).
