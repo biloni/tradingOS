@@ -42,6 +42,30 @@
     ]
   ],
   [
+    "/api/v1/feature-diagnostics/components/{subject_type}/{subject_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/feature-diagnostics/investment/{instrument_id}/latest",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/feature-diagnostics/post-earnings/{earnings_event_id}/latest",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/feature-diagnostics/tactical/{earnings_event_id}/latest",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/instruments",
     [
       "get"

@@ -373,6 +373,31 @@ scheduled-job concern, not a diagnostics-dashboard concern).
   — the full `ProviderIngestionRecord` history for one evidence row —
   the raw-to-normalized lineage view.
 
+## 21. Feature diagnostics (`routers/feature_diagnostics.py`) — **added Revision Prompt 5**
+
+Read-only throughout — no endpoint here computes or persists a score;
+they only render what `services/persist_feature_results.py` already
+wrote. Every response shows, per component: value, pass/fail/missing
+state, source, calculation version, and as-of time.
+
+- `GET /api/v1/feature-diagnostics/components/{subject_type}/{subject_id}`
+  — generic lookup of every `FeatureComponentResult` row for one parent
+  snapshot, regardless of which lane produced it (mirrors
+  `/provider-diagnostics/lineage/{subject_type}/{subject_id}`'s shape).
+  `404` if nothing is recorded for that subject.
+- `GET /api/v1/feature-diagnostics/tactical/{earnings_event_id}/latest`
+  — the most recent `EarningsFeatureSnapshot` for an earnings event plus
+  its 8 named components and `total_score`/`max_score`.
+- `GET /api/v1/feature-diagnostics/investment/{instrument_id}/latest` —
+  the most recent `InvestmentQualityFeatureSnapshot` for an instrument
+  plus its 9 components and the standalone `hard_disqualified`/
+  `disqualification_reason` veto fields.
+- `GET /api/v1/feature-diagnostics/post-earnings/{earnings_event_id}/latest`
+  — the most recent `PostEarningsConfirmationSnapshot` plus its 10
+  components and the three independent gates (`results_gate_passed`,
+  `guidance_gate_passed`, `market_reaction_gate_passed`,
+  `all_gates_passed`).
+
 ## Authorization assumptions
 
 No auth exists (ADR-007) — every request is implicitly "the one user."

@@ -637,3 +637,32 @@ class StrategyFamily(StrEnum):
     EARNINGS_PRE_EVENT = "EARNINGS_PRE_EVENT"
     EARNINGS_POST_CONFIRMATION = "EARNINGS_POST_CONFIRMATION"
     GENERIC = "GENERIC"
+
+
+# ---------------------------------------------------------------------------
+# Revision Prompt 5 — deterministic dual-lane analytics and earnings
+# feature engine (additive to Phase 8/R3/R4).
+# ---------------------------------------------------------------------------
+
+
+class FeatureComponentStatus(StrEnum):
+    """The per-component outcome `models.feature_scoring.FeatureComponentResult`
+    rows carry (the diagnostic UI's required "pass/fail ... missing
+    state" per component). `CAPABILITY_UNAVAILABLE` is distinct from
+    `MISSING_DATA`: the former means this data entitlement can never
+    supply the input (e.g. 30-minute intraday range without a real-time
+    feed) — a structural limit, not a transient gap — so a caller can
+    tell "we don't have this feed" from "the feed had nothing today."
+    `INSUFFICIENT_HISTORY` is distinct from both: `services/analytics.py`
+    and the tactical 8-component score report it when the input series
+    is simply too short for the window requested (e.g. fewer than 2
+    prior earnings gaps for `PRIOR_GAP_BIAS`) — the data exists and
+    isn't capability-gated, there just isn't enough of it yet. Never
+    silently treated as `FAIL` (principle 4/5 — missing evidence is
+    shown explicitly, not defaulted to failing)."""
+
+    PASS = "PASS"
+    FAIL = "FAIL"
+    MISSING_DATA = "MISSING_DATA"
+    CAPABILITY_UNAVAILABLE = "CAPABILITY_UNAVAILABLE"
+    INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"

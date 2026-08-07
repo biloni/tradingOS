@@ -9,12 +9,118 @@ recommendations, scheduling, or broker submission), Revision Prompt R3
 (backward-compatible schema and API migration, shipped — additive
 migration + 19 new endpoints across 7 new bounded contexts, no provider
 integration, no trading/scoring logic, no live broker submission
-endpoint), and Revision Prompt 4 (point-in-time evidence layer, shipped
+endpoint), Revision Prompt 4 (point-in-time evidence layer, shipped
 — 15 provider interfaces, ingestion services, 9 data-quality gates, and
 a provider-diagnostics API; one real vendor (Alpaca) plus synthetic
 fixtures, no paid vendor contracted, no recommendation/scoring/order
-logic).
+logic), and Revision Prompt 5 (deterministic dual-lane analytics and
+earnings feature engine, shipped — common technical-analytics library,
+market-regime classification, the tactical 8-component score, the
+Investment lane's 9-component feature engine, expected-move calculation,
+the 9-condition baseline eligibility gate, post-earnings confirmation's
+three gates, and a read-only feature-diagnostics API; no LLM computes
+any value in this layer, no recommendation created yet).
 **Last updated:** 2026-08-06
+
+## Revision Prompt 5 (2026-08-06) — deterministic dual-lane analytics and earnings feature engine
+
+**No prior implementation existed to inspect** — same documented gap as
+R2/R3/P4 — this prompt's own scope (deterministic analytics only; no
+recommendations) didn't depend on one.
+
+- **Schema (additive):** `FeatureComponentStatus` enum (`PASS`, `FAIL`,
+  `MISSING_DATA`, `CAPABILITY_UNAVAILABLE`, and — added in a follow-up
+  migration after the first end-to-end demo run surfaced a real gap —
+  `INSUFFICIENT_HISTORY`); two new tables, `feature_component_results`
+  (the generic, `subject_type`/`subject_id`-keyed component ledger every
+  lane writes to, ADR-015's shape reused a third time) and
+  `investment_quality_feature_snapshots` (the Investment lane's parent
+  snapshot, with `hard_disqualified` as a standalone veto column, never
+  derived from the component rows). `EarningsFeatureSnapshot`'s
+  pre-existing fixed `component_*` columns are superseded, not migrated
+  — this prompt's precisely-named 8 components don't map onto that
+  earlier, looser placeholder set. Full detail: docs/DATA_DICTIONARY.md
+  §11, docs/ER_DIAGRAM.md §15.
+- **Common analytics library** (`services/analytics.py`, new): SMA, EMA,
+  RSI, MACD, ATR, normalized ATR, realized volatility, rolling volume,
+  relative strength, support/resistance, trend, momentum, liquidity,
+  correlation — pure Python + `Decimal`, no numpy/pandas runtime
+  dependency. Verified against the trusted, MIT-licensed `ta` library
+  (dev-only dependency) to <0.001 relative tolerance on SMA/EMA/RSI/
+  MACD-line/MACD-signal/ATR, after two real convention bugs were found
+  and fixed by direct `ta` source inspection: (1) MACD's signal EWM
+  must seed from the point where both EMAs have "warmed up"
+  (`macd_series[slow - 1:]`), not from index 0 of a fully-computed
+  series — `ta`'s `min_periods=window` truncation makes its macd series
+  NaN before that point, and pandas' `ewm()` seeds at the first non-NaN
+  value; (2) `ta`'s ATR true-range series is fully defined from bar 0
+  (its NaN-propagating prev-close terms are silently dropped by
+  `DataFrame.max(axis=1, skipna=True)`, leaving just `high[0]-low[0]`),
+  so the Wilder seed genuinely averages `window` true-range values
+  starting at bar 0, not `window` values starting at bar 1.
+- **Market regime** (`services/market_regime.py`, new, ADR-034): STRESSED/
+  ELEVATED/CALM classification from SPY/QQQ trend, a VIX-proxy
+  percentile/rate-of-change, and realized volatility — `ELEVATED` is the
+  conservative default on mixed or missing signals, never silently CALM.
+- **Tactical 8-component score** (`services/earnings_score.py`, new,
+  HES-1): price vs. EMA20, 20-day relative strength vs. SPY, 5-day
+  momentum, a documented volume-accumulation rule, forecast EPS growth
+  vs. prior-year actual, analyst coverage (≥4 for full quality), SPY vs.
+  EMA20, and median prior-gap bias (≥2 events) — `total_score` is a
+  literal count of `PASS` components, never a weighted blend.
+- **Investment lane** (`services/investment_quality.py`, new): 9
+  independent component scores (growth, margin trend, balance-sheet/
+  cash-flow quality, valuation, earnings-revision direction, sector
+  durability, long-term relative strength, catalysts/event risk,
+  portfolio diversification) plus a standalone `hard_disqualified` veto
+  (going-concern flag or an unresolved data-quality issue) that no
+  combination of passing components can override.
+- **Expected move & baseline eligibility** (`services/expected_move.py`,
+  `services/baseline_eligibility.py`, new): expected move stores ATR%,
+  historical median gap%, and option-implied% separately;
+  `selected_expected_move_pct = max(ATR%, historical median gap%)`
+  always (option-implied is a diagnostic comparison only, never fed
+  back in). Baseline eligibility is a 9-condition AND gate (direction
+  score ≥6/8, expected move ≥4%, ADV ≥$50M, ≥3 analysts, verified event
+  timing, fresh evidence, portfolio/sector capacity, no unresolved DQ
+  issue) — any single failing condition vetoes eligibility regardless of
+  the others.
+- **Post-earnings confirmation** (`services/post_earnings_confirmation.py`,
+  new, HES-4): EPS/revenue surprise (denominator uses `abs(estimate)` so
+  a company estimated to lose money that beats by losing less still
+  reads as a positive surprise), guidance direction vs. prior/consensus
+  (`NONE_PROVIDED` is its own explicit outcome), initial gap direction,
+  reversal/failed-breakout (from daily open/close alone), volume ratio,
+  sector/market alignment, and 30-/60-minute range + VWAP hold —
+  correctly reporting `CAPABILITY_UNAVAILABLE` (not `FAIL`/`MISSING_DATA`)
+  when no intraday feed is entitled. Three independent gates (results,
+  guidance, market reaction), never blended into one pass/fail.
+- **Persistence + diagnostics API** (`services/persist_feature_results.py`,
+  `routers/feature_diagnostics.py`, API area 21, new): one write path
+  from any lane's pure compute result into the schema above; 4 read-only
+  endpoints (generic components-by-subject, plus a "latest snapshot"
+  view per lane) showing every component's value, status, source,
+  calculation version, and as-of time. Live-verified end to end: an
+  eligible synthetic MRVL earnings event (8/8 direction score, all 9
+  eligibility conditions pass) and a rejected synthetic AMD event (1/8,
+  multiple failing conditions including an `INSUFFICIENT_HISTORY`
+  component) both persist and serve correctly —
+  `src/tradingos_api/scripts/demo_prompt5.py`.
+- **Tests:** 226 backend tests (up from 166) — golden vectors for the
+  8-component score (all-pass, all-fail, and a mixed case exercising
+  `INSUFFICIENT_HISTORY`/`MISSING_DATA`), trusted-library comparison,
+  insufficient-history/missing-data/split-adjustment-matters edge cases,
+  missing-options and baseline-selection cases for expected move, the
+  9-condition eligibility AND gate, investment-quality's veto and
+  independent-component behavior, post-earnings' sign/denominator and
+  capability-vs-missing-data cases, market-regime classification, and a
+  future-data leakage test reusing Revision Prompt 4's
+  `policy/point_in_time.py` guard against P5 snapshot cutoffs (no new,
+  parallel leakage rule invented). `ruff`/`mypy --strict` clean across
+  `src/`. Frontend untouched.
+- **Docs:** docs/DATA_DICTIONARY.md §11, docs/ER_DIAGRAM.md §15,
+  docs/API_CONTRACTS.md area 21, this entry, docs/TEST_EVIDENCE.md,
+  docs/DEPENDENCIES.md.
 
 ## Revision Prompt 4 (2026-08-06) — point-in-time market/earnings/guidance/news/broker-capability ingestion
 

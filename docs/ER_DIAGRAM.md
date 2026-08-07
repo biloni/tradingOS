@@ -638,3 +638,48 @@ erDiagram
         datetime ingested_at
     }
 ```
+
+## 15. Revision Prompt 5 — deterministic feature-scoring layer
+
+`feature_component_results` is the one generic table every scored
+component from all three lanes writes to — `subject_type`/`subject_id`
+point at whichever parent snapshot produced it
+(`EarningsFeatureSnapshot` for the tactical 8-component score,
+`InvestmentQualityFeatureSnapshot` for the Investment lane's 9
+components, or `PostEarningsConfirmationSnapshot` for the post-event
+confirmation features), the same non-FK generic-log shape ADR-015
+established and Revision Prompt 4 reused for `provider_ingestion_records`.
+`investment_quality_feature_snapshots` is the Investment lane's own
+parent snapshot table — `hard_disqualified` is a standalone veto column,
+not derived from the component rows.
+
+```mermaid
+erDiagram
+    earnings_feature_snapshots ||--o{ feature_component_results : "scored by (subject_type)"
+    investment_quality_feature_snapshots ||--o{ feature_component_results : "scored by (subject_type)"
+    post_earnings_confirmation_snapshots ||--o{ feature_component_results : "scored by (subject_type)"
+    instruments ||--o{ investment_quality_feature_snapshots : "has"
+
+    feature_component_results {
+        uuid id PK
+        string subject_type
+        uuid subject_id
+        string component_key
+        int component_order
+        numeric value
+        string status
+        string source
+        text detail
+        string calculation_version
+        datetime as_of
+    }
+    investment_quality_feature_snapshots {
+        uuid id PK
+        uuid instrument_id FK
+        date as_of
+        datetime evidence_cutoff
+        string calculation_version
+        bool hard_disqualified
+        text disqualification_reason
+    }
+```

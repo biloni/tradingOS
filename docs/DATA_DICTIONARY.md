@@ -290,6 +290,47 @@ defines its own capability-metadata model and its own
 state are never shared across interfaces even where one vendor
 (Alpaca) implements several of them in the same class.
 
+## 11. Revision Prompt 5 — deterministic dual-lane analytics and earnings feature engine
+
+Purely additive: two new tables, one new enum, no changes to any
+existing column.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `feature_component_status` (new enum) | `PASS`, `FAIL`, `MISSING_DATA`, `CAPABILITY_UNAVAILABLE`, `INSUFFICIENT_HISTORY` | `INSUFFICIENT_HISTORY` was added in a second, follow-up migration (`ad4b61d69412`) after the first end-to-end demo run raised a real `ValueError` — `services/analytics.py` and `services/earnings_score.py` already emitted this status for short input series, but the enum created by the schema migration (`b5b705be657a`) didn't have it yet. `CAPABILITY_UNAVAILABLE` (structural data-entitlement gap, e.g. no intraday feed) and `INSUFFICIENT_HISTORY` (data exists, just not enough of it yet) are kept as two distinct states, never collapsed into `MISSING_DATA`. |
+| `feature_component_results` (new table) | `subject_type`, `subject_id` (generic, not a FK — the same ADR-015 shape as `audit_events`/`data_quality_events`/`provider_ingestion_records`), `component_key`, `component_order`, `value` (nullable `Numeric(20,6)`), `status`, `source`, `detail`, `calculation_version`, `as_of` | One generic table for every scored component across all three lanes (`subject_type` is the parent snapshot's class name: `EarningsFeatureSnapshot`, `InvestmentQualityFeatureSnapshot`, or `PostEarningsConfirmationSnapshot`). Append-only — a re-scoring pass writes new rows against a new parent id, never edits a prior result. This is why the diagnostic UI (`/api/v1/feature-diagnostics/*`) only needs one query shape regardless of which lane produced the components. |
+| `investment_quality_feature_snapshots` (new table) | `instrument_id` FK, `as_of`, `evidence_cutoff`, `calculation_version`, `hard_disqualified` (bool, default `False`), `disqualification_reason` (nullable text) | The Investment lane's parent snapshot. Deliberately holds no single opaque score — its 9 component scores live exclusively in `feature_component_results`; `hard_disqualified` is a separate, explicit veto flag that no combination of strong components can override (see ADR-050). |
+
+**`EarningsFeatureSnapshot`'s pre-existing fixed `component_*` columns
+are now superseded, not migrated.** That table (added before this
+revision) has 8 named columns (`component_price_trend`,
+`component_analyst_revisions`, `component_options_skew`, etc.) from an
+earlier, looser placeholder factor set. Revision Prompt 5 specifies a
+different, precisely-named 8-component score (`PRICE_ABOVE_EMA20`,
+`RS_20D_VS_SPY`, `MOMENTUM_5D`, `VOLUME_ACCUMULATION`,
+`FORECAST_EPS_GROWTH`, `ANALYST_COVERAGE`, `SPY_ABOVE_EMA20`,
+`PRIOR_GAP_BIAS`) that doesn't map onto those old column names.
+`services/persist_feature_results.py::persist_tactical_score()` writes
+`total_score`/`calculation_version` to `EarningsFeatureSnapshot` (still
+useful, unchanged fields) but leaves every `component_*` column null,
+writing the named component detail exclusively to
+`feature_component_results` instead. The old columns are left in place
+rather than dropped — no data they held was ever real (Phase 8 was a
+schema-first build), and dropping them is a mechanical follow-up, not a
+blocking issue.
+
+**New services** (`services/*.py`, not a schema change but documented
+here since they're this revision's other half): `analytics.py` (SMA,
+EMA, RSI, MACD, ATR, normalized ATR, realized volatility, rolling
+volume, relative strength, support/resistance, trend, momentum,
+liquidity, correlation — pure Python + `Decimal`, no numpy/pandas
+runtime dependency), `market_regime.py`, `earnings_score.py` (the
+tactical 8-component score), `investment_quality.py` (the Investment
+lane's 9 components), `expected_move.py`, `baseline_eligibility.py` (the
+9-condition AND gate), `post_earnings_confirmation.py` (the three-gate
+post-event confirmation), and `persist_feature_results.py` (the one
+write path from any lane's pure compute result into the schema above).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

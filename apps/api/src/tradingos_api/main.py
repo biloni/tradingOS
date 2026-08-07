@@ -5,6 +5,7 @@ from tradingos_api.routers import (
     alerts,
     backtests,
     earnings,
+    feature_diagnostics,
     health,
     instruments,
     investment,
@@ -52,3 +53,4 @@ app.include_router(earnings.router)
 app.include_router(order_authority.proposals_router)
 app.include_router(order_authority.approvals_router)
 app.include_router(provider_diagnostics.router)
+app.include_router(feature_diagnostics.router)

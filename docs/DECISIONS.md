@@ -1589,3 +1589,63 @@ feature — the entire integration is "an existing read endpoint, called
 later than it currently would be, by a caller that already couldn't
 write to anything." docs/THREAT_MODEL.md's new Cowork boundary (this
 revision) documents the STRIDE analysis this decision implies.
+
+## ADR-050: Feature-scoring components persist to one generic table across all three lanes, not a fixed-column table per lane
+
+**Context.** Revision Prompt 5 requires three separate deterministic
+scoring passes — the tactical 8-component earnings score, the
+Investment lane's 9 components, and post-earnings confirmation's 10
+components — each needing a diagnostic UI that shows "every component,
+value, pass/fail, source, cutoff, version, and missing state." A
+fixed-column table per lane (one column per named component) was the
+default option, matching how the pre-existing `EarningsFeatureSnapshot`
+table (added before this revision) was built — 8 named `component_*`
+columns for an earlier, looser placeholder factor set.
+
+**Decision.** All three lanes' components persist to one new generic
+table, `feature_component_results`, keyed by `subject_type`/`subject_id`
+(not a foreign key — the same shape ADR-015 established for
+`AuditEvent` and Revision Prompt 4 reused for `ProviderIngestionRecord`).
+`subject_type` is the parent snapshot's class name
+(`EarningsFeatureSnapshot`, `InvestmentQualityFeatureSnapshot`, or
+`PostEarningsConfirmationSnapshot`); `component_key` is the specific
+named component (`PRICE_ABOVE_EMA20`, `REVENUE_EARNINGS_GROWTH`,
+`EPS_SURPRISE`, etc.). `EarningsFeatureSnapshot`'s existing fixed
+`component_*` columns are left in place, unused by this revision's
+writes (`services/persist_feature_results.py::persist_tactical_score()`
+writes only `total_score`/`calculation_version` there) — Revision Prompt
+5 specifies a different, precisely-named 8-component score that doesn't
+map onto those column names, and no data those columns ever held was
+real (Phase 8 was a schema-first build), so there is nothing to migrate.
+
+**Alternatives considered.** Adding new fixed columns to
+`EarningsFeatureSnapshot` matching this revision's exact 8 component
+names, plus two more fixed-column tables for the Investment and
+post-earnings lanes (rejected: three near-identical table shapes,
+one schema migration required every time a lane's component set changes
+or a fourth lane is added, and the diagnostic UI would need three
+different query shapes instead of one). Storing all components as a
+single JSON blob column on each parent snapshot (rejected: defeats the
+point-in-time/audit-trail discipline this project applies everywhere
+else — `feature_component_results` rows are individually queryable,
+indexable by `(subject_type, subject_id)`, and appendable without
+touching a JSON payload; this project already made the equivalent
+call against JSON-as-primary-storage for `BpStepInstance`-equivalent
+audit trails).
+
+**Consequences.** Every lane's component detail is queryable through
+one endpoint shape (`routers/feature_diagnostics.py`'s generic
+`/components/{subject_type}/{subject_id}`, reused by all three "latest
+snapshot" convenience endpoints). Adding a fourth lane later needs no
+new component-storage migration — only a new parent snapshot table (if
+it needs lane-specific summary fields) and a new `subject_type` string.
+The tradeoff is that `feature_component_results.value` is a single
+nullable `Numeric(20,6)` column shared by every component regardless of
+its natural unit (percentage, dollars, a raw count, an unused
+placeholder for a string-only component like `EARNINGS_REVISION_DIRECTION`,
+which stores its real information in `detail` instead) — acceptable
+because every consumer of this table is a diagnostic display, never a
+calculation input; the components that actually feed a calculation are
+read back from the typed dataclasses (`ComponentResult`,
+`TacticalScoreResult`, etc.) the pure `services/*.py` functions return
+directly, not from this table.

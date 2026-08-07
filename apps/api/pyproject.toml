@@ -33,6 +33,14 @@ dev = [
     "httpx2==2.9.1",
     "ruff==0.16.1",
     "mypy==2.3.0",
+    # Revision Prompt 5's "compare indicator outputs with an approved
+    # trusted library" test only — never imported by production code.
+    # services/analytics.py itself is pure Python + decimal.Decimal
+    # (no numpy/pandas runtime dependency), matching this project's
+    # existing never-float-for-computed-precision discipline.
+    "ta==0.11.0",
+    "pandas==3.0.5",
+    "numpy==2.5.1",
 ]
 
 [tool.ruff]

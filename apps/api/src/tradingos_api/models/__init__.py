@@ -27,6 +27,7 @@ from tradingos_api.models.enums import (
     EarningsRevisionDirection,
     EarningsTimingCategory,
     EnvironmentLabel,
+    FeatureComponentStatus,
     FeeType,
     InstrumentValidationStatus,
     JobRunStatus,
@@ -76,6 +77,10 @@ from tradingos_api.models.execution import (
     TradeAttachment,
     TradeNote,
     TradeThesis,
+)
+from tradingos_api.models.feature_scoring import (
+    FeatureComponentResult,
+    InvestmentQualityFeatureSnapshot,
 )
 from tradingos_api.models.identity import (
     InvestmentProfile,
@@ -231,6 +236,8 @@ __all__ = [
     "EventExpectedMoveSnapshot",
     "Execution",
     "ExecutionKillSwitchEvent",
+    "FeatureComponentResult",
+    "FeatureComponentStatus",
     "Fee",
     "FeeType",
     "FundamentalsSnapshot",
@@ -241,6 +248,7 @@ __all__ = [
     "InstrumentValidationEvent",
     "InstrumentValidationStatus",
     "InvestmentProfile",
+    "InvestmentQualityFeatureSnapshot",
     "InvestmentThesis",
     "InvestmentThesisVersion",
     "JobRun",

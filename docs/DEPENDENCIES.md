@@ -28,6 +28,9 @@ Dev-only:
 | httpx2 | 2.9.1 | HTTP client for FastAPI `TestClient` (successor to `httpx`, which Starlette's `TestClient` now flags deprecated in favor of `httpx2`) |
 | ruff | 0.16.1 | Lint + format |
 | mypy | 2.3.0 | Type checking (`--strict`) |
+| ta | 0.11.0 (added Revision Prompt 5, verified 2026-08-06) | MIT-licensed trusted-library comparison target for `services/analytics.py`'s SMA/EMA/RSI/MACD/ATR — test-only; production code has no runtime dependency on it |
+| pandas | 3.0.5 (added Revision Prompt 5) | Transitively required by `ta`; also used directly to build comparison series in `tests/test_analytics_trusted_library.py` |
+| numpy | 2.5.1 (added Revision Prompt 5) | Transitively required by `ta`/`pandas` |
 
 ## `apps/web` (TypeScript, pnpm-managed)
 
