@@ -21,6 +21,19 @@ class TacticalRecommendationVersionResponse(BaseModel):
     horizon_days_max: int | None
     review_date: date | None
     generated_at: datetime
+    # Revision Prompt 7 — the "TACTICAL PRE-EARNINGS PLAN"/"TACTICAL
+    # POST-CONFIRMATION PLAN" fields that don't have their own column:
+    # `entry_invalidation` (this recommendation's own invalidation
+    # condition) and the rest of the CIO's stated setup, read from
+    # `deterministic_inputs_snapshot`
+    # (`services/committee_orchestrator.py::_deterministic_inputs_snapshot()`).
+    entry_invalidation: str | None = None
+    setup_and_event_phase: str | None = None
+    key_catalyst: str | None = None
+    gap_risk: str | None = None
+    liquidity_risk: str | None = None
+    order_proposal_id: uuid.UUID | None = None
+    order_proposal_status: str | None = None
 
 
 class TacticalRecommendationSummaryResponse(BaseModel):

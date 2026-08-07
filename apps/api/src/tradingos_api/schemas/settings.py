@@ -40,6 +40,14 @@ class RiskPolicyResponse(BaseModel):
     max_sector_pct: Decimal
     max_correlation: Decimal
     speculative_position_pct_cap: Decimal
+    # Revision Prompt 7 (HES-3) — earnings-specific ceilings, deliberately
+    # separate from the general-purpose fields above.
+    earnings_risk_budget_pct: Decimal
+    earnings_risk_budget_max_pct: Decimal
+    earnings_max_position_pct: Decimal
+    earnings_max_sector_pct: Decimal
+    earnings_max_concurrent_trades: int
+    earnings_slippage_bps: Decimal
 
     model_config = {"from_attributes": True}
 
@@ -50,6 +58,12 @@ class RiskPolicyUpdateRequest(BaseModel):
     max_sector_pct: Decimal | None = None
     max_correlation: Decimal | None = None
     speculative_position_pct_cap: Decimal | None = None
+    earnings_risk_budget_pct: Decimal | None = None
+    earnings_risk_budget_max_pct: Decimal | None = None
+    earnings_max_position_pct: Decimal | None = None
+    earnings_max_sector_pct: Decimal | None = None
+    earnings_max_concurrent_trades: int | None = None
+    earnings_slippage_bps: Decimal | None = None
 
 
 class OperatingModeResponse(BaseModel):

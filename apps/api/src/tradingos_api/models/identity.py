@@ -70,6 +70,30 @@ class RiskPolicy(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
     speculative_position_pct_cap: Mapped[Decimal] = mapped_column(
         sa.Numeric(6, 4), default=Decimal("0.0500")
     )
+    # Revision Prompt 7 (HES-3) — earnings-specific ceilings, deliberately
+    # separate fields rather than overloading the general fields above:
+    # HES-3's own text is explicit that these are "materially smaller
+    # than the standard" general-purpose numbers, not a replacement for
+    # them. Same fractional convention as every field above (0.0025 =
+    # 0.25%) — `services/position_sizing.py` takes whole-number percent
+    # (0.25 meaning 0.25%) and the pipeline converts (`* 100`) at the
+    # boundary; see `services/recommendation_pipeline.py`.
+    earnings_risk_budget_pct: Mapped[Decimal] = mapped_column(
+        sa.Numeric(6, 4), default=Decimal("0.0025")
+    )
+    earnings_risk_budget_max_pct: Mapped[Decimal] = mapped_column(
+        sa.Numeric(6, 4), default=Decimal("0.0050")
+    )
+    earnings_max_position_pct: Mapped[Decimal] = mapped_column(
+        sa.Numeric(6, 4), default=Decimal("0.1500")
+    )
+    earnings_max_sector_pct: Mapped[Decimal] = mapped_column(
+        sa.Numeric(6, 4), default=Decimal("0.2500")
+    )
+    earnings_max_concurrent_trades: Mapped[int] = mapped_column(sa.Integer, default=3)
+    earnings_slippage_bps: Mapped[Decimal] = mapped_column(
+        sa.Numeric(8, 4), default=Decimal("5.0000")
+    )
 
 
 class RiskPolicyVersion(UUIDPkMixin, CreatedAtMixin, Base):

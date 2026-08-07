@@ -6,6 +6,7 @@ horizon/window ordering)."""
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
@@ -71,9 +72,15 @@ class TestInvestmentCioOutput:
             horizon_days_max=365,
             review_date=date.today(),
             valuation_context="Trading below sector median P/E.",
+            preferred_accumulation_zone="On pullbacks toward the 50-day moving average.",
+            tranche_plan="Three equal tranches over 60 days.",
+            proposed_max_allocation_pct=Decimal("5.0"),
             durable_catalysts=["New product cycle"],
             thesis_break_conditions=["Loses market share for 2 quarters"],
             portfolio_role="Core holding.",
+            why_investment_not_trade=(
+                "Multi-year durability thesis, not a short-term catalyst trade."
+            ),
             minority_opinion=None,
         )
         return kwargs

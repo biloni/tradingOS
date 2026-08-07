@@ -384,6 +384,59 @@ valuation logic, horizon, review date, and thesis invalidation"), and
 `services/side_by_side.py` (deterministic, templated — never an LLM
 call — comparison text).
 
+## 13. Revision Prompt 7 — decision policy, risk manager, and hybrid earnings recommendation engine
+
+Purely additive: 16 new columns across two existing tables, no new
+tables. The 9-step pipeline itself needed no new schema — it reads and
+writes entirely through R3's `Recommendation`/`RecommendationVersion`/
+`RecommendationInvalidationCondition`/`OrderProposal`/`OrderProposalVersion`
+and Revision Prompt 6's committee schema.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `order_proposal_versions` (10 new columns) | `environment` (nullable `environment_label`, reused), `outside_hours` (bool, default `False`), `attached_legs` (JSON, default `{}`), `max_slippage_bps`, `valid_from`/`expires_at` (this proposal's own validity window — distinct from the later `OrderApproval.expires_at`), `risk_policy_version`, `data_cutoff`/`quote_observed_at` (point-in-time provenance), `requires_approval` (bool, default `True`) | Fills out the "ORDER PROPOSAL FIELDS" list R3's original columns (`order_type`, `quantity`, `limit_price`, `stop_price`, `time_in_force`, `max_notional`, `rationale`) didn't yet carry. |
+| `risk_policy`/`risk_policy_versions` (6 new columns each) | `earnings_risk_budget_pct` (default `0.0025` = 0.25%), `earnings_risk_budget_max_pct` (default `0.0050` = 0.50%, HES-3's absolute hard ceiling — enforced in code by `PATCH /api/v1/settings/risk-policy`, not just documented), `earnings_max_position_pct` (default `0.1500`), `earnings_max_sector_pct` (default `0.2500`), `earnings_max_concurrent_trades` (default `3`), `earnings_slippage_bps` (default `5.0000`) | Deliberately separate from the general-purpose `risk_budget_pct`/`max_position_pct`/etc. above — HES-3's own text is explicit these earnings-specific numbers are "materially smaller than the standard" general ones, never a replacement for them. Same fractional convention as the existing fields (`0.0025` = 0.25%); `services/position_sizing.py` takes whole-number percent and the pipeline converts at the boundary. |
+
+**A pre-existing gap fixed while extending this area:** `RiskPolicyVersion`'s
+own docstring promised "every time `PATCH /api/v1/settings/risk-policy`
+changes a field, this revision's service layer also writes one of these
+rows" (R3), but the actual R3 handler never did. Fixed as part of this
+revision's own `PATCH` extension — every risk-policy update now writes
+a `RiskPolicyVersion` snapshot, honoring what R3's schema always
+intended.
+
+**New services** (`services/*.py`, not a schema change but this
+revision's other half): `services/hard_vetoes.py` (the 10 hard vetoes,
+each producing a machine-readable code and a user-readable explanation
+sentence), `services/position_sizing.py` (HES-3's
+risk-budget-over-expected-move formula plus six sequential caps),
+`services/gap_risk.py` (HES-5's gap-through-stop modeling — "a stop
+order is never represented as a guarantee of the stop price," a literal
+disclosure string on every result, not just a design intent),
+`services/post_confirmation_gate.py` (HES-4/HES-6's post-confirmation
+eligibility gate, with the adverse-gap no-averaging-down rule checked
+independently of and prioritized over the three post-earnings
+confirmation gates themselves), and `services/recommendation_pipeline.py`
+(the 9-step orchestrator tying all of the above, plus Revision Prompt
+5's deterministic features and Revision Prompt 6's committees, into one
+call that always ends in exactly one outcome: a published action, a
+published `NO_ACTION`, or — for a pre-flight veto — a published
+`NO_ACTION` with no committee session at all).
+
+**Investment/Tactical CIO output schemas extended** (`schemas/agent_contract.py`):
+`InvestmentCioOutput` gained `preferred_accumulation_zone`, `tranche_plan`,
+`proposed_max_allocation_pct`, and `why_investment_not_trade` — the
+remaining "INVESTMENT ACTION PLAN" fields Revision Prompt 6's original
+schema didn't yet require. No numeric valuation range (low/mid/high) is
+requested from the CIO — that would be exactly the kind of calculation
+an LLM must not produce (principle 6/7); `valuation_context` remains
+qualitative narrative only, and a real numeric valuation model is a
+documented limitation, not an oversight. These new fields, plus
+Tactical's existing `setup_and_event_phase`/`key_catalyst`/`gap_risk`/
+`liquidity_risk`, are persisted into `RecommendationVersion.deterministic_inputs_snapshot`
+(`services/committee_orchestrator.py::_deterministic_inputs_snapshot()`)
+and surfaced by the recommendation detail endpoints (API area 22).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

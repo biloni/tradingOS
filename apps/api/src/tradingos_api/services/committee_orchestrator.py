@@ -326,6 +326,44 @@ def _apply_veto(
     return action, False
 
 
+def _deterministic_inputs_snapshot(
+    bundle: CommitteeInputBundle, cio_output: InvestmentCioOutput | TradingCioOutput
+) -> dict[str, object]:
+    """Everything about the CIO's own output that doesn't have a
+    dedicated column on `RecommendationVersion` — including Revision
+    Prompt 7's lane-specific plan fields (`preferred_accumulation_zone`/
+    `tranche_plan`/`proposed_max_allocation_pct`/`why_investment_not_trade`
+    for Investment; `setup_and_event_phase`/`key_catalyst`/`gap_risk`/
+    `liquidity_risk` for Tactical) — so the recommendation detail screen
+    can render the full plan without re-deriving it."""
+    snapshot: dict[str, object] = {
+        "deterministic_feature_ids": bundle.deterministic_feature_ids,
+        "evidence_completeness": cio_output.evidence_completeness,
+        "calibration_status": cio_output.calibration_status,
+        "risks": cio_output.risks,
+        "missing_information": cio_output.missing_information,
+        "minority_opinion": cio_output.minority_opinion,
+    }
+    if isinstance(cio_output, InvestmentCioOutput):
+        snapshot.update(
+            valuation_context=cio_output.valuation_context,
+            preferred_accumulation_zone=cio_output.preferred_accumulation_zone,
+            tranche_plan=cio_output.tranche_plan,
+            proposed_max_allocation_pct=str(cio_output.proposed_max_allocation_pct),
+            portfolio_role=cio_output.portfolio_role,
+            why_investment_not_trade=cio_output.why_investment_not_trade,
+        )
+    else:
+        snapshot.update(
+            setup_and_event_phase=cio_output.setup_and_event_phase,
+            key_catalyst=cio_output.key_catalyst,
+            gap_risk=cio_output.gap_risk,
+            liquidity_risk=cio_output.liquidity_risk,
+            entry_invalidation=cio_output.entry_invalidation,
+        )
+    return snapshot
+
+
 def _finalize_recommendation(
     db: Session,
     session: CommitteeSession,
@@ -372,14 +410,7 @@ def _finalize_recommendation(
         lane_action=final_action,
         confidence=_compute_confidence(bundle),
         rationale=rationale,
-        deterministic_inputs_snapshot={
-            "deterministic_feature_ids": bundle.deterministic_feature_ids,
-            "evidence_completeness": cio_output.evidence_completeness,
-            "calibration_status": cio_output.calibration_status,
-            "risks": cio_output.risks,
-            "missing_information": cio_output.missing_information,
-            "minority_opinion": cio_output.minority_opinion,
-        },
+        deterministic_inputs_snapshot=_deterministic_inputs_snapshot(bundle, cio_output),
         generated_at=datetime.now(UTC),
         horizon_days_min=horizon_min,
         horizon_days_max=horizon_max,

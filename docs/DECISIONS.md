@@ -1746,3 +1746,49 @@ access after that branch is valid for that lane — a maintenance error
 that tried to read `proposed_holding_window_days_min` off an
 `InvestmentCioOutput` is a `mypy --strict` failure, not a production
 bug discovered later.
+
+## ADR-053: The 9-step decision pipeline persists a `NO_ACTION` recommendation for a pre-flight veto, rather than returning an error with nothing recorded
+
+**Context.** Revision Prompt 7's step 9 is "publish a versioned
+recommendation or explicit `NO_ACTION`" — and step 2 (validate
+instrument/calendar/event timing/provider health) can fail before any
+committee ever runs. The question is what step 9 actually persists when
+step 2 blocks: nothing (treat it as a request error the caller handles),
+or a real, queryable `Recommendation` row explaining why nothing
+further happened.
+
+**Decision.** `services/recommendation_pipeline.py::_publish_no_action()`
+always writes a real `Recommendation`/`RecommendationVersion` pair with
+`lane_action = "NO_ACTION"` and a rationale naming every triggered
+veto's code and explanation, with `committee_session_id` left `NULL`
+(there was no session — an honest reflection of what actually happened,
+not a placeholder). This is symmetric with the "committee ran, CIO
+itself decided `NO_ACTION`" case, which already produces an identical
+row shape via `_finalize_recommendation()` — from the outside, a
+`Recommendation` list view cannot tell (and does not need to tell)
+whether `NO_ACTION` came from a pre-flight veto or a considered
+committee judgment; both are "the system looked at this and decided not
+to act," recorded the same way.
+
+**Alternatives considered.** Raising an exception / returning an
+HTTP error with no persisted row (rejected: silently discards the
+evaluation — a symbol that failed a pre-flight veto today has no
+audit trail proving it was even considered, which cuts directly against
+principle 9's "preserve recommendation snapshots" and would make "did
+we already check this symbol and reject it, or did we never look"
+unanswerable later). A separate `PreFlightRejection` table distinct
+from `Recommendation` (rejected: adds a second place to look for "what
+happened to symbol X today," and the two cases genuinely are the same
+kind of fact — "no action, and here is why" — differing only in whether
+a committee ran, which `committee_session_id`'s nullability already
+captures without a second table).
+
+**Consequences.** Every symbol this pipeline ever evaluates has exactly
+one kind of record for what happened — a `Recommendation`, always,
+whether the outcome was a real action, a considered `NO_ACTION`, or a
+pre-flight veto — never a case where "the system decided not to
+recommend anything" leaves no trace at all. `services/side_by_side.py`
+and the recommendation list/detail endpoints (API areas 14/15) needed
+zero special-casing for this: they already only look at `Recommendation`/
+`RecommendationVersion`, so a pre-flight `NO_ACTION` shows up exactly
+like any other recommendation would.

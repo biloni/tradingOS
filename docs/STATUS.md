@@ -25,8 +25,104 @@ shipped — 8 + 9 real committee roles run through one shared LLM adapter
 and one shared 15-field Agent Contract, a code-enforced deterministic-veto
 override, cost/timeout/fallback guardrails, and a side-by-side
 comparison view; live-verified against the real Anthropic API, no orders
-or sizing produced).
-**Last updated:** 2026-08-06
+or sizing produced), and Revision Prompt 7 (decision policy, risk
+manager, and hybrid earnings recommendation engine, shipped — the
+9-step deterministic decision pipeline, the 10 hard vetoes, HES-3
+position sizing, HES-4/HES-6 post-confirmation gating, HES-5
+gap-through-stop disclosure, the remaining Investment/Tactical action
+plan fields, and extended recommendation list/detail + a safe
+policy-configuration screen; no broker calls).
+**Last updated:** 2026-08-07
+
+## Revision Prompt 7 (2026-08-07) — decision policy, risk manager, and hybrid earnings recommendation engine
+
+**No prior implementation existed for the pipeline itself** — R3 had
+already built the full `OrderProposal`→policy-evaluation→`OrderApproval`
+lifecycle (`routers/order_authority.py`) and Revision Prompt 5/6 had
+already built the deterministic features and the committees; this
+revision's real new work was the decision-policy layer that decides
+*what* proposal to create and *whether* one should exist at all — no
+schema-first build was needed for the 9-step pipeline structure itself.
+
+- **9-step pipeline** (`services/recommendation_pipeline.py`, new):
+  freeze evidence cutoff → pre-flight hard vetoes (an explicit `NO_ACTION`
+  with no committee session at all if one fires) → deterministic
+  features (already computed by the caller) → lane selection (explicit)
+  → run the committee (Revision Prompt 6, deterministic-veto override
+  already enforced there) → portfolio/cash/sector/correlation/liquidity
+  constraints (Tactical only) → calculate the proposal → publish. Every
+  run ends in exactly one of three states: a published action, a
+  published `NO_ACTION`, or a pre-flight `NO_ACTION`.
+- **10 hard vetoes** (`services/hard_vetoes.py`, new): stale required
+  data, unverified event timing, failed liquidity, risk/sector limit,
+  missing price/expected move, evidence leakage, kill switch active,
+  broker environment ambiguity, investment/tactical attribution
+  ambiguity, expired recommendation — each produces a stable
+  machine-readable `veto_code` and a plain-English `explanation`
+  sentence, never just a boolean.
+- **HES-3 position sizing** (`services/position_sizing.py`, new):
+  notional = risk budget ÷ selected expected-move %, then six sequential
+  caps (max position allocation, max sector exposure, max correlated-
+  group exposure, liquidity, speculative-name, available cash) — each
+  recorded whether or not it actually bound. Defaults: 0.25% risk budget
+  (0.50% hard ceiling, enforced by the settings endpoint itself, not
+  just documented), 15% max position, 25% max sector, 5bps slippage —
+  all versioned, configurable via the extended `RiskPolicy`.
+- **HES-4/HES-6 post-confirmation gate** (`services/post_confirmation_gate.py`,
+  new): `TRADE_ADD_CONFIRMED` may only be attempted when the three
+  post-earnings confirmation gates (Revision Prompt 5) all pass **and**
+  liquidity is adequate **and** the gap was not adverse — the last
+  check is absolute and independent of the other four, so "no averaging
+  down after an adverse gap" (HES-6) holds even in the hypothetical case
+  where every other condition looked fine.
+- **HES-5 gap-through-stop** (`services/gap_risk.py`, new): estimates
+  what a stop actually fills at when an overnight gap carries price
+  through it before the market can trade at the stop price — every
+  result carries a literal "NOT a guaranteed execution price" disclosure
+  string, present even when the gap doesn't breach the stop.
+- **Investment/Tactical action plan fields completed** (`schemas/agent_contract.py`,
+  extended): `InvestmentCioOutput` gained `preferred_accumulation_zone`,
+  `tranche_plan`, `proposed_max_allocation_pct`, and
+  `why_investment_not_trade` — the remaining "INVESTMENT ACTION PLAN"
+  fields. No numeric valuation range is requested from the CIO
+  (principle 6/7 — that's a calculation, not a judgment call).
+- **Order proposal fields completed** (`models/order_authority.py`,
+  additive migration): `environment`, `outside_hours`, `attached_legs`,
+  `max_slippage_bps`, `valid_from`/`expires_at`, `risk_policy_version`,
+  `data_cutoff`/`quote_observed_at`, `requires_approval` — fills out the
+  "ORDER PROPOSAL FIELDS" list on top of R3's original columns.
+- **Recommendation list/detail extended** (`routers/investment.py`,
+  `routers/tactical.py`): both detail views now surface the full plan
+  (thesis-break/entry-invalidation conditions, the new CIO fields, and,
+  for Tactical, the linked `OrderProposal` if one was created) — reused
+  and extended R3's existing endpoints rather than building new ones. A
+  pre-existing R3 gap was fixed in the same pass: `RiskPolicyVersion`
+  rows are now actually written on every `PATCH /settings/risk-policy`
+  (the model's own docstring promised this since R3; the handler never
+  did it).
+- **Tests:** 296 backend tests (up from 256) — `test_hard_vetoes.py`
+  (8, including the required "every veto produces a user-readable
+  explanation code" and "event date correction" cases),
+  `test_position_sizing.py` (11, including "correlated semiconductor
+  positions" and "insufficient cash"), `test_post_confirmation_gate.py`
+  (8, HES-6's no-averaging-down guarantee), `test_gap_risk.py` (7, the
+  "gap-through-stop" scenario), `test_recommendation_pipeline.py` (6,
+  pre-flight `NO_ACTION`, "score 5 fails / score 6 needs every other
+  gate," "same symbol receives `INVEST_HOLD` and `TRADE_AVOID` without
+  conflict," and the six-month baseline reproducibility substitute — see
+  that file's own docstring for why a full historical-replay backtest
+  wasn't rebuilt this pass). `ruff`/`mypy --strict` clean across `src/`.
+- **Demonstrated live** (`src/tradingos_api/scripts/demo_prompt7.py`,
+  fake deterministic LLM — Revision Prompt 6's own demo already proved
+  live-Anthropic compatibility for the committee layer): an Investment
+  `INVEST_BUY`, a Tactical `TRADE_ENTER` with real sizing math and a real
+  persisted `OrderProposal`, a pre-flight veto publishing `NO_ACTION`
+  before any committee ran, HES-6 blocking an adverse-gap add-on, a
+  favorable-gap `TRADE_ADD_CONFIRMED`, and the gap-through-stop
+  disclosure — all in one run, all committed to the dev database.
+- **Docs:** docs/DATA_DICTIONARY.md §13, docs/ER_DIAGRAM.md §17,
+  docs/API_CONTRACTS.md areas 12/14/15, this entry, docs/TEST_EVIDENCE.md,
+  docs/DECISIONS.md (ADR-053).
 
 ## Revision Prompt 6 (2026-08-06) — evidence-bound Investment Committee and Tactical Trading Desk
 

@@ -67,6 +67,19 @@ class InvestmentThesisDetailResponse(BaseModel):
     latest_version: InvestmentThesisVersionResponse | None
     valuation_snapshots: list[ValuationSnapshotResponse]
     status_history: list[ThesisStatusHistoryResponse]
+    # Revision Prompt 7 — the remaining "INVESTMENT ACTION PLAN" fields
+    # that don't have their own table, read from the parent
+    # `Recommendation`'s latest `RecommendationVersion` (thesis-break
+    # conditions have their own child table; the rest live in
+    # `deterministic_inputs_snapshot`, see
+    # `services/committee_orchestrator.py::_deterministic_inputs_snapshot()`).
+    thesis_break_conditions: list[str] = []
+    lane_action: str | None = None
+    preferred_accumulation_zone: str | None = None
+    tranche_plan: str | None = None
+    proposed_max_allocation_pct: str | None = None
+    portfolio_role: str | None = None
+    why_investment_not_trade: str | None = None
 
 
 class InvestmentRecommendationSummaryResponse(BaseModel):

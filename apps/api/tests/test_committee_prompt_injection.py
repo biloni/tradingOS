@@ -115,9 +115,13 @@ class TestCompliantModelStillCannotBypassTheVeto:
                         horizon_days_max=365,
                         review_date=date.today().isoformat(),
                         valuation_context="N/A",
+                        preferred_accumulation_zone="N/A",
+                        tranche_plan=None,
+                        proposed_max_allocation_pct="5.0",
                         durable_catalysts=[],
                         thesis_break_conditions=["N/A"],
                         portfolio_role="N/A",
+                        why_investment_not_trade="N/A",
                         minority_opinion=None,
                     )
                 return LLMResponse(
@@ -190,9 +194,13 @@ class TestCompliantModelStillCannotBypassTheVeto:
                 horizon_days_max=365,
                 review_date=date.today(),
                 valuation_context="N/A",
+                preferred_accumulation_zone="N/A",
+                tranche_plan=None,
+                proposed_max_allocation_pct=Decimal("5.0"),
                 durable_catalysts=[],
                 thesis_break_conditions=["N/A"],
                 portfolio_role="N/A",
+                why_investment_not_trade="N/A",
                 minority_opinion=None,
                 run_metadata={
                     "model": "claude-sonnet-5",

@@ -234,8 +234,21 @@ the self-consistency reconciliation check.
   `investment_profile`.
 - `GET /api/v1/settings/risk-policy` / `PATCH .../risk-policy` — read/update
   the numeric risk limits (`risk_budget_pct`, `max_position_pct`,
-  `max_sector_pct`, `max_correlation`, `speculative_position_pct_cap`).
-  Every field in the PATCH body is optional — only provided fields change.
+  `max_sector_pct`, `max_correlation`, `speculative_position_pct_cap`),
+  plus **added Revision Prompt 7 (HES-3)** the earnings-specific
+  ceilings: `earnings_risk_budget_pct`, `earnings_risk_budget_max_pct`,
+  `earnings_max_position_pct`, `earnings_max_sector_pct`,
+  `earnings_max_concurrent_trades`, `earnings_slippage_bps`. Every field
+  in the PATCH body is optional — only provided fields change. This is
+  the "safe policy-configuration screen" Revision Prompt 7 asks for: the
+  endpoint itself enforces HES-3's absolute hard ceiling
+  (`earnings_risk_budget_max_pct` can never exceed `0.0050` = 0.50%, a
+  `400` if attempted) and that `earnings_risk_budget_pct` never exceeds
+  `earnings_risk_budget_max_pct` — a caller cannot silently drag the
+  earnings risk budget past what governance approved. Every successful
+  update also writes a `RiskPolicyVersion` snapshot (a pre-existing R3
+  gap — the model's own docstring promised this but the original
+  handler never did it — fixed while extending this endpoint).
 - `GET /api/v1/settings/operating-mode` — **added Revision Prompt R2**.
   `{"mode": "RESEARCH_ONLY"|"PAPER_MANUAL_APPROVAL"|"PAPER_AUTO_POLICY"|
   "LIVE_CONFIRM_EACH_ORDER", "environment_label": "RESEARCH"|"PAPER"|
@@ -278,7 +291,13 @@ dashboard client reads from (ADR-047).
 - `GET /api/v1/investment/theses/{thesis_id}` — the full thesis detail:
   latest `InvestmentThesisVersion` (valuation range, thesis text, horizon,
   review date, catalysts, risks), all `ValuationSnapshot`s, and full
-  `ThesisStatusHistory`.
+  `ThesisStatusHistory`. **Extended Revision Prompt 7** with the
+  remaining "INVESTMENT ACTION PLAN" fields, read from the recommendation's
+  latest `RecommendationVersion`: `thesis_break_conditions` (its own
+  child table), `lane_action`, and — from `deterministic_inputs_snapshot`
+  — `preferred_accumulation_zone`, `tranche_plan`,
+  `proposed_max_allocation_pct`, `portfolio_role`,
+  `why_investment_not_trade`.
 
 ## 15. Tactical-lane recommendations (`routers/tactical.py`) — **added R3**
 
@@ -286,7 +305,13 @@ dashboard client reads from (ADR-047).
   — every `Recommendation` with `mode == TACTICAL`; 404s on an
   `INVESTMENT` id. Never shares a response shape with area 14 (R3's
   required test: "investment and tactical recommendations cannot be
-  confused").
+  confused"). **Extended Revision Prompt 7** with the "TACTICAL
+  PRE-EARNINGS/POST-CONFIRMATION PLAN" fields: `entry_invalidation`
+  (this recommendation's own invalidation condition), and — from
+  `deterministic_inputs_snapshot` — `setup_and_event_phase`,
+  `key_catalyst`, `gap_risk`, `liquidity_risk`, plus the linked
+  `order_proposal_id`/`order_proposal_status` if this recommendation's
+  version actually sized into a real `OrderProposal`.
 
 ## 16. Earnings events (`routers/earnings.py`) — **added R3**
 

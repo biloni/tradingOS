@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -12,7 +14,12 @@ from tradingos_api.core.config import get_settings
 from tradingos_api.core.dependencies import get_current_user_id
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import ProviderKind
-from tradingos_api.models.identity import InvestmentProfile, ProviderConfig, RiskPolicy
+from tradingos_api.models.identity import (
+    InvestmentProfile,
+    ProviderConfig,
+    RiskPolicy,
+    RiskPolicyVersion,
+)
 from tradingos_api.models.order_authority import ExecutionKillSwitchEvent
 from tradingos_api.policy.order_authority import OrderAuthorityMode
 from tradingos_api.schemas.settings import (
@@ -23,6 +30,13 @@ from tradingos_api.schemas.settings import (
     RiskPolicyResponse,
     RiskPolicyUpdateRequest,
 )
+
+# HES-3's absolute hard ceiling ("configurable upper bound: 0.50%,
+# reachable only after explicit policy approval") — this endpoint is the
+# "safe policy-configuration screen" Revision Prompt 7 asks for, so it
+# enforces the ceiling itself rather than trusting the caller not to
+# drag it past what governance actually approved.
+_ABSOLUTE_MAX_EARNINGS_RISK_BUDGET_PCT = Decimal("0.0050")
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 
@@ -131,17 +145,58 @@ def update_risk_policy(
     if policy is None:
         raise HTTPException(status_code=404, detail="No risk policy configured.")
 
+    proposed_max = (
+        payload.earnings_risk_budget_max_pct
+        if payload.earnings_risk_budget_max_pct is not None
+        else policy.earnings_risk_budget_max_pct
+    )
+    if proposed_max > _ABSOLUTE_MAX_EARNINGS_RISK_BUDGET_PCT:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"earnings_risk_budget_max_pct cannot exceed "
+                f"{_ABSOLUTE_MAX_EARNINGS_RISK_BUDGET_PCT} (HES-3's hard ceiling)."
+            ),
+        )
+    proposed_budget = (
+        payload.earnings_risk_budget_pct
+        if payload.earnings_risk_budget_pct is not None
+        else policy.earnings_risk_budget_pct
+    )
+    if proposed_budget > proposed_max:
+        raise HTTPException(
+            status_code=400,
+            detail="earnings_risk_budget_pct cannot exceed earnings_risk_budget_max_pct.",
+        )
+
     for field in (
         "risk_budget_pct",
         "max_position_pct",
         "max_sector_pct",
         "max_correlation",
         "speculative_position_pct_cap",
+        "earnings_risk_budget_pct",
+        "earnings_risk_budget_max_pct",
+        "earnings_max_position_pct",
+        "earnings_max_sector_pct",
+        "earnings_max_concurrent_trades",
+        "earnings_slippage_bps",
     ):
         value = getattr(payload, field)
         if value is not None:
             setattr(policy, field, value)
 
+    db.add(
+        RiskPolicyVersion(
+            risk_policy_id=policy.id,
+            risk_budget_pct=policy.risk_budget_pct,
+            max_position_pct=policy.max_position_pct,
+            max_sector_pct=policy.max_sector_pct,
+            max_correlation=policy.max_correlation,
+            speculative_position_pct_cap=policy.speculative_position_pct_cap,
+            changed_at=datetime.now(UTC),
+        )
+    )
     db.commit()
     db.refresh(policy)
     return RiskPolicyResponse.model_validate(policy)

@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import RecommendationMode
-from tradingos_api.models.recommendations import Recommendation, RecommendationVersion
+from tradingos_api.models.order_authority import OrderProposal
+from tradingos_api.models.recommendations import (
+    Recommendation,
+    RecommendationInvalidationCondition,
+    RecommendationVersion,
+)
 from tradingos_api.models.security_master import Instrument
 from tradingos_api.schemas.common import Page
 from tradingos_api.schemas.instruments import InstrumentResponse
@@ -27,6 +32,11 @@ from tradingos_api.schemas.tactical import (
 router = APIRouter(prefix="/api/v1/tactical", tags=["tactical"])
 
 
+def _snapshot_str(snapshot: dict[str, object], key: str) -> str | None:
+    value = snapshot.get(key)
+    return value if isinstance(value, str) else None
+
+
 def _latest_version(db: Session, recommendation_id: uuid.UUID) -> RecommendationVersion | None:
     return db.scalar(
         select(RecommendationVersion)
@@ -35,7 +45,18 @@ def _latest_version(db: Session, recommendation_id: uuid.UUID) -> Recommendation
     )
 
 
-def _version_response(version: RecommendationVersion) -> TacticalRecommendationVersionResponse:
+def _version_response(
+    db: Session, version: RecommendationVersion
+) -> TacticalRecommendationVersionResponse:
+    snapshot: dict[str, object] = version.deterministic_inputs_snapshot or {}
+    invalidation_condition = db.scalar(
+        select(RecommendationInvalidationCondition).where(
+            RecommendationInvalidationCondition.recommendation_version_id == version.id
+        )
+    )
+    order_proposal = db.scalar(
+        select(OrderProposal).where(OrderProposal.recommendation_version_id == version.id)
+    )
     return TacticalRecommendationVersionResponse(
         id=version.id,
         version_number=version.version_number,
@@ -47,6 +68,15 @@ def _version_response(version: RecommendationVersion) -> TacticalRecommendationV
         horizon_days_max=version.horizon_days_max,
         review_date=version.review_date,
         generated_at=version.generated_at,
+        entry_invalidation=(
+            invalidation_condition.condition_text if invalidation_condition else None
+        ),
+        setup_and_event_phase=_snapshot_str(snapshot, "setup_and_event_phase"),
+        key_catalyst=_snapshot_str(snapshot, "key_catalyst"),
+        gap_risk=_snapshot_str(snapshot, "gap_risk"),
+        liquidity_risk=_snapshot_str(snapshot, "liquidity_risk"),
+        order_proposal_id=(order_proposal.id if order_proposal else None),
+        order_proposal_status=(order_proposal.status.value if order_proposal else None),
     )
 
 
@@ -59,7 +89,7 @@ def _summary(db: Session, rec: Recommendation) -> TacticalRecommendationSummaryR
         instrument=InstrumentResponse.model_validate(inst),
         status=rec.status,
         opened_at=rec.opened_at,
-        latest_version=_version_response(latest) if latest else None,
+        latest_version=_version_response(db, latest) if latest else None,
     )
 
 

@@ -93,7 +93,24 @@ class OrderProposal(UUIDPkMixin, TimestampMixin, Base):
 class OrderProposalVersion(UUIDPkMixin, CreatedAtMixin, Base):
     """Immutable once written — revising a proposal's terms creates the
     next version, never edits a prior one (the same discipline as
-    `RecommendationVersion`)."""
+    `RecommendationVersion`).
+
+    Revision Prompt 7 additive columns fill out its "ORDER PROPOSAL
+    FIELDS" list that R3's original columns above didn't yet carry:
+    `environment` (account/environment, alongside `OrderProposal.account_id`),
+    `outside_hours` (R3 only captured this at `ApprovalBoundFields`,
+    post-approval; a proposal states its own intent before that),
+    `attached_legs` (the OCO/bracket relationship, mirroring
+    `ApprovalBoundFields.attached_legs`'s shape one stage earlier),
+    `max_slippage_bps`, `valid_from`/`expires_at` (this proposal's own
+    validity window — distinct from `OrderApproval.expires_at`, which is
+    the *approval*'s separate, later expiry), `risk_policy_version`
+    (which `RiskPolicyVersion` the sizing math was computed against),
+    `data_cutoff`/`quote_observed_at` (point-in-time provenance for the
+    price/evidence this proposal's numbers came from), and
+    `requires_approval` (this proposal's own computed answer to "does
+    this need a human click," from the operating mode in force at
+    proposal time — never recomputed silently later)."""
 
     __tablename__ = "order_proposal_versions"
     __table_args__ = (sa.UniqueConstraint("order_proposal_id", "version_number"),)
@@ -111,6 +128,20 @@ class OrderProposalVersion(UUIDPkMixin, CreatedAtMixin, Base):
     )
     max_notional: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 6), nullable=True)
     rationale: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    environment: Mapped[EnvironmentLabel | None] = mapped_column(
+        sa.Enum(EnvironmentLabel, name="environment_label"), nullable=True
+    )
+    outside_hours: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    attached_legs: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON, default=dict)
+    max_slippage_bps: Mapped[Decimal | None] = mapped_column(sa.Numeric(8, 4), nullable=True)
+    valid_from: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    risk_policy_version: Mapped[str | None] = mapped_column(sa.String(60), nullable=True)
+    data_cutoff: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    quote_observed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    requires_approval: Mapped[bool] = mapped_column(sa.Boolean, default=True)
 
 
 class OrderPolicyEvaluation(UUIDPkMixin, CreatedAtMixin, Base):

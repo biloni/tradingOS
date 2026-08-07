@@ -105,20 +105,37 @@ class AgentContractOutput(BaseModel):
 
 
 class InvestmentCioOutput(AgentContractOutput):
-    """Investment CIO output (Revision Prompt 6). `action` is validated
-    against `policy.recommendation_modes.InvestmentAction` — the same
-    enum `RecommendationVersion.lane_action` is already validated
-    against (R0/R3), so a CIO output that passes this schema is, by
-    construction, writable as a real `RecommendationVersion` row."""
+    """Investment CIO output (Revision Prompt 6, extended Revision
+    Prompt 7 with the remaining "INVESTMENT ACTION PLAN" fields).
+    `action` is validated against `policy.recommendation_modes.InvestmentAction`
+    — the same enum `RecommendationVersion.lane_action` is already
+    validated against (R0/R3), so a CIO output that passes this schema
+    is, by construction, writable as a real `RecommendationVersion` row.
+
+    `proposed_max_allocation_pct` is this specific thesis's own proposed
+    ceiling, not a calculated position size — the CIO may propose a
+    number, but `services/recommendation_pipeline.py` clamps it against
+    `RiskPolicy.max_position_pct` deterministically before anything is
+    persisted (principle 6/7: the model proposes, the policy layer
+    decides). No numeric valuation range (low/mid/high) is requested
+    here deliberately — a number like that would be exactly the kind of
+    calculation an LLM must not produce; `valuation_context` is
+    qualitative narrative only, and a real numeric valuation range
+    requires a deterministic valuation model this revision does not
+    build (documented limitation, not an oversight)."""
 
     action: InvestmentAction
     horizon_days_min: int = Field(ge=90)  # ~3 months
     horizon_days_max: int = Field(le=730)  # ~24 months
     review_date: date
     valuation_context: str = Field(min_length=1)
+    preferred_accumulation_zone: str = Field(min_length=1)
+    tranche_plan: str | None = None
+    proposed_max_allocation_pct: Decimal = Field(gt=0, le=100)
     durable_catalysts: list[str]
     thesis_break_conditions: list[str] = Field(min_length=1)
     portfolio_role: str = Field(min_length=1)
+    why_investment_not_trade: str = Field(min_length=1)
     minority_opinion: str | None = None
 
     @model_validator(mode="after")

@@ -724,3 +724,60 @@ erDiagram
 sessions seeded under ADR-038's original lane-agnostic 8-role design
 have no lane to report. Every session this revision's orchestrator
 creates sets it explicitly.
+
+## 17. Revision Prompt 7 — decision policy, risk manager, hybrid earnings recommendation engine
+
+No new tables — 10 new columns on `order_proposal_versions` (fills out
+the "ORDER PROPOSAL FIELDS" list) and 6 new columns each on `risk_policy`/
+`risk_policy_versions` (HES-3's earnings-specific ceilings, deliberately
+separate from the general-purpose fields already there).
+
+```mermaid
+erDiagram
+    order_proposals ||--o{ order_proposal_versions : "has"
+    recommendation_versions ||--o| order_proposals : "sized into (Tactical only)"
+
+    order_proposal_versions {
+        uuid id PK
+        uuid order_proposal_id FK
+        int version_number
+        string order_type
+        numeric quantity
+        numeric limit_price
+        numeric stop_price
+        string time_in_force
+        numeric max_notional
+        text rationale
+        string environment "nullable, reused environment_label"
+        bool outside_hours
+        json attached_legs
+        numeric max_slippage_bps
+        datetime valid_from
+        datetime expires_at "this proposal's own window, distinct from OrderApproval.expires_at"
+        string risk_policy_version
+        datetime data_cutoff
+        datetime quote_observed_at
+        bool requires_approval
+    }
+    risk_policy {
+        uuid id PK
+        numeric risk_budget_pct
+        numeric max_position_pct
+        numeric max_sector_pct
+        numeric max_correlation
+        numeric speculative_position_pct_cap
+        numeric earnings_risk_budget_pct "0.0025 = 0.25% default"
+        numeric earnings_risk_budget_max_pct "0.0050 = 0.50% hard ceiling"
+        numeric earnings_max_position_pct
+        numeric earnings_max_sector_pct
+        int earnings_max_concurrent_trades
+        numeric earnings_slippage_bps
+    }
+```
+
+The 9-step pipeline itself (`services/recommendation_pipeline.py`)
+reads and writes entirely through this diagram plus Revision Prompt 6's
+committee schema (§16) and R3's `Recommendation`/`RecommendationVersion`/
+`RecommendationInvalidationCondition` (§9/§10 area) — no pipeline-specific
+table exists because every intermediate artifact (a committee session, a
+recommendation version, an order proposal) already had a home.

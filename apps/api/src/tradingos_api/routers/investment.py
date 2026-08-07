@@ -23,7 +23,11 @@ from tradingos_api.models.investment_thesis import (
     ThesisStatusHistory,
     ValuationSnapshot,
 )
-from tradingos_api.models.recommendations import Recommendation
+from tradingos_api.models.recommendations import (
+    Recommendation,
+    RecommendationInvalidationCondition,
+    RecommendationVersion,
+)
 from tradingos_api.models.security_master import Instrument
 from tradingos_api.schemas.common import Page
 from tradingos_api.schemas.instruments import InstrumentResponse
@@ -38,6 +42,11 @@ from tradingos_api.schemas.investment import (
 )
 
 router = APIRouter(prefix="/api/v1/investment", tags=["investment"])
+
+
+def _snapshot_str(snapshot: dict[str, object], key: str) -> str | None:
+    value = snapshot.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _thesis_detail(db: Session, thesis: InvestmentThesis) -> InvestmentThesisDetailResponse:
@@ -84,6 +93,27 @@ def _thesis_detail(db: Session, thesis: InvestmentThesis) -> InvestmentThesisDet
         .order_by(ThesisStatusHistory.occurred_at.desc())
     ).all()
 
+    # Revision Prompt 7 — the remaining plan fields, read from the
+    # recommendation's latest `RecommendationVersion` (thesis-break
+    # conditions have their own child table; the rest live in
+    # `deterministic_inputs_snapshot`).
+    latest_rec_version = db.scalar(
+        select(RecommendationVersion)
+        .where(RecommendationVersion.recommendation_id == thesis.recommendation_id)
+        .order_by(RecommendationVersion.version_number.desc())
+    )
+    thesis_break_conditions: list[str] = []
+    snapshot: dict[str, object] = {}
+    if latest_rec_version is not None:
+        conditions = db.scalars(
+            select(RecommendationInvalidationCondition).where(
+                RecommendationInvalidationCondition.recommendation_version_id
+                == latest_rec_version.id
+            )
+        ).all()
+        thesis_break_conditions = [c.condition_text for c in conditions]
+        snapshot = latest_rec_version.deterministic_inputs_snapshot or {}
+
     return InvestmentThesisDetailResponse(
         id=thesis.id,
         recommendation_id=thesis.recommendation_id,
@@ -92,6 +122,13 @@ def _thesis_detail(db: Session, thesis: InvestmentThesis) -> InvestmentThesisDet
         latest_version=version_response,
         valuation_snapshots=[ValuationSnapshotResponse.model_validate(s) for s in snapshots],
         status_history=[ThesisStatusHistoryResponse.model_validate(h) for h in history],
+        thesis_break_conditions=thesis_break_conditions,
+        lane_action=(latest_rec_version.lane_action if latest_rec_version else None),
+        preferred_accumulation_zone=_snapshot_str(snapshot, "preferred_accumulation_zone"),
+        tranche_plan=_snapshot_str(snapshot, "tranche_plan"),
+        proposed_max_allocation_pct=_snapshot_str(snapshot, "proposed_max_allocation_pct"),
+        portfolio_role=_snapshot_str(snapshot, "portfolio_role"),
+        why_investment_not_trade=_snapshot_str(snapshot, "why_investment_not_trade"),
     )
 
 

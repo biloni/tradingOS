@@ -1824,3 +1824,189 @@ confirms a fabricated action string outside the lane's vocabulary
 No new secrets this revision — the same, already-configured
 `ANTHROPIC_API_KEY` is the only credential used; `.env`/`.env.local`
 remain absent from `git status --porcelain` before staging.
+
+## Revision Prompt 7 — decision policy, risk manager, and hybrid earnings recommendation engine (2026-08-07)
+
+### Migration — hand-verified round trip against the real seeded dev DB
+
+```
+$ .venv/Scripts/alembic.exe upgrade head
+INFO  [alembic.runtime.migration] Running upgrade 109d5510a536 -> 1a65f23b1c9c, ...
+$ .venv/Scripts/alembic.exe downgrade -1
+$ .venv/Scripts/alembic.exe upgrade head
+$ .venv/Scripts/alembic.exe current
+1a65f23b1c9c (head)
+```
+Every new `NOT NULL` column (`order_proposal_versions.outside_hours`/
+`attached_legs`/`requires_approval`, all 6 new `risk_policy` columns)
+carries an explicit `server_default` — the model's Python-side
+`default=` only applies to new INSERTs, and both tables already had
+rows from prior revisions' seed data; the round trip above confirms the
+`ALTER TABLE ADD COLUMN` succeeded against those existing rows without
+needing a backfill migration.
+
+### `apps/api` full suite
+
+```
+$ .venv/Scripts/pytest.exe -q
+296 passed, 1 warning in 52.44s
+$ .venv/Scripts/ruff.exe check .
+All checks passed!
+$ .venv/Scripts/ruff.exe format --check .
+188 files already formatted
+$ .venv/Scripts/mypy.exe src/
+Success: no issues found in 130 source files
+```
+296/296 passing: 256 carried over from Revision Prompt 6 plus 40 new —
+`test_hard_vetoes.py` (8), `test_position_sizing.py` (11),
+`test_post_confirmation_gate.py` (8), `test_gap_risk.py` (7),
+`test_recommendation_pipeline.py` (6).
+
+All of this revision's explicitly required test categories present and
+passing:
+
+- **Score 5 fails / score 6 needs every other gate**
+  (`test_recommendation_pipeline.py::TestScoreFiveFailsScoreSixNeedsEveryOtherGate`)
+  — score 5 fails on `DIRECTION_SCORE` alone with every other condition
+  passing; score 6 passes when everything else does, and fails again
+  the moment any single other condition (tested: `FRESH_EVIDENCE`)
+  doesn't — reusing Revision Prompt 5's `evaluate_baseline_eligibility()`
+  directly, since that AND-gate is exactly what this requirement is
+  checking.
+- **Gap-through-stop** (`test_gap_risk.py::TestGapThroughStop`) — a
+  sell-stop at $95 with a prior close of $100 and a -8% overnight gap
+  produces an implied open of $92, below the stop; the estimated fill
+  is $92, not $95 — $3.00 of slippage the stop price alone would not
+  have shown. The reciprocal buy-stop-gapping-upward case is verified
+  too.
+- **Correlated semiconductor positions**
+  (`test_position_sizing.py::TestCorrelatedSemiconductorPositions`) — an
+  existing $9,000 correlated-group exposure against a $10,000 group
+  ceiling caps a new position to the $1,000 remaining room regardless of
+  what the raw risk-based size would have been; a group already at its
+  cap allows zero new notional.
+- **Existing investment holding plus tactical overlay**
+  (`test_recommendation_pipeline.py::TestSameSymbolInvestHoldAndTradeAvoidCoexist`)
+  — the same instrument receives an independent `INVEST_HOLD`
+  `Recommendation` (its own row, its own id) and an independent
+  `TRADE_AVOID` `Recommendation` from a separate pipeline run in the
+  same lane-agnostic way ADR-046 already established; `get_side_by_side_view()`
+  correctly surfaces both without conflict.
+- **Insufficient cash** (`test_position_sizing.py::TestInsufficientCash`)
+  — available cash below the risk-based size caps the position to what
+  cash can actually cover; zero available cash produces a `0` quantity,
+  never a crash or a negative size.
+- **Event date correction**
+  (`test_hard_vetoes.py::TestEventDateCorrection`) — an event whose
+  corrected timing is still `DATE_UNCONFIRMED` continues to block via
+  `UNVERIFIED_EVENT_TIMING`; once verified (`AFTER_CLOSE`), the same
+  veto clears.
+- **Every veto produces a user-readable explanation code**
+  (`test_hard_vetoes.py::TestEveryVetoProducesAUserReadableExplanationCode`)
+  — all 10 vetoes pass cleanly with `explanation == "OK"` when nothing
+  is wrong; triggered under adversarial inputs, all 10 fire
+  simultaneously, each with an upper-case alphanumeric `veto_code` and
+  an `explanation` starting with `"Blocked:"` and ending with a period.
+- **No averaging down after an adverse gap (HES-6)**
+  (`test_post_confirmation_gate.py::TestNoAveragingDownAfterAnAdverseGap`)
+  — a -2.5% gap blocks `TRADE_ADD_CONFIRMED` even when all three
+  post-earnings confirmation gates and liquidity pass; a 0% gap is not
+  treated as adverse; a positive gap with everything else passing is
+  eligible.
+- **The six-month baseline configuration** — see the dedicated
+  subsection below; this project's historical-replay backtest engine
+  was retired at Phase 8 (ADR-044) and this revision's scope is the
+  decision-policy layer, not resurrecting it.
+
+### On the "six-month baseline configuration reproduces its expected trade count" requirement
+
+`services/backtest.py` (the shipped MVP's historical-replay engine,
+ADR-022..025) was retired along with the rest of Phase 1-7's business
+logic at Phase 8 and has not been rebuilt in any revision since —
+`routers/backtests.py` is read-only, serving only the seed script's
+fixture data (see docs/API_CONTRACTS.md area 11). Rebuilding a full
+historical-replay engine is a materially different, larger undertaking
+than "the deterministic policy layer" Revision Prompt 7's own text
+scopes this revision to.
+
+`test_recommendation_pipeline.py::TestBaselineSixMonthConfiguration`
+substitutes the property that requirement is actually checking for at
+this layer: **that a fixed configuration run against the same evidence
+twice reproduces the identical trade count and aggregate risk-budget
+consumption, deterministically.** A hand-constructed 6-month sequence
+of 6 synthetic earnings events (with known direction scores and
+expected moves, three of which are designed to pass the baseline
+eligibility gate and three to fail it) is run twice through the real
+`evaluate_baseline_eligibility()`/`compute_tactical_position_size()`
+functions:
+
+```
+$ .venv/Scripts/pytest.exe -q tests/test_recommendation_pipeline.py::TestBaselineSixMonthConfiguration -v
+1 passed
+```
+Both runs produce exactly 3 eligible trades (events 1, 2, and 5 in the
+fixture) and byte-identical aggregate notional — proving the
+determinism property, not claiming a historical market-data backtest
+was executed. Rebuilding the full historical-replay engine remains a
+documented, explicit gap for a future revision, the same way
+docs/BLOCKING_DECISIONS.md tracks other explicitly-deferred items.
+
+### Live demo (fake, deterministic LLM — see the script's own docstring for why)
+
+`src/tradingos_api/scripts/demo_prompt7.py`, full transcript:
+
+```
+=== 1. INVESTMENT PIPELINE: MRVL ===
+outcome: PUBLISHED_ACTION
+lane_action: INVEST_BUY
+
+=== 2. TACTICAL PRE-EARNINGS PIPELINE: MRVL ===
+outcome: PUBLISHED_ACTION
+lane_action: TRADE_ENTER
+  raw_risk_based_notional: 4166.666666666666666666666667
+  final_notional: 4125.00  final_quantity: 55
+  binding_constraints: []
+  OrderProposal created: quantity=55 limit_price=75.00
+
+=== 3. PRE-FLIGHT VETO (unverified event timing): MRVL ===
+outcome: PUBLISHED_NO_ACTION_PRE_FLIGHT
+lane_action: NO_ACTION
+rationale: Pre-flight hard veto(s) triggered before any committee ran:
+  UNVERIFIED_EVENT_TIMING: Blocked: event date/time is not verified
+  (timing_category=DATE_UNCONFIRMED).
+
+=== 4. POST-CONFIRMATION GATE (HES-6): adverse gap ===
+eligible: False  reasons: ['HES-6: no add-on is ever proposed after an
+  adverse (negative) gap, full stop — not even with a new catalyst']
+
+=== 4b. POST-CONFIRMATION GATE: favorable gap, all gates pass ===
+eligible: True
+  outcome: PUBLISHED_ACTION
+  lane_action: TRADE_ADD_CONFIRMED
+
+=== 5. GAP-THROUGH-STOP (HES-5) ===
+gapped_through_stop: True
+estimated_fill_price: 69.0000 (stop was 71.25)
+disclosure: This stop is NOT a guaranteed execution price. Under this
+  gap scenario (-8.0%), the implied open (69.0000) is on the adverse
+  side of the 71.25 stop trigger — the estimated actual fill is
+  69.0000, 2.2500 worse than the stop price shown. A real overnight gap
+  can be materially larger or smaller than this estimate.
+
+All Prompt 7 demo recommendations/proposals persisted.
+```
+
+All 5 scenarios succeeded in one run, all committed to the real dev
+database: an Investment `INVEST_BUY`, a Tactical `TRADE_ENTER` with real
+sizing math producing a real `OrderProposal` (55 shares at $75.00, sized
+from a 0.25% risk budget against a 6% expected move, no constraint
+binding), a pre-flight veto correctly short-circuiting before any
+committee call, HES-6 correctly blocking an adverse-gap add-on while
+correctly allowing a favorable-gap one, and the gap-through-stop
+disclosure correctly identifying a scenario where the stop is breached.
+
+### Secrets check before commit
+
+No new secrets this revision — no new provider is contracted, no new
+credential is introduced; `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.
