@@ -25,9 +25,17 @@
 
 ## Cost tracking
 
-**Implemented, Phase 4.** Every LLM call is logged with token counts and
-cost (`LLMCallLog`, docs/DATA_DICTIONARY.md), written once per Anthropic API
-call by `services/ask.py`'s orchestration loop.
+**Implemented, Phase 4 (shipped MVP); re-implemented for the current
+Phase 8+ schema at Revision Prompt 6.** The shipped MVP logged every LLM
+call via `LLMCallLog`/`services/ask.py`, both retired at Phase 8 (ADR-043/044)
+along with the rest of Phase 1-7's business logic. Revision Prompt 6
+needed real cost-ceiling enforcement for committee runs and re-created
+the equivalent: `services/llm_cost.py::estimate_cost_usd()` (standard,
+non-intro `claude-sonnet-5` pricing, re-verified via the `claude-api`
+skill) and `models.operations.ModelCallRecord` (one row per `AgentRun`,
+ADR-043's deliberately narrower successor to `LLMCallLog` — no full
+request/response payload, just token counts/cost/latency/a short
+excerpt).
 
 ---
 

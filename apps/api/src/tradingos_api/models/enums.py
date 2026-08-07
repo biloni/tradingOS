@@ -136,7 +136,14 @@ class RegimeClassification(StrEnum):
 
 
 class AgentRole(StrEnum):
-    """ADR-038's 8 committee roles."""
+    """ADR-038's original 8 committee roles (`BULL`..`CIO`) are a single,
+    lane-agnostic committee design that predates Revision Prompt R3's
+    Investment/Tactical mode split. Revision Prompt 6 replaces that
+    design with two separate, non-overlapping committees — the 8
+    Investment roles and 9 Tactical roles below — per its own "the two
+    workflows may share evidence, but they must not share a conclusion."
+    The original 8 values are kept, unremoved, for backward compatibility
+    with already-seeded fixture data; no new code writes them."""
 
     BULL = "BULL"
     BEAR = "BEAR"
@@ -146,6 +153,27 @@ class AgentRole(StrEnum):
     RISK_MANAGER = "RISK_MANAGER"
     PORTFOLIO_MANAGER = "PORTFOLIO_MANAGER"
     CIO = "CIO"
+
+    # Investment Committee (Revision Prompt 6) — ~3-24 month horizon.
+    BUSINESS_QUALITY_ANALYST = "BUSINESS_QUALITY_ANALYST"
+    FUNDAMENTAL_VALUATION_ANALYST = "FUNDAMENTAL_VALUATION_ANALYST"
+    INDUSTRY_COMPETITIVE_ANALYST = "INDUSTRY_COMPETITIVE_ANALYST"
+    LONG_TERM_BULL_ANALYST = "LONG_TERM_BULL_ANALYST"
+    LONG_TERM_BEAR_ANALYST = "LONG_TERM_BEAR_ANALYST"
+    PORTFOLIO_STRATEGIST = "PORTFOLIO_STRATEGIST"
+    INVESTMENT_RISK_MANAGER = "INVESTMENT_RISK_MANAGER"
+    INVESTMENT_CIO = "INVESTMENT_CIO"
+
+    # Tactical Trading Desk (Revision Prompt 6) — ~1-10 trading day horizon.
+    MARKET_INTELLIGENCE_ANALYST = "MARKET_INTELLIGENCE_ANALYST"
+    TACTICAL_TECHNICAL_ANALYST = "TACTICAL_TECHNICAL_ANALYST"
+    EARNINGS_GUIDANCE_ANALYST = "EARNINGS_GUIDANCE_ANALYST"
+    NEWS_CATALYST_ANALYST = "NEWS_CATALYST_ANALYST"
+    TACTICAL_BULL = "TACTICAL_BULL"
+    TACTICAL_BEAR = "TACTICAL_BEAR"
+    PORTFOLIO_CORRELATION_MANAGER = "PORTFOLIO_CORRELATION_MANAGER"
+    TRADING_RISK_MANAGER = "TRADING_RISK_MANAGER"
+    TRADING_CIO = "TRADING_CIO"
 
 
 AGENT_RUN_TRANSITIONS: dict[str, set[str]] = {

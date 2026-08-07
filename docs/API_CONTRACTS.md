@@ -398,6 +398,37 @@ state, source, calculation version, and as-of time.
   `guidance_gate_passed`, `market_reaction_gate_passed`,
   `all_gates_passed`).
 
+## 22. Committee (`routers/committee.py`) — **added Revision Prompt 6**
+
+Every run is synchronous and explicitly triggered by the caller — there
+is no scheduled/background trigger anywhere in this router ("do not
+schedule production runs or submit orders"). The AI workflow may
+recommend; it never calculates size or submits an order (no endpoint
+here touches `orders`/`positions`).
+
+- `POST /api/v1/committee/{lane}/{instrument_id}/run` (`lane` is
+  `investment` or `tactical`) — runs the full 8- or 9-role committee
+  against a caller-supplied, already-assembled evidence bundle +
+  deterministic-inputs summary (this endpoint never fetches evidence
+  itself — the bundle is the "review screen" a human assembles/approves
+  before triggering a run). Returns every role's status, structured
+  output, cost, and latency, plus the resulting `Recommendation`/lane
+  action if the CIO's run succeeded. `hard_veto_active`/`hard_veto_reason`
+  in the request body come from Revision Prompt 5's own deterministic
+  gates; if set, a `INVEST_BUY`/`INVEST_ADD`/`TRADE_ENTER`/
+  `TRADE_ADD_CONFIRMED` CIO output is force-downgraded in code before
+  being persisted (ADR-051) — `veto_override_applied` in the response
+  says whether this happened.
+- `GET /api/v1/committee/sessions/{session_id}` — the review screen:
+  reconstructs a past run's full per-role detail (agent contract output,
+  cost, latency, model) from the persisted audit trail
+  (`AgentRun`/`AgentOpinion`/`ModelCallRecord`), never by re-running
+  anything.
+- `GET /api/v1/committee/side-by-side/{instrument_id}` — the latest
+  active Investment and Tactical `Recommendation` for one symbol side by
+  side, plus a deterministic (never LLM-generated) explanation of why
+  the two lanes may differ.
+
 ## Authorization assumptions
 
 No auth exists (ADR-007) — every request is implicitly "the one user."

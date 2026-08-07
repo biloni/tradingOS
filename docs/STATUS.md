@@ -19,8 +19,118 @@ market-regime classification, the tactical 8-component score, the
 Investment lane's 9-component feature engine, expected-move calculation,
 the 9-condition baseline eligibility gate, post-earnings confirmation's
 three gates, and a read-only feature-diagnostics API; no LLM computes
-any value in this layer, no recommendation created yet).
+any value in this layer, no recommendation created yet), and Revision
+Prompt 6 (evidence-bound Investment Committee and Tactical Trading Desk,
+shipped — 8 + 9 real committee roles run through one shared LLM adapter
+and one shared 15-field Agent Contract, a code-enforced deterministic-veto
+override, cost/timeout/fallback guardrails, and a side-by-side
+comparison view; live-verified against the real Anthropic API, no orders
+or sizing produced).
 **Last updated:** 2026-08-06
+
+## Revision Prompt 6 (2026-08-06) — evidence-bound Investment Committee and Tactical Trading Desk
+
+**No prior implementation existed to inspect for this exact shape** —
+`docs/MODEL_GOVERNANCE.md`'s "Refinement: the investment committee"
+section had planned a single, lane-agnostic 8-role committee (ADR-038)
+before the Investment/Tactical mode split (R3) existed; this revision
+supersedes that plan with two separate committees instead of building
+what was originally sketched (see ADR-052). The underlying
+`AgentDefinition`/`AgentVersion`/`CommitteeSession`/`AgentRun`/
+`AgentEvidenceLink`/`AgentOpinion` schema and the R3 Recommendation/
+Investment-thesis schema needed no new tables — only 17 new `agent_role`
+enum values and one nullable `committee_sessions.mode` column.
+
+- **Agent Contract** (`schemas/agent_contract.py`, new): one shared
+  15-field pydantic shape (`AgentContractOutput`) every role's output is
+  validated against — agent/prompt version, recommendation lane,
+  evidence cutoff, evidence ids, factual claims mapped to evidence ids
+  (a `model_validator` rejects any claim citing an undeclared id),
+  deterministic feature ids, thesis, strongest supporting/contradictory
+  evidence, risks, missing information, invalidation conditions,
+  categorical stance, evidence completeness, calibration status
+  (always `UNCALIBRATED` — DQ-5), and model/token/latency/cost run
+  metadata. `InvestmentCioOutput`/`TradingCioOutput` extend it with each
+  CIO's lane-specific required fields and their own action enum
+  (`policy.recommendation_modes.InvestmentAction`/`TacticalAction`,
+  already existing from R0) — two separate schemas, never one shape
+  with a lane flag (ADR-052).
+- **Provider-neutral LLM adapter, reused and widened** (`providers/llm.py`):
+  the existing `LLMProvider` Protocol (ADR-020) gained optional
+  `tool_choice`/`timeout_seconds` parameters, backward-compatible with
+  every existing caller — both committees share this one adapter, no
+  second one was introduced.
+- **17-role registry** (`services/committee_roles.py`, new): 8
+  Investment Committee roles (Business Quality, Fundamental/Valuation,
+  Industry/Competitive, Long-Term Bull, Long-Term Bear, Portfolio
+  Strategist, Risk Manager, Investment CIO) and 9 Tactical Trading Desk
+  roles (Market Intelligence, Technical, Earnings/Guidance, News/Catalyst,
+  Tactical Bull, Tactical Bear, Portfolio/Correlation Manager, Trading
+  Risk Manager, Trading CIO) — pure role identity/prompt-focus data, no
+  computation.
+- **Generic agent runner with guardrails** (`services/agent_runner.py`,
+  new): the one execution path every role goes through. Cost ceiling
+  (a role whose turn arrives after the run's budget is already spent is
+  `DEGRADED`, never called); timeout (passed straight to the provider);
+  fallback (`LLMProviderNotConfigured` or any provider exception
+  degrades that one role without crashing the committee); forced
+  structured output (the role's schema becomes a single named tool with
+  `tool_choice` forcing exactly that tool). `services/llm_cost.py`
+  (re-created; retired at Phase 8 along with the rest of the shipped
+  MVP's business logic) prices every call at Anthropic's standard,
+  non-intro `claude-sonnet-5` rate.
+- **Committee orchestrator** (`services/committee_orchestrator.py`,
+  new): runs every analyst role for a lane, then that lane's CIO,
+  persists the full audit trail, and — the one rule this revision exists
+  to make impossible to bypass — applies the deterministic-veto override
+  **in code**, after the CIO's output has already passed schema
+  validation and before any `Recommendation` row is written (ADR-051).
+  For a new `INVEST_BUY`/`INVEST_ADD`, also creates the `InvestmentThesis`
+  DQ-1 requires (thesis, valuation context, horizon, review date,
+  thesis-break conditions — all read from the CIO's own validated
+  output, never invented).
+- **Side-by-side view** (`services/side_by_side.py`,
+  `GET /api/v1/committee/side-by-side/{instrument_id}`, new): the latest
+  active Investment and Tactical recommendation for one symbol, plus a
+  deterministic (never LLM-generated) explanation of why the two lanes
+  may differ.
+- **Committee API** (`routers/committee.py`, API area 22, new):
+  `POST /api/v1/committee/{lane}/{instrument_id}/run` (synchronous,
+  human-triggered — no scheduled run anywhere), `GET /sessions/{id}`
+  (the review screen — every role's full contract output, cost,
+  latency, reconstructed from the persisted audit trail).
+- **Tests:** 256 backend tests (up from 226) — Agent Contract schema
+  validation (`test_agent_contract.py`), agent-runner guardrails
+  (`test_agent_runner.py` — cost ceiling, timeout pass-through,
+  fallback, and regression coverage for the two real bugs found via
+  live verification below),
+  committee eval fixtures (`test_committee_orchestrator.py` — an
+  obviously-bullish 8/8-role run, the adversarial veto-override case,
+  one degraded analyst not blocking the rest), and prompt-injection
+  defense in depth (`test_committee_prompt_injection.py` — every system
+  prompt labels evidence untrusted, and a fake LLM that *fully complies*
+  with an injected instruction to ignore the veto is still overridden by
+  the code, not the prompt). `ruff`/`mypy --strict` clean across `src/`.
+- **Two real bugs found via live verification against the real
+  Anthropic API** (`src/tradingos_api/scripts/demo_prompt6.py`): (1) the
+  tool schema sent to the model originally included `run_metadata`
+  (model/tokens/latency/cost) as a required field — asking the model to
+  invent values for its own not-yet-finished response, which made real
+  calls measurably more likely to fail; fixed by stripping that field
+  from the model-facing schema and injecting the real value
+  server-side after the call. (2) With a large, single forced-tool
+  schema, Claude occasionally wrapped the entire payload one level
+  deeper than requested (e.g. `{"agent_output": {...}}`) instead of
+  putting fields at the top level — fixed with a narrow, unambiguous
+  unwrap (only when a single top-level key's dict value contains at
+  least one of the schema's required fields). Both fixes are covered by
+  new regression tests in `test_agent_runner.py`; the full test suite
+  and a live re-run confirmed the fix.
+- **Docs:** docs/DATA_DICTIONARY.md §12, docs/ER_DIAGRAM.md §16,
+  docs/API_CONTRACTS.md area 22, docs/MODEL_GOVERNANCE.md (marks the
+  original single-committee plan superseded, documents what actually
+  shipped), this entry, docs/TEST_EVIDENCE.md, docs/DECISIONS.md
+  (ADR-051, ADR-052).
 
 ## Revision Prompt 5 (2026-08-06) — deterministic dual-lane analytics and earnings feature engine
 

@@ -1649,3 +1649,100 @@ calculation input; the components that actually feed a calculation are
 read back from the typed dataclasses (`ComponentResult`,
 `TacticalScoreResult`, etc.) the pure `services/*.py` functions return
 directly, not from this table.
+
+## ADR-051: The deterministic veto is enforced in code between the CIO's validated output and the persisted recommendation — never only a prompt instruction
+
+**Context.** Revision Prompt 6 requires "a committee result cannot
+override a deterministic veto" — the Investment Committee's
+`hard_disqualified` flag (Revision Prompt 5's `InvestmentQualityResult`)
+or the Tactical Trading Desk's failed baseline-eligibility gate
+(`BaselineEligibilityResult.eligible`) must be able to block an
+`INVEST_BUY`/`INVEST_ADD`/`TRADE_ENTER`/`TRADE_ADD_CONFIRMED` outcome no
+matter what either CIO role argues. A system prompt telling the CIO "you
+must not recommend X if the veto is active" is necessary (it shapes the
+common case) but is not, by itself, a guarantee — a model can misread,
+be adversarially prompted via injected evidence, or simply be wrong.
+
+**Decision.** `services/committee_orchestrator.py::_apply_veto()` runs
+*after* the CIO's output has already passed pydantic validation
+(`InvestmentCioOutput`/`TradingCioOutput`) and *before* any
+`Recommendation`/`RecommendationVersion` row is written. If
+`CommitteeInputBundle.hard_veto_active` is set and the validated action
+is in the blocked set for that lane, the code substitutes
+`INVEST_WATCH`/`TRADE_AVOID` and records the override explicitly (a
+`[DETERMINISTIC VETO OVERRIDE: ...]` prefix on the persisted rationale,
+plus `CommitteeRunResult.veto_override_applied`) — never a silent
+substitution. This is a plain `if` statement, not a second LLM call
+asked to "check itself," and not a validation rule the schema could
+express (the schema doesn't know about the veto; only the orchestrator
+does, since the veto is a fact about the world at call time, not a
+property of the CIO's own output). `tests/test_committee_orchestrator.py::TestDeterministicVetoCannotBeOverridden`
+and `tests/test_committee_prompt_injection.py` prove this against a
+fake LLM that deliberately, fully complies with an injected instruction
+to ignore the veto — the override still fires, because it does not
+depend on the model's behavior at all.
+
+**Alternatives considered.** Rejecting the CIO's response and re-prompting
+it with an error message when it violates the veto (rejected: adds an
+unbounded retry loop exactly where docs/MODEL_GOVERNANCE.md's existing
+"cost/iteration budget per committee run" policy says there shouldn't be
+one, and still ultimately trusts the model to self-correct rather than
+guaranteeing the outcome). Encoding the veto as a schema-level
+constraint on `InvestmentCioOutput`/`TradingCioOutput` (rejected: pydantic
+validates a value against static rules baked into the type; it has no
+way to receive "is the veto active *for this specific call*" as
+call-time context, so this would require passing mutable state into a
+schema class, an anti-pattern this project's schemas avoid everywhere
+else).
+
+**Consequences.** Every committee run's `Recommendation` row is
+provably compliant with the deterministic veto regardless of what
+either CIO said — a compliance reviewer never needs to re-read the
+model's prose to confirm this, only check `veto_override_applied` and
+the recommendation's `lane_action`. The cost is that a stubbornly
+wrong-headed but *not* vetoed CIO call (e.g. one that's simply a bad
+judgment call, no hard disqualifier active) is not caught by this
+mechanism — that class of error is what the human-reviewed "review
+screens" (`GET /api/v1/committee/sessions/{id}`) and the minority-opinion
+field are for, not code enforcement, since a subjective judgment call
+is exactly the kind of thing this system is supposed to let a human
+weigh, not silently override.
+
+## ADR-052: Investment and Tactical CIO outputs are two separate pydantic schemas, never one shape with a lane flag
+
+**Context.** Revision Prompt 6's `InvestmentCioOutput` and
+`TradingCioOutput` share 12 of the 15 base Agent Contract fields but
+diverge on the rest — investment horizon vs. holding window, thesis-break
+conditions vs. entry invalidation, `InvestmentAction` vs. `TacticalAction`
+— and the prompt's own text states "they must not share a conclusion or
+silently reuse a horizon."
+
+**Decision.** `InvestmentCioOutput` and `TradingCioOutput`
+(`schemas/agent_contract.py`) are two separate classes, each extending
+the shared `AgentContractOutput` base independently, rather than one
+`CioOutput` class with `lane: Literal["INVESTMENT","TACTICAL"]` and a
+grab-bag of fields that are only sometimes required. Each has its own
+`action` field typed to its own lane's enum
+(`policy.recommendation_modes.InvestmentAction`/`TacticalAction`), so a
+`TRADE_ENTER` value is a structural type error under
+`InvestmentCioOutput`, not a runtime business-rule check that could be
+skipped. This mirrors ADR-046's "Investment and Tactical recommendations
+are always two separate records, never one row with a mode flag" applied
+one layer up, at the LLM output-contract level rather than just the
+database-row level.
+
+**Alternatives considered.** One `CioOutput` schema with optional
+lane-specific fields and a runtime `assert_action_valid_for_mode()` check
+(rejected: every one of the ~7 lane-specific fields would need to be
+`| None` with a cross-field validator re-deriving which ones are
+actually required for a given lane — strictly more validation code than
+two concrete classes, for a weaker guarantee, since a caller could still
+construct a nonsensical partial instance before validation runs).
+
+**Consequences.** `services/committee_orchestrator.py::_finalize_recommendation()`
+branches on `isinstance(cio_output, InvestmentCioOutput)` exactly once,
+and the type checker (not a runtime assertion) confirms every field
+access after that branch is valid for that lane — a maintenance error
+that tried to read `proposed_holding_window_days_min` off an
+`InvestmentCioOutput` is a `mypy --strict` failure, not a production
+bug discovered later.

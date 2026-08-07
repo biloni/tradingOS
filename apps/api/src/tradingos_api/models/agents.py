@@ -18,7 +18,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from tradingos_api.db.base import Base
 from tradingos_api.db.json_type import PORTABLE_JSON
 from tradingos_api.db.mixins import CreatedAtMixin, UUIDPkMixin
-from tradingos_api.models.enums import AgentRole, AgentRunStatus, CommitteeSessionStatus
+from tradingos_api.models.enums import (
+    AgentRole,
+    AgentRunStatus,
+    CommitteeSessionStatus,
+    RecommendationMode,
+)
 
 
 class AgentDefinition(UUIDPkMixin, CreatedAtMixin, Base):
@@ -56,7 +61,17 @@ class CommitteeSession(UUIDPkMixin, CreatedAtMixin, Base):
     analysts, then Risk/PM, then CIO — each an `AgentRun` under this
     session). `triggered_by` names what caused the run (e.g.
     `PREMARKET_JOB`, `MANUAL`) without needing a full job-run FK for every
-    trigger source."""
+    trigger source.
+
+    `mode` (Revision Prompt 6, additive/nullable) is the "recommendation
+    lane" this session ran under — `INVESTMENT` (the 8-role Investment
+    Committee) or `TACTICAL` (the 9-role Tactical Trading Desk). Nullable
+    because it predates this column: rows seeded under ADR-038's original
+    lane-agnostic 8-role design have no lane to report; every session
+    Revision Prompt 6's orchestrator creates sets it explicitly. Reuses
+    `models.enums.RecommendationMode` rather than inventing a second lane
+    enum — the same value that ends up on the `Recommendation` row this
+    session's CIO output produces."""
 
     __tablename__ = "committee_sessions"
 
@@ -64,6 +79,9 @@ class CommitteeSession(UUIDPkMixin, CreatedAtMixin, Base):
         sa.Uuid(as_uuid=True), sa.ForeignKey("instruments.id"), index=True
     )
     triggered_by: Mapped[str] = mapped_column(sa.String(40))
+    mode: Mapped[RecommendationMode | None] = mapped_column(
+        sa.Enum(RecommendationMode, name="recommendation_mode"), nullable=True
+    )
     status: Mapped[CommitteeSessionStatus] = mapped_column(
         sa.Enum(CommitteeSessionStatus, name="committee_session_status")
     )

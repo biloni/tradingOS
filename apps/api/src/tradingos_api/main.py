@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from tradingos_api.routers import (
     alerts,
     backtests,
+    committee,
     earnings,
     feature_diagnostics,
     health,
@@ -54,3 +55,4 @@ app.include_router(order_authority.proposals_router)
 app.include_router(order_authority.approvals_router)
 app.include_router(provider_diagnostics.router)
 app.include_router(feature_diagnostics.router)
+app.include_router(committee.router)

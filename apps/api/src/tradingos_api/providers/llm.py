@@ -53,8 +53,20 @@ class LLMProvider(Protocol):
         system_prompt: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        *,
+        tool_choice: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse:
         """Run one structured, tool-use-capable completion. Callers validate
         any tool call arguments against a zod/pydantic schema before executing
-        them — the model never executes anything directly (principle 7)."""
+        them — the model never executes anything directly (principle 7).
+
+        `tool_choice`/`timeout_seconds` (Revision Prompt 6) are additive,
+        optional, backward-compatible widenings of this same interface —
+        the same "one provider-neutral adapter" ADR-020 already refined
+        once for genuine tool-use, refined again here so
+        `services/agent_runner.py` can force a single named "submit your
+        structured output" tool call (never free text) and bound each
+        call's wall-clock time, without either committee needing its own
+        adapter."""
         ...

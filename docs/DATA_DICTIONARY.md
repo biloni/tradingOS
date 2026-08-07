@@ -331,6 +331,59 @@ lane's 9 components), `expected_move.py`, `baseline_eligibility.py` (the
 post-event confirmation), and `persist_feature_results.py` (the one
 write path from any lane's pure compute result into the schema above).
 
+## 12. Revision Prompt 6 — evidence-bound Investment Committee and Tactical Trading Desk
+
+Purely additive: 17 new `agent_role` enum values and one nullable
+`committee_sessions.mode` column. No new tables — the existing agent/
+committee schema (`AgentDefinition`/`AgentVersion`/`CommitteeSession`/
+`AgentRun`/`AgentEvidenceLink`/`AgentOpinion`, ADR-038) and the existing
+Investment-thesis/Recommendation schema (R3) already had everything this
+revision's orchestration needed; nothing was schema-first this time.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `agent_role` (enum, +17 values) | 8 Investment roles (`BUSINESS_QUALITY_ANALYST` .. `INVESTMENT_CIO`) + 9 Tactical roles (`MARKET_INTELLIGENCE_ANALYST` .. `TRADING_CIO`) | ADR-038's original 8 (`BULL`..`CIO`) — a single, lane-agnostic committee design — are kept, unremoved, for backward compatibility with already-seeded fixture rows; no new code writes them. |
+| `committee_sessions.mode` (new column, nullable `recommendation_mode`) | `INVESTMENT` or `TACTICAL` | Nullable because it predates this column — rows seeded under the original 8-role design have no lane to report. Reuses the existing `RecommendationMode` enum rather than a second lane concept. |
+
+**No new tables were needed** for the Agent Contract's 15 required
+fields — every field lands in an existing column:
+
+| Agent Contract field | Where it's stored |
+|---|---|
+| agent and prompt version | `AgentDefinition.role` + `AgentVersion.version_label` |
+| recommendation lane | `CommitteeSession.mode` |
+| evidence cutoff | `AgentRun.input_snapshot['evidence_cutoff']` |
+| evidence ids | `AgentEvidenceLink` rows (one per cited id) |
+| factual claims mapped to evidence ids | `AgentOpinion.structured_output['factual_claims']` (schema-validated — see below) |
+| deterministic feature ids | `AgentRun.input_snapshot['deterministic_feature_ids']` |
+| thesis, strongest supporting/contradictory evidence, risks, missing information, invalidation conditions, categorical stance, evidence completeness, calibration status | `AgentOpinion.structured_output` (the full validated contract JSON) |
+| model, token, latency, cost metadata | `ModelCallRecord` (one row per `AgentRun`) |
+
+**`schemas/agent_contract.py`** (not a schema change, but the other half
+of "every output must include..."): `AgentContractOutput` — the shared
+15-field pydantic shape every one of the 17 roles' output is validated
+against before persistence, with a `model_validator` that rejects any
+factual claim citing an evidence id the agent didn't itself declare.
+`InvestmentCioOutput`/`TradingCioOutput` extend it with each CIO's
+lane-specific required fields (action, horizon/window, thesis-break or
+entry-invalidation conditions, minority opinion) — two separate schemas,
+never one shape with optional fields for both lanes, so the two
+conclusions cannot be structurally confused (ADR-052).
+
+**New services**: `services/committee_roles.py` (the 17-role registry:
+identity, lane, CIO flag, focus text — no computation), `services/llm_cost.py`
+(re-created; retired at Phase 8 along with the rest of the shipped MVP's
+business logic), `services/agent_runner.py` (the one generic
+execution path every role goes through — cost ceiling, timeout,
+fallback, forced structured tool output), `services/committee_orchestrator.py`
+(runs a full committee, enforces the deterministic-veto override in
+code, writes `Recommendation`/`RecommendationVersion`/
+`RecommendationInvalidationCondition` and, for a new `INVEST_BUY`/
+`INVEST_ADD`, an `InvestmentThesis` — DQ-1's "documented thesis,
+valuation logic, horizon, review date, and thesis invalidation"), and
+`services/side_by_side.py` (deterministic, templated — never an LLM
+call — comparison text).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

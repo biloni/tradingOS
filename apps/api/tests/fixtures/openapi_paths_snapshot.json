@@ -24,6 +24,24 @@
     ]
   ],
   [
+    "/api/v1/committee/sessions/{session_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/committee/side-by-side/{instrument_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/committee/{lane}/{instrument_id}/run",
+    [
+      "post"
+    ]
+  ],
+  [
     "/api/v1/earnings-events/calendar",
     [
       "get"

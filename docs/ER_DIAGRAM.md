@@ -683,3 +683,44 @@ erDiagram
         text disqualification_reason
     }
 ```
+
+## 16. Revision Prompt 6 — evidence-bound Investment Committee and Tactical Trading Desk
+
+No new tables — `committee_sessions` gains a nullable `mode` column
+(reusing the existing `recommendation_mode` enum) and `agent_role` gains
+17 new values. The full 17-role orchestration reads/writes entirely
+through the schema ADR-038 (agent/committee) and Revision Prompt R3
+(recommendations/investment thesis) already established.
+
+```mermaid
+erDiagram
+    committee_sessions ||--o{ agent_runs : "has"
+    agent_versions ||--o{ agent_runs : "version used by"
+    agent_definitions ||--o{ agent_versions : "has"
+    agent_runs ||--o| agent_opinions : "produces"
+    agent_runs ||--o{ agent_evidence_links : "cites"
+    agent_runs ||--o| model_call_records : "billed as"
+    committee_sessions ||--o| recommendation_versions : "produces (CIO only)"
+    recommendation_versions ||--o{ recommendation_invalidation_conditions : "states"
+    recommendations ||--o| investment_theses : "has (INVEST_BUY/ADD only)"
+
+    committee_sessions {
+        uuid id PK
+        uuid instrument_id FK
+        string triggered_by
+        string mode "nullable — INVESTMENT or TACTICAL"
+        string status
+        datetime started_at
+        datetime completed_at
+    }
+    agent_definitions {
+        uuid id PK
+        string role "17 new + ADR-038's original 8"
+        string name
+    }
+```
+
+`mode` is nullable specifically because it predates this revision —
+sessions seeded under ADR-038's original lane-agnostic 8-role design
+have no lane to report. Every session this revision's orchestrator
+creates sets it explicitly.

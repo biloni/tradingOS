@@ -36,14 +36,23 @@ class AnthropicLLMProvider:
         system_prompt: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        *,
+        tool_choice: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse:
         message_params: list[MessageParam] = [m for m in messages]  # type: ignore[misc]
+        kwargs: dict[str, Any] = {}
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        if timeout_seconds is not None:
+            kwargs["timeout"] = timeout_seconds
         response = self._client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=system_prompt,
             messages=message_params,
             tools=tools or [],  # type: ignore[arg-type]
+            **kwargs,
         )
 
         text_parts = [block.text for block in response.content if isinstance(block, TextBlock)]
