@@ -1850,3 +1850,69 @@ shows one, the bug (or simply reality) is external. `docs/API_CONTRACTS.md`
 area 5's new endpoints explicitly cross-reference the older area 6
 endpoint so a reader encountering both doesn't have to guess whether
 one is dead code.
+
+## ADR-055: The morning-plan orchestrator curates already-computed recommendations rather than running committees itself
+
+**Context.** Revision Prompt 9's 12 RUN STAGES include "evaluate
+upcoming earnings and other tactical candidates," "evaluate investment
+candidates," and "generate committees and policy decisions" — read
+literally, stages 8-10 could be implemented by having
+`services/morning_plan_generate.py` invoke Revision Prompt 6's LLM
+committees (`services/committee_orchestrator.py`) and Revision Prompt
+7's decision pipeline (`services/recommendation_pipeline.py`) live,
+once per watchlist symbol, every time a plan is generated. The
+orchestrator runs on a hard schedule (05:45/06:10 America/Los_Angeles)
+that a real deployment must hit reliably every trading day.
+
+**Decision.** `generate_morning_plan()` never invokes a committee or
+the decision pipeline itself. Stages 8-10 instead *select* the most
+recent, already-computed `RecommendationVersion` for each candidate via
+a `RecommendationLookup` protocol (`default_recommendation_lookup()`
+queries `recommendation_versions` ordered by `generated_at desc`) — the
+committees/pipeline remain their own, separately-invoked services,
+run ahead of time (a scheduled ingestion job, a manual "recompute"
+action, or a demo script) by whatever cadence makes sense for LLM cost
+and latency, decoupled from the plan-assembly schedule itself.
+
+**Rationale — this is not merely a performance shortcut:**
+
+1. **Reproducibility is stronger, not just faster.** Revision Prompt
+   9's own quality rule — "the final plan must be reproducible from
+   stored inputs" — is only mechanically true if generation *never*
+   calls a non-deterministic LLM at read/generate time. A plan built by
+   re-running committees during generation could never be reconstructed
+   byte-for-byte from `MorningPlanInputLink` rows alone, because the
+   next run would call the LLM again and could get a different answer.
+   Curating an already-persisted, immutable `RecommendationVersion`
+   (Phase 8, unchanged) and recording its exact id in the input-link
+   manifest is what makes `tests/test_morning_plan_generate.py::TestEvidenceReproducibility`
+   a meaningful, checkable property instead of an aspiration.
+2. **A 05:45-06:10 window cannot absorb live-LLM variance.** Investment
+   Committee + Tactical Trading Desk sessions (Revision Prompt 6) run
+   8-9 agent roles per symbol; across a ~40-symbol watchlist that is not
+   a bounded-latency operation, and a scheduled job with a hard
+   deadline should not have an unbounded, cost-incurring dependency in
+   its critical path.
+3. **It matches this project's existing "LLMs must not calculate"
+   discipline** (ADR-051's deterministic veto, ADR-045's v2 amendment)
+   — applied here to *scheduling*, not just to individual decisions: a
+   time-critical, must-run-every-trading-day job should not depend on a
+   live model call succeeding within its window.
+
+**The extension seam.** `recommendation_lookup: RecommendationLookup =
+default_recommendation_lookup` is an explicit parameter, not a hardcoded
+call — a caller that wants fresh committee output *before* assembling
+the plan is free to run `services/recommendation_pipeline.py` per
+candidate first (e.g. a pre-plan ingestion stage in the always-on
+worker) and then call `generate_morning_plan()` normally; the
+orchestrator's own contract never changes.
+
+**Consequences.** A morning plan can legitimately curate a stale
+`RecommendationVersion` if nothing re-ran it recently — this is exactly
+what `STALE_RECOMMENDATION_AGE` (20 hours) and the "Data Problems"
+routing exist to make visible rather than silently accept
+(`tests/test_morning_plan_generate.py::TestRequiredDataStale`). The
+practical implication for a real deployment: an always-on worker's
+pipeline must run committees for the watchlist *before* 05:45 on its
+own schedule — the morning-plan job assumes fresh input exists, it does
+not create it.

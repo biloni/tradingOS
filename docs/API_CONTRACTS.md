@@ -322,11 +322,12 @@ the self-consistency reconciliation check.
   enforced authorization decision (see docs/ORDER_AUTHORITY_MODEL.md's
   traceability table for when it becomes one).
 
-## 13. Morning plan (`routers/morning_plan.py`) — **added Revision Prompt R3**
+## 13. Morning plan (`routers/morning_plan.py`) — **added Revision Prompt R3, generation logic added Revision Prompt 9**
 
-No plan-generation logic exists yet — these endpoints are the manifest/
-audit-trail contract a future scheduler job writes into and every
-dashboard client reads from (ADR-047).
+R3 shipped the manifest/audit-trail contract with an empty-plan stub;
+Revision Prompt 9 replaced the stub with the real 12-stage orchestrator
+(`services/morning_plan_generate.py`) and added the dashboard/delivery
+endpoints (ADR-047, ADR-055).
 
 - `GET /api/v1/morning-plan/latest` — the most recent `MorningPlanVersion`
   (by `plan_date` then `version_number`), with its sections/items/quality-
@@ -336,11 +337,39 @@ dashboard client reads from (ADR-047).
   adds a row, this is the full revision history for that day.
 - `GET /api/v1/morning-plan/versions/{version_id}/quality-status` — the
   per-check detail behind a version's `completeness_status`.
-- `POST /api/v1/morning-plan/rerun` — records a new `MorningPlanRun` +
-  `MorningPlanVersion` for a `plan_date`; **never** edits or replaces an
-  existing version. Starts empty/`INCOMPLETE` with one quality-check row
-  explaining why (no generation logic runs here). Idempotent via an
-  optional `idempotency_key`.
+- `POST /api/v1/morning-plan/generate` — **replaces R3's `/rerun` stub.**
+  Runs the real 12-stage orchestrator for a `plan_date`/`version_label`;
+  **never** edits or replaces an existing version — a rerun always adds
+  a new row. Rejects (422) a non-trading-day `plan_date` with the
+  calendar's own `skip_reason`. Idempotent via an optional
+  `idempotency_key` (a duplicate call returns the prior version rather
+  than generating a second one). Records an in-app `Alert` +
+  `MorningPlanDeliveryEvent(channel=IN_APP)` when `version_label == FINAL`
+  (never for `PRELIMINARY`/`AD_HOC`). This is the one endpoint an
+  always-on worker calls after `services/morning_plan_scheduler.py::decide_schedule()`
+  says `should_run=True`; a user's manual "run now" calls the identical
+  endpoint with `version_label=AD_HOC`.
+- `GET /api/v1/morning-plan/dashboard?plan_date=&now=` — the Morning
+  Decision Dashboard read contract: a `top_status` block (market date,
+  countdown to open, `plan_status` — `COMPLETE`/`INCOMPLETE`/`STALE`/
+  `FAILED`/`MARKET_CLOSED`, computed at read time, not the same value as
+  the stored `completeness_status` — regime/VIX context, equity/cash/
+  exposure/risk-budget, operating mode, kill-switch state) plus the full
+  section hierarchy for whichever version is most authoritative for that
+  date (`FINAL`/`CORRECTION` outrank `PRELIMINARY`/`AD_HOC`). The
+  optional `now` query param is a controllable clock for tests/demo —
+  production callers omit it. Never writes anything; this is also the
+  contract a Cowork scheduled task's read path is built on.
+- `GET /api/v1/morning-plan/versions/{version_id}/export.md` — a
+  Markdown render of one version (`text/markdown`), safe to print or
+  paste elsewhere.
+- `GET /api/v1/morning-plan/cowork-brief?plan_date=` — the Cowork
+  read-only delivery contract (SS-5, ADR-049, docs/MORNING_PLAN_SPEC.md):
+  serves only a `FINAL`/`CORRECTION` version, never `PRELIMINARY`; 404s
+  honestly (never a `PRELIMINARY` substitute) if no `FINAL` has been
+  published yet for the date. Records a
+  `MorningPlanDeliveryEvent(channel=COWORK)` on success. No code path
+  into order creation, approval, or execution — a `GET`, full stop.
 
 ## 14. Investment-lane recommendations & thesis (`routers/investment.py`) — **added R3**
 

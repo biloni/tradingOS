@@ -1,11 +1,24 @@
 # Morning Plan Spec
 
-**Status: architecture-only (Revision Prompt R1).** This is the target
-spec for the Morning Decision Plan and the dashboard that reads it,
-implementing PROJECT_INSTRUCTIONS.md's `MDS-*` requirements (adopted in
-Revision Prompt R0) in enough detail to build against. Nothing here is
-implemented yet — no scheduler, no plan-assembly service, no dashboard
-route exists in the current codebase.
+**Status: implemented (Revision Prompt 9, 2026-08-08).** The scheduler
+(`services/morning_plan_scheduler.py`), the 12-stage plan-assembly
+orchestrator (`services/morning_plan_generate.py`), the dashboard read
+API (`services/morning_plan_dashboard.py`, `GET /api/v1/morning-plan/dashboard`),
+and Markdown/in-app/Cowork delivery all exist and are tested — see
+docs/STATUS.md's Revision Prompt 9 entry for the full summary and
+docs/DECISIONS.md ADR-055 for why the orchestrator curates already-computed
+recommendations rather than running committees live. **One deliberate
+deviation from the text below:** the "Fixed section grouping" list
+originally named `Hold/Manage`, `Investment Watch`, `Tactical Watch`,
+and `Avoid`; Revision Prompt 9's own live instruction specified a
+different hierarchy — `Buy and Hold`, `Tactical Trades`,
+`Watch and Avoid`, `Upcoming Events` (a section not present in the
+original sketch at all) — which is what actually shipped, per this
+project's established pattern of a later, more detailed live prompt
+superseding an earlier architecture-only sketch. The original text
+below is left as-written for historical context rather than silently
+rewritten; `models/enums.py::MorningPlanSectionKey` keeps both the old
+and new values for the same reason.
 
 ## What "the plan" is
 
@@ -192,10 +205,11 @@ section and docs/DECISIONS.md's ADR-049 for the full boundary design.
 
 ## Traceability
 
-| Item | Future prompt | Acceptance test (planned id) |
+| Item | Shipped in | Tests |
 |---|---|---|
-| Scheduler + `MorningPlanRun` job-lineage model | Prompt 3 | AC-09 |
-| `PRELIMINARY`/`FINAL`/`AD_HOC` versioning + immutability | Prompt 3 | AC-09 |
-| `COMPLETE`/`INCOMPLETE` labeling logic | Prompt 3 | AC-10 |
-| Morning Decision Dashboard UI (7 sections, 3-entry cap) | Prompt 4 | AC-10 |
-| Cowork read-only delivery | Prompt 15 | AC-17 |
+| Scheduler + `MorningPlanRun` job-lineage model | Revision Prompt 9 | `tests/test_morning_plan_scheduler.py` |
+| `PRELIMINARY`/`FINAL`/`AD_HOC`/`CORRECTION` versioning + immutability | Revision Prompt 9 | `tests/test_morning_plan_endpoints.py::TestRerunCreatesVersionsNotOverwrites`, `TestPreliminaryToFinalDiff` |
+| `COMPLETE`/`INCOMPLETE` labeling logic | Revision Prompt 9 | `tests/test_morning_plan_generate.py::TestRequiredDataStale` |
+| Morning Decision Dashboard read API (7 sections, 3-entry cap) | Revision Prompt 9 | `tests/test_morning_plan_generate.py`, `tests/test_morning_plan_endpoints.py` |
+| Cowork read-only delivery | Revision Prompt 9 | `tests/test_morning_plan_endpoints.py::test_cowork_brief_only_ever_serves_the_final_version` |
+| Morning Decision Dashboard UI (web) | Not yet built — API-only this revision | — |

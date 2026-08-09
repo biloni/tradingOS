@@ -2198,3 +2198,233 @@ from; `None` is the honest answer.
 
 No new secrets this revision — `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 9 — Morning Decision Dashboard and market-calendar scheduler (2026-08-08)
+
+### A real test-isolation issue found via the live demo (not an application bug)
+
+`src/tradingos_api/scripts/demo_prompt9.py` calls the real
+`/api/v1/morning-plan/*` endpoints through `TestClient(app)` against the
+app's own `get_db` dependency — unlike a pytest fixture's `client`
+(whose `db_session` rolls back after every test), this hits a fresh
+`SessionLocal()` per request and commits for real, exactly like a
+running server would. Running the demo once therefore permanently adds
+`PRELIMINARY`/`FINAL` `MorningPlanVersion` rows for `plan_date =
+2026-08-17` to the shared dev database.
+
+Two existing tests broke as a direct, reproducible consequence:
+`test_latest_reflects_most_recent_version_across_dates` (posted
+`2026-08-10`, asserted `/latest` returned it) and
+`test_preliminary_then_final_are_both_retained_and_final_outranks_it`
+(posted `2026-08-12`, same assertion) — both failed because
+`GET /api/v1/morning-plan/latest` is deliberately global across every
+`plan_date` (`ORDER BY plan_date DESC, version_number DESC`, no
+per-date scoping), so it now correctly returned the demo's
+chronologically-later `2026-08-17` row instead of whichever earlier
+date the test had just posted:
+
+```
+AssertionError: assert '2026-08-17' == '2026-08-10'
+```
+
+This is the same category of issue as Revision Prompt 8's `MRVL`
+test-isolation incident (§ above) — not a bug in `/latest`'s own logic
+(returning the actual most-recent row is correct behavior), and not
+test-to-test pollution (`tests/conftest.py`'s savepoint rollback is
+working exactly as designed for every *test*-originated row). It is a
+demo script's real, intentional commits colliding with two tests that
+implicitly assumed their own posted date would always be the newest
+one in the database. Fixed by moving both tests to dates safely after
+the demo's hardcoded `2026-08-17` (`2026-08-20` and `2026-08-19`
+respectively) — consistent with this project's established resolution
+for this exact class of issue: adjust the test's assumption, never
+weaken a demo script's deliberate commit-for-inspection behavior.
+Verified stable after the fix (see full-suite run below, run after the
+demo script had already executed).
+
+### `apps/api` full suite
+
+```
+$ .venv/Scripts/pytest.exe -q
+351 passed, 1 warning in ~20-30s
+$ .venv/Scripts/ruff.exe check .
+All checks passed!
+$ .venv/Scripts/ruff.exe format --check .
+214 files already formatted
+$ .venv/Scripts/mypy.exe src/
+Success: no issues found in 146 source files
+```
+
+351/351 passing: 315 carried over from Revision Prompt 8 plus 36 new —
+`test_market_calendar.py` (14), `test_morning_plan_scheduler.py` (11),
+`test_morning_plan_generate.py` (8), and 3 new test methods added to
+`test_morning_plan_endpoints.py`'s new `TestPreliminaryToFinalDiff` class.
+
+All of this revision's explicitly required test categories present and
+passing:
+
+- **Weekday, holiday, early close, DST transition, and weekend**
+  (`test_market_calendar.py`) — a plain Tuesday resolves as a trading
+  day; Saturday/Sunday resolve `is_trading_day=False` with a
+  `"weekend"` reason; a fixed-date holiday (Juneteenth) and an
+  *observed* holiday (July 3, 2026 — July 4 falls on a Saturday) both
+  resolve `False` with a `"holiday"` reason; the day after Thanksgiving
+  closes at 13:00 exchange time vs. 16:00 on a regular day;
+  `session_open_utc` shifts by exactly one hour across both the March 8
+  spring-forward and the November 1 fall-back 2026 DST transitions
+  while the *local* exchange and display times stay fixed at 09:30
+  ET/06:30 PT either side of the transition — proving `zoneinfo`
+  resolves the offset per-date rather than using a hardcoded one;
+  `next_trading_day()` correctly walks across a holiday abutting a
+  weekend (Friday → the following Tuesday, skipping Sat/Sun/Mon in one
+  pass) rather than assuming at most one non-trading day at a time.
+- **Provider partial outage** (`test_morning_plan_generate.py::TestProviderPartialOutage`)
+  — a watchlist instrument with no entry in the injected recommendation
+  lookup (modeling a committee/provider outage for that one symbol) is
+  silently skipped, not crashed, and produces no Data Problems entry
+  either (an outage is distinct from stale data — no data at all is
+  not the same failure mode as data that exists but is too old).
+- **Required data stale** (`TestRequiredDataStale`) — a recommendation
+  generated more than `STALE_RECOMMENDATION_AGE` (20 hours) before the
+  plan's evidence cutoff is routed to Data Problems with a specific
+  per-symbol quality-check detail, never shown as a fresh actionable
+  proposal; when the stale candidate is a large enough share of the
+  total (50% in the test), the whole plan version is labeled
+  `INCOMPLETE`.
+- **No qualified trades** (`TestNoQualifiedTrades`) — a `NO_ACTION`
+  recommendation produces no Act Now/Approval Required entry; an
+  entirely empty watchlist still produces a valid, `COMPLETE` plan
+  version (zero total candidates does not divide-by-zero or otherwise
+  crash the completeness math) — a normal result is allowed to be
+  "nothing to do."
+- **Existing position requiring action** (`TestExistingPositionRequiringAction`)
+  — a real open `PositionLot` (via `apply_buy_execution`) whose source
+  recommendation says `TRADE_EXIT` is routed to Act Now regardless of
+  lane; a held lot with a routine `INVEST_HOLD` action is correctly
+  **not** forced into Act Now, landing in Buy and Hold instead — proving
+  the routing responds to the actual guidance rather than reflexively
+  flagging every open position.
+- **Duplicate/rerun protection** (`test_morning_plan_scheduler.py::TestDuplicateRerunProtection`,
+  plus the pre-existing `test_morning_plan_endpoints.py::TestRerunCreatesVersionsNotOverwrites`)
+  — a `COMPLETED` run for a (date, label) blocks a second scheduling
+  decision for the same slot; a `RUNNING` (not yet completed) run
+  blocks a concurrent second attempt.
+- **Worker restart** (`TestWorkerRestart`) — a `FAILED` attempt allows a
+  fresh retry with an incremented idempotency-key attempt number; a run
+  left `RUNNING` past `STUCK_RUN_TIMEOUT` (15 minutes, simulating a
+  crashed worker process) is treated as abandoned and a restarted
+  worker's next tick correctly retries it — verified both just inside
+  the timeout (still blocked) and just past it (retries); a worker that
+  restarts *after* a `FINAL` was already completed still correctly
+  finds it blocked, proving the decision is derived entirely from
+  persisted rows, never in-memory state.
+- **Plan preliminary-to-final diff** (`test_morning_plan_endpoints.py::TestPreliminaryToFinalDiff`)
+  — a `PRELIMINARY` run followed by a `FINAL` run for the same date
+  both persist as distinct, independently retrievable versions with an
+  increasing `version_number`; the dashboard and `/latest` both prefer
+  `FINAL` over `PRELIMINARY` once both exist; the Cowork brief 404s
+  honestly before `FINAL` exists (even with a `PRELIMINARY` already
+  published) and serves it correctly afterward; the Markdown export
+  renders the requested version's actual plan date and version label.
+- **Evidence reproducibility** (`TestEvidenceReproducibility`) — two
+  separate orchestrator runs against identical stored inputs (same
+  frozen `now`, same injected recommendation lookup) produce identical
+  `completeness_status`, an identical ordered stage-name sequence, and
+  identical Approval Required headlines; the exact `RecommendationVersion`
+  id consulted appears in both runs' `MorningPlanInputLink` manifests —
+  the concrete, checkable form of "the final plan must be reproducible
+  from stored inputs."
+
+### Live demo
+
+`src/tradingos_api/scripts/demo_prompt9.py`, full transcript (a
+controllable clock over a synthetic 2026-08-17 trading day, calling the
+real API throughout):
+
+```
+=== 0. THE CALENDAR ITSELF: WEEKEND AND HOLIDAY ARE SKIPPED WITH A REASON ===
+  2026-08-15 (Saturday): is_trading_day=False — Saturday — weekend, no trading session.
+  2026-09-07 (Labor Day): is_trading_day=False — 2026-09-07 is an NYSE/Nasdaq market holiday.
+
+=== 1. BEFORE THE PRELIMINARY WINDOW (05:00 PT, 2026-08-17) ===
+  [05:00 PT] should_run=False reason="before today's preliminary run time (05:45:00 America/Los_Angeles)."
+
+=== 2. PRELIMINARY WINDOW OPENS (05:45 PT, 2026-08-17) ===
+  [05:45 PT] should_run=True reason='starting PRELIMINARY for 2026-08-17 (attempt 1)'
+  PRELIMINARY version #1 (3a967fef-f66d-4119-bfba-27a3d13ed598), completeness=COMPLETE
+    ACT_NOW: 0 item(s)
+    APPROVAL_REQUIRED: 0 item(s)
+    BUY_AND_HOLD: 5 item(s)
+    TACTICAL_TRADES: 0 item(s)
+    WATCH_AND_AVOID: 0 item(s)
+    UPCOMING_EVENTS: 0 item(s)
+    DATA_PROBLEMS: 5 item(s)
+
+=== 3. A SECOND POLL TICK MINUTES LATER — DUPLICATE PROTECTION ===
+  [05:50 PT] should_run=False reason='PRELIMINARY already completed for 2026-08-17.'
+
+=== 4. FINAL WINDOW OPENS (06:10 PT) — BUT THE WORKER CRASHES MID-RUN ===
+  [06:10 PT, attempt 1] should_run=True reason='starting FINAL for 2026-08-17 (attempt 1)'
+  (simulated crash: run 182646bd-1539-4612-bb1b-5726e69d6857 left RUNNING with no outcome recorded)
+
+=== 5. A RESTARTED WORKER'S NEXT TICK, STILL WITHIN THE TIMEOUT ===
+  [06:12 PT] should_run=False reason='FINAL run already in progress for 2026-08-17.'
+
+=== 6. PAST THE 0:15:00 STUCK-RUN TIMEOUT ===
+=== RETRY ATTEMPT 2 SUCCEEDS ===
+  [06:26 PT, attempt 2] should_run=True reason='retrying FINAL for 2026-08-17 (attempt 2, 1 prior failed/stuck attempt(s))'
+  FINAL version #2 (d52455af-aeb8-40ee-b41a-b754bfaf6d26), completeness=COMPLETE
+    ACT_NOW: 0 item(s)
+    APPROVAL_REQUIRED: 0 item(s)
+    BUY_AND_HOLD: 5 item(s)
+    TACTICAL_TRADES: 0 item(s)
+    WATCH_AND_AVOID: 0 item(s)
+    UPCOMING_EVENTS: 0 item(s)
+    DATA_PROBLEMS: 5 item(s)
+  delivery_events recorded: ['IN_APP']
+
+=== 7. THE DASHBOARD ONCE FINAL IS PUBLISHED ===
+  plan_status=COMPLETE label=FINAL regime=CALM total_equity=20442.50002600000000 exposure_pct=52.77485636433184466319540363
+
+=== 8. PRELIMINARY-TO-FINAL DIFF ===
+  version #2: FINAL
+  version #1: PRELIMINARY
+  (no section-count changes between PRELIMINARY and FINAL this run)
+
+=== 9. MARKDOWN EXPORT ===
+# Morning Decision Plan — 2026-08-17
+
+**Version:** FINAL #2
+**Generated:** 2026-08-08T19:55:21.053879-07:00
+**Evidence cutoff:** 2026-08-08T19:55:21.053879-07:00
+**Completeness:** COMPLETE
+
+## Act Now
+  ...
+
+=== 10. COWORK READ-ONLY BRIEF ===
+  a date with no FINAL plan yet -> 404
+  2026-08-17 -> 200, version_label=FINAL
+
+Prompt 9 demo complete — PRELIMINARY and FINAL versions persisted to the dev database.
+```
+
+The `DATA_PROBLEMS: 5 item(s)` in both versions is genuine, not staged:
+5 of the real `recommendation_versions` rows this session's own
+Revision Prompt 6/7 demo scripts committed on 2026-08-06/07 are more
+than `STALE_RECOMMENDATION_AGE` (20 hours) old relative to this
+2026-08-08 demo run's evidence cutoff, so the orchestrator correctly
+routed them away from Buy and Hold/Tactical Trades rather than
+presenting week-old committee output as a fresh actionable call. The
+`BUY_AND_HOLD: 5 item(s)` reflects the 5 real open `PositionLot` rows
+this session's demo scripts have accumulated across the same shared
+account, none of which had a source recommendation flagging exit/trim
+— an honest, unforced "hold" for each. The stuck-run/retry sequence
+(steps 4-6) is the same `record_run_start`/timeout mechanism
+`tests/test_morning_plan_scheduler.py::TestWorkerRestart` verifies in
+isolation, demonstrated here end-to-end against the real API.
+
+### Secrets check before commit
+
+No new secrets this revision — `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

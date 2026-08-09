@@ -39,8 +39,109 @@ lane-scoped `Trade` round-trip, corporate action application, corrections
 through reversal, idempotent CSV import, broker-aggregate reconciliation,
 per-lot Investment/Tactical holding guidance, and the composed trade
 journal view; demonstrated with a symbol held simultaneously as an
-Investment thesis and a Tactical earnings trade).
+Investment thesis and a Tactical earnings trade), and Revision Prompt 9
+(Morning Decision Dashboard and market-calendar scheduler, shipped — a
+hardcoded documented 2026 NYSE/Nasdaq calendar with DST-safe
+America/Los_Angeles display, an idempotent/retryable/resumable/versioned
+scheduler decision function, the 12-stage plan-generation orchestrator
+that curates already-computed recommendations rather than running
+committees live (ADR-055), the dashboard read API with a richer
+computed `plan_status` than the stored completeness label, and
+Markdown export/in-app notification/read-only Cowork delivery; no
+broker calls, no order submission from the read-only delivery path).
 **Last updated:** 2026-08-08
+
+## Revision Prompt 9 (2026-08-08) — Morning Decision Dashboard and market-calendar scheduler
+
+**Promoted docs/MORNING_PLAN_SPEC.md from architecture-only to
+implemented**, with one deliberate deviation from its original text:
+the spec's original "Fixed section grouping" named 7 sections including
+`Hold/Manage`, `Investment Watch`, `Tactical Watch`, and `Avoid`; this
+revision's own live prompt text specified a different, more detailed
+hierarchy (`Buy and Hold`, `Tactical Trades`, `Watch and Avoid`,
+`Upcoming Events`) which is what actually shipped — the newer, more
+detailed live instruction superseded the earlier architecture-only
+sketch, consistent with how this project has resolved every prior
+architecture-doc/live-prompt conflict. `models/enums.py::MorningPlanSectionKey`
+keeps the four old values (documented as superseded, not removed —
+nothing currently pattern-matches against them) alongside the four new
+ones the orchestrator actually writes.
+
+- **Market calendar** (`services/market_calendar.py`, new): a
+  hardcoded, documented `NYSE_HOLIDAYS_2026` (10 dates) plus the
+  existing `KNOWN_EARLY_CLOSE_DATES_2026` (Revision Prompt 4) — one
+  source of truth, not duplicated. `resolve_trading_day()` always
+  publishes a `skip_reason` string when a date isn't a trading day,
+  never a bare `False`. `zoneinfo.ZoneInfo` resolves
+  America/Los_Angeles and America/New_York offsets per-date, verified
+  correct across both the March 2026 spring-forward and November 2026
+  fall-back transitions (`tests/test_market_calendar.py`).
+- **Scheduler** (`services/morning_plan_scheduler.py`, new):
+  `decide_schedule()` is a pure function of an explicit `now_utc`
+  parameter — never reads the wall clock internally — so a controllable
+  clock can drive it deterministically in tests and the demo. A
+  `COMPLETED` run for a (date, label) blocks further attempts; a
+  `FAILED` or stuck-`RUNNING` (past `STUCK_RUN_TIMEOUT` = 15 minutes,
+  modeling a crashed worker) attempt does not, and a fresh attempt gets
+  an incremented idempotency-key suffix
+  (`morning-plan:{date}:{label}:attemptN`).
+- **12-stage generation orchestrator** (`services/morning_plan_generate.py`,
+  new): curates the most recent already-computed `RecommendationVersion`
+  per candidate rather than invoking Revision Prompt 6's committees or
+  Revision Prompt 7's decision pipeline live — see docs/DECISIONS.md
+  ADR-055 for the full reproducibility/latency rationale. A
+  recommendation older than `STALE_RECOMMENDATION_AGE` (20 hours,
+  relative to the plan's own evidence cutoff) is routed to Data
+  Problems rather than shown as fresh and actionable; a majority-stale
+  plan is labeled `INCOMPLETE`, never silently downgraded to a
+  false-confidence `COMPLETE`. Every held position with an open lot is
+  evaluated regardless of watchlist membership; a lot whose source
+  recommendation says exit/trim/tighten-stop is routed to Act Now
+  regardless of lane. `ACTIONABLE_SECTION_CAP = 3` caps Act Now and
+  Approval Required, recording a quality-check note when truncated
+  rather than silently hiding the excess.
+- **Dashboard read API** (`services/morning_plan_dashboard.py`,
+  `GET /api/v1/morning-plan/dashboard`, new): a `DashboardPlanStatus`
+  Literal (`COMPLETE`/`INCOMPLETE`/`STALE`/`FAILED`/`MARKET_CLOSED`)
+  distinct from the stored `PlanCompletenessStatus` — `STALE` is a
+  wall-clock-elapsed-since-generation signal
+  (`STALE_PLAN_AGE` = 6 hours) the stored label alone can't express.
+  `FINAL`/`CORRECTION` versions always outrank `PRELIMINARY`/`AD_HOC`
+  for the same date once both exist.
+- **Delivery**: `render_markdown()` (`services/morning_plan_export.py`)
+  for the printable export (`GET .../versions/{id}/export.md`); an
+  in-app `Alert` + `MorningPlanDeliveryEvent(channel=IN_APP)` is
+  recorded whenever a `FINAL` version is generated (never for
+  `PRELIMINARY`/`AD_HOC`, so the notification means what it says);
+  `GET .../cowork-brief` serves only `FINAL`/`CORRECTION` versions,
+  404s honestly if none has been published yet for the date, and has
+  no code path into order creation, approval, or execution (a `GET`,
+  full stop — docs/MORNING_PLAN_SPEC.md's Cowork section, ADR-049).
+- **Tests:** 351 backend tests (up from 315) — `test_market_calendar.py`
+  (weekday/weekend/holiday/observed-holiday/early-close/DST-spring/
+  DST-fall/next-trading-day/countdown), `test_morning_plan_scheduler.py`
+  (before-window/weekend/holiday/preliminary-then-final/duplicate-
+  protection/worker-restart-after-crash/worker-restart-after-completion),
+  `test_morning_plan_generate.py` (provider-partial-outage/required-
+  data-stale/stale-majority-incomplete/no-qualified-trades/empty-
+  watchlist/existing-position-requiring-action/routine-hold-not-forced/
+  evidence-reproducibility), and three new classes in
+  `test_morning_plan_endpoints.py` (preliminary-to-final diff,
+  Cowork-only-serves-final, Markdown export). `ruff`/`mypy --strict`
+  clean across `src/`.
+- **Demonstrated live** (`src/tradingos_api/scripts/demo_prompt9.py`):
+  a controllable clock walks a synthetic 2026-08-17 trading day from
+  before the preliminary window through a simulated worker crash
+  mid-FINAL-run and a successful attempt-2 retry after the stuck-run
+  timeout, calling the real `/generate`/`/dashboard`/`/versions/{id}/export.md`/
+  `/cowork-brief` endpoints against the live dev database throughout —
+  including a genuine Data Problems routing for several real
+  `recommendation_versions` rows that had aged past the staleness
+  threshold since Revision Prompt 6/7's demo runs committed them.
+- **Docs:** docs/DATA_DICTIONARY.md §15, docs/ER_DIAGRAM.md §19,
+  docs/API_CONTRACTS.md area 8, docs/MORNING_PLAN_SPEC.md
+  (implementation-status note), this entry, docs/TEST_EVIDENCE.md,
+  docs/DECISIONS.md (ADR-055), docs/OPERATIONS.md (scheduler runbook).
 
 ## Revision Prompt 8 (2026-08-08) — portfolio, lane attribution, trade journal, and reconciliation
 

@@ -548,7 +548,21 @@ class PlanCompletenessStatus(StrEnum):
 
 
 class MorningPlanSectionKey(StrEnum):
-    """The fixed seven-section grouping, in this exact order (R0 MDS-5)."""
+    """The fixed section grouping, in this exact order. `HOLD_MANAGE`/
+    `INVESTMENT_WATCH`/`TACTICAL_WATCH`/`AVOID` are R0/R3's original
+    architecture-pass section keys, kept (not removed — a prior version
+    could reference them) but superseded by Revision Prompt 9's own,
+    more detailed dashboard hierarchy: `BUY_AND_HOLD` (INVEST_BUY/ADD/
+    HOLD candidates with valuation/accumulation-zone/thesis-health
+    detail, replacing the investment half of `HOLD_MANAGE` plus
+    `INVESTMENT_WATCH`), `TACTICAL_TRADES` (eligible pre-earnings,
+    wait-for-confirmation, active tactical positions, post-earnings
+    confirmation status — replacing the tactical half of `HOLD_MANAGE`
+    plus `TACTICAL_WATCH`), `WATCH_AND_AVOID` (near-qualified candidates,
+    failed score components, and explicit avoid/no-action reasons —
+    a superset of `AVOID`), and `UPCOMING_EVENTS` (the earnings calendar
+    view, new). `services/morning_plan_generate.py` only ever writes the
+    Revision Prompt 9 section keys."""
 
     ACT_NOW = "ACT_NOW"
     APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
@@ -557,6 +571,10 @@ class MorningPlanSectionKey(StrEnum):
     TACTICAL_WATCH = "TACTICAL_WATCH"
     AVOID = "AVOID"
     DATA_PROBLEMS = "DATA_PROBLEMS"
+    BUY_AND_HOLD = "BUY_AND_HOLD"
+    TACTICAL_TRADES = "TACTICAL_TRADES"
+    WATCH_AND_AVOID = "WATCH_AND_AVOID"
+    UPCOMING_EVENTS = "UPCOMING_EVENTS"
 
 
 class DeliveryChannel(StrEnum):

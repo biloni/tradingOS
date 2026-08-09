@@ -460,6 +460,32 @@ prior meaning.
 
 **New services**: `services/portfolio_accounting.py` (the core FIFO engine — `apply_buy_execution`/`apply_sell_execution`, lane-restricted `get_open_lots`, `get_subpositions_by_lane`, `recompute_position_aggregate`), `services/lane_attribution.py` (deriving a lot's lane, the combined-vs-subposition view, the lot-selection-certainty disclosure), `services/corporate_actions_apply.py`, `services/execution_corrections.py`, `services/csv_import.py`, `services/reconciliation.py`, `services/holding_guidance.py` (per-lot Investment/Tactical read models), `services/trade_journal.py` (the composed journal view).
 
+## 15. Revision Prompt 9 — Morning Decision Dashboard and market-calendar scheduler
+
+Additive: 3 new columns on `morning_plan_versions`/`morning_plan_items`/`morning_plan_runs`
+(nullable/defaulted), 4 new `MorningPlanSectionKey` enum values (the
+original 7 R3 sections are kept, superseded-not-removed — see
+docs/MORNING_PLAN_SPEC.md's status note). No table from R3's original
+morning-plan schema was renamed or restructured.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `morning_plan_versions` (1 new column) | `regime_snapshot_id` (nullable FK to `market_regime_snapshots`) | Direct linkage so the dashboard's "market regime and VIX context" doesn't need a generic `morning_plan_input_links` lookup for the one input every version has. |
+| `morning_plan_items` (3 new columns) | `instrument_id` (nullable FK), `action_label` (nullable string), `card_detail` (JSON, default `{}`) | `card_detail` is a fixed 5-key shape — `evidence`/`deterministic`/`ai_synthesis`/`policy_result`/`user_broker_state` — directly implementing "every card must expose these separately" as distinct object keys, chosen over 5 separate columns because different sections need wildly different specific fields (entry/stop/targets vs. valuation zone vs. earnings date) and a fixed column set would either be mostly-`NULL` or grow unboundedly per new card type. |
+| `morning_plan_runs` (1 new column) | `error_detail` (nullable text) | A `FAILED` run always names why, mirroring `job_runs.error_detail`'s existing pattern. |
+| `MorningPlanSectionKey` (4 new values) | `BUY_AND_HOLD`, `TACTICAL_TRADES`, `WATCH_AND_AVOID`, `UPCOMING_EVENTS` | Postgres requires `ALTER TYPE ... ADD VALUE` for new enum values (autogenerate does not detect these — a hand-written migration step); Postgres has no `DROP VALUE`, so the 4 original R3 values remain in the type indefinitely (an accepted downgrade limitation, documented in the migration file). |
+
+**New services**: `services/market_calendar.py` (`resolve_trading_day()`,
+`next_trading_day()`, DST-safe `to_display_timezone()`/`countdown_to_open()`,
+a hardcoded documented `NYSE_HOLIDAYS_2026`), `services/morning_plan_scheduler.py`
+(`decide_schedule()` — pure over an explicit `now_utc`, idempotency-key
+construction, stuck-run detection), `services/morning_plan_generate.py`
+(the 12-stage orchestrator — see docs/DECISIONS.md ADR-055 for why it
+curates rather than computes), `services/morning_plan_dashboard.py`
+(`compute_top_status()` — the `DashboardPlanStatus` Literal, distinct
+from the stored `PlanCompletenessStatus`), `services/morning_plan_export.py`
+(`render_markdown()`).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

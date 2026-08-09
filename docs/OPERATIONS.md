@@ -42,6 +42,71 @@ procedure worth recording now, since it came up during Phase 1 setup:
 4. Revert `pg_hba.conf` back to `scram-sha-256` and restart the service
    again.
 
+### Running the Morning Decision Plan schedule (Revision Prompt 9)
+
+`services/morning_plan_scheduler.py::decide_schedule()` is a pure
+decision function — it does not run on a timer by itself. Something
+external has to call it repeatedly and act on `should_run=True` by
+calling `POST /api/v1/morning-plan/generate`. As of this revision, no
+such polling process is deployed; this is the runbook for both modes.
+
+**Local mode (this project's current state).** There is no background
+worker process yet. To generate a plan locally:
+
+- **Manual, right now:** `POST /api/v1/morning-plan/generate` directly
+  with `"version_label": "AD_HOC"` (or omit it — that's the default).
+  Rejects with 422 and a reason if today (or the given `plan_date`) is
+  not a trading day.
+- **Scheduled, while this machine is on:** run a small loop (not yet
+  shipped as a script) that calls `decide_schedule(db, now_utc=...)`
+  every minute or so and `POST`s `/generate` with the returned
+  `version_label`/`idempotency_key` whenever `should_run=True`. This
+  only fires while that loop's process is actually running.
+- **`services/morning_plan_scheduler.py::LOCAL_MODE_WARNING` is the
+  literal, user-facing text this project shows wherever local-mode
+  scheduling is configured** — restated here verbatim so this runbook
+  and the code never drift apart: *"Local scheduling mode: this
+  schedule only fires while this computer is awake and the TradingOS
+  process is running. If this machine sleeps, shuts down, or the
+  process is not running at 5:45am/6:10am local time, no plan will be
+  generated for that trading day. Deploy an always-on worker for
+  unattended scheduling."*
+
+**Deployed mode (not yet built).** A real deployment needs one
+always-on worker process — a scheduled cloud job or a long-running
+service, not this laptop — polling `decide_schedule()` and calling
+`/generate` the same way. Nothing about the scheduler or orchestrator
+contract changes between local and deployed mode; only *what calls
+them, and how reliably it stays running* differs. Scoping and standing
+up that worker is not yet done (tracked the same way the "Production
+deployment" section above tracks the rest of the hosting decision).
+
+**Demonstrating the whole flow without any of this wired up yet:**
+`python -m tradingos_api.scripts.demo_prompt9` drives
+`decide_schedule()` with a controllable clock across a synthetic
+trading day — including a simulated worker crash mid-`FINAL`-run and a
+successful retry after `STUCK_RUN_TIMEOUT` — calling the real
+`/generate`/`/dashboard`/`/versions/{id}/export.md`/`/cowork-brief`
+endpoints throughout. Its full transcript is in
+docs/TEST_EVIDENCE.md's Revision Prompt 9 section.
+
+**Troubleshooting a run that never produced a `FINAL` plan:**
+
+1. `GET /api/v1/morning-plan/dashboard` — check `top_status.plan_status`.
+   `MARKET_CLOSED` means today wasn't a trading day (check
+   `market_closed_reason`); `INCOMPLETE` with no `plan_version_id` means
+   nothing has run yet today; `FAILED` means the most recent attempt for
+   today errored.
+2. Query `morning_plan_runs` for today's `plan_date`, ordered by
+   `started_at desc`. A `RUNNING` row older than 15 minutes
+   (`STUCK_RUN_TIMEOUT`) is a crashed attempt — the next scheduler tick
+   retries it automatically; nothing to do manually.
+3. A `FAILED` row's `error_detail` column names the exception — the
+   next scheduler tick (or a manual `POST /generate`) retries with an
+   incremented idempotency-key attempt number automatically; no manual
+   cleanup of the failed row is needed or wanted (it stays as the audit
+   trail of that attempt).
+
 ## v2 Decision and Execution Amendment (2026-08-05) — operating mode and kill switch
 
 PROJECT_INSTRUCTIONS.md's new "TradingOS v2 Decision and Execution

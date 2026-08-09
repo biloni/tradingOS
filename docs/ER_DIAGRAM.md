@@ -882,3 +882,55 @@ into another lane's lots just because they happen to be older
 `target_lane=None` is the honest fallback for a real broker fill that
 reports no lane at all — FIFO then runs across every lane's lots as one
 pool, and the result is flagged `lane_selection_is_certain=False`.
+
+## 19. Revision Prompt 9 — Morning Decision Dashboard and market-calendar scheduler
+
+Additive columns only on the R3 morning-plan tables (§12) — no new
+tables. `regime_snapshot_id` is the one addition worth diagramming
+since it's a new edge into `market_regime_snapshots` (Revision Prompt
+5); the other two new columns (`morning_plan_items.instrument_id`/
+`action_label`/`card_detail`, `morning_plan_runs.error_detail`) are
+plain scalar/JSON additions with no new relationships.
+
+```mermaid
+erDiagram
+    morning_plan_versions }o--o| market_regime_snapshots : "regime_snapshot_id (nullable)"
+    morning_plan_items }o--o| instruments : "instrument_id (nullable)"
+
+    morning_plan_versions {
+        uuid id PK
+        uuid morning_plan_run_id FK
+        date plan_date
+        enum version_label
+        int version_number
+        enum completeness_status
+        uuid regime_snapshot_id FK "nullable, new"
+    }
+    morning_plan_items {
+        uuid id PK
+        uuid morning_plan_section_id FK
+        uuid recommendation_version_id FK "nullable"
+        uuid instrument_id FK "nullable, new"
+        string headline
+        string action_label "nullable, new"
+        json card_detail "new, default {}"
+    }
+    morning_plan_runs {
+        uuid id PK
+        uuid job_run_id FK "nullable"
+        date plan_date
+        enum status
+        text error_detail "nullable, new"
+    }
+```
+
+**`card_detail`'s fixed shape** is the one JSON column worth calling out
+explicitly: `{evidence, deterministic, ai_synthesis, policy_result,
+user_broker_state}`, always all five keys, populated per section type
+by `services/morning_plan_generate.py`. This is what lets
+Revision Prompt 9's "every card must expose evidence, deterministic
+calculations, AI synthesis, policy result, and user/broker state
+separately" requirement hold across every very differently-shaped card
+(a held-position Act Now card vs. an upcoming-earnings card vs. a
+stale-data Data Problems card) without five separate columns that would
+be mostly `NULL` for any given section.

@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tradingos_api.db.base import Base
+from tradingos_api.db.json_type import PORTABLE_JSON
 from tradingos_api.db.mixins import CreatedAtMixin, UUIDPkMixin
 from tradingos_api.models.enums import (
     AlertDeliveryStatus,
@@ -47,6 +49,9 @@ class MorningPlanRun(UUIDPkMixin, CreatedAtMixin, Base):
     idempotency_key: Mapped[str | None] = mapped_column(sa.String(100), unique=True, nullable=True)
     started_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    # Revision Prompt 9 — "observable": a FAILED run always names why,
+    # mirroring `job_runs.error_detail`'s existing pattern.
+    error_detail: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
 
 class MorningPlanVersion(UUIDPkMixin, CreatedAtMixin, Base):
@@ -70,6 +75,12 @@ class MorningPlanVersion(UUIDPkMixin, CreatedAtMixin, Base):
     generated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     completeness_status: Mapped[PlanCompletenessStatus] = mapped_column(
         sa.Enum(PlanCompletenessStatus, name="plan_completeness_status")
+    )
+    # Revision Prompt 9 — direct linkage so the dashboard's top-status
+    # "market regime and VIX context" doesn't need a generic
+    # `MorningPlanInputLink` lookup for the one input every version has.
+    regime_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("market_regime_snapshots.id"), nullable=True
     )
 
 
@@ -110,7 +121,23 @@ class MorningPlanSection(UUIDPkMixin, CreatedAtMixin, Base):
 class MorningPlanItem(UUIDPkMixin, CreatedAtMixin, Base):
     """One card within one section. `recommendation_version_id` is
     nullable so a Data Problems item (naming what failed, not a
-    recommendation) is representable too."""
+    recommendation) is representable too; `instrument_id` is populated
+    independently of it so a card is still filterable/linkable by symbol
+    even when there is no recommendation behind it.
+
+    `card_detail` (Revision Prompt 9) is the one JSON column behind
+    "every card must expose evidence, deterministic calculations, AI
+    synthesis, policy result, and user/broker state separately" — a
+    fixed-shape object with exactly those five top-level keys
+    (`evidence`, `deterministic`, `ai_synthesis`, `policy_result`,
+    `user_broker_state`), each independently populated so the dashboard
+    never has to guess which sentence in a blob of prose came from
+    where. Section-specific display fields (entry/stop/targets,
+    valuation zone, earnings date/expected-move, etc.) live inside
+    `policy_result`/`deterministic` rather than as their own columns —
+    every section's cards need a different subset of fields, and a
+    fixed column set would either be mostly-`NULL` for most sections or
+    grow without bound as new card types are added."""
 
     __tablename__ = "morning_plan_items"
 
@@ -120,8 +147,13 @@ class MorningPlanItem(UUIDPkMixin, CreatedAtMixin, Base):
     recommendation_version_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("recommendation_versions.id"), nullable=True
     )
+    instrument_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("instruments.id"), nullable=True
+    )
     display_order: Mapped[int] = mapped_column(sa.Integer)
     headline: Mapped[str] = mapped_column(sa.String(200))
+    action_label: Mapped[str | None] = mapped_column(sa.String(40), nullable=True)
+    card_detail: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON, default=dict)
 
 
 class MorningPlanQualityCheck(UUIDPkMixin, CreatedAtMixin, Base):

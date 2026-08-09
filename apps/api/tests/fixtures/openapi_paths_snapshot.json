@@ -174,19 +174,37 @@
     ]
   ],
   [
+    "/api/v1/morning-plan/cowork-brief",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/morning-plan/dashboard",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/morning-plan/generate",
+    [
+      "post"
+    ]
+  ],
+  [
     "/api/v1/morning-plan/latest",
     [
       "get"
     ]
   ],
   [
-    "/api/v1/morning-plan/rerun",
+    "/api/v1/morning-plan/versions",
     [
-      "post"
+      "get"
     ]
   ],
   [
-    "/api/v1/morning-plan/versions",
+    "/api/v1/morning-plan/versions/{version_id}/export.md",
     [
       "get"
     ]
