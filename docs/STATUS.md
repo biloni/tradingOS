@@ -31,8 +31,108 @@ manager, and hybrid earnings recommendation engine, shipped — the
 position sizing, HES-4/HES-6 post-confirmation gating, HES-5
 gap-through-stop disclosure, the remaining Investment/Tactical action
 plan fields, and extended recommendation list/detail + a safe
-policy-configuration screen; no broker calls).
-**Last updated:** 2026-08-07
+policy-configuration screen; no broker calls), and Revision Prompt 8
+(portfolio, lane attribution, trade journal, and reconciliation,
+shipped — the FIFO accounting engine deriving holdings/cash/lots/
+realized P&L from immutable events, per-lane lot attribution with a
+lane-scoped `Trade` round-trip, corporate action application, corrections
+through reversal, idempotent CSV import, broker-aggregate reconciliation,
+per-lot Investment/Tactical holding guidance, and the composed trade
+journal view; demonstrated with a symbol held simultaneously as an
+Investment thesis and a Tactical earnings trade).
+**Last updated:** 2026-08-08
+
+## Revision Prompt 8 (2026-08-08) — portfolio, lane attribution, trade journal, and reconciliation
+
+**Extended a schema that was already rich but entirely unused** — Phase
+8 had already built `Account`/`CashLedgerEntry`/`Position`/`PositionLot`/
+`Order`/`Execution`/`Fee`/`Trade`/`TradeThesis`/`TradeReview`/
+`RecommendationOutcome`/`BenchmarkSnapshot`, every one of them schema-only
+with no service layer deriving anything from the underlying events. This
+revision's real work was building that missing derivation layer, not
+inventing new tables from scratch — of the "JOURNAL" requirement's own
+field list, only `mfe`/`mae`/`exit_reason`/lane attribution needed new
+columns; "user response," "post-trade lesson," and "benchmark result"
+already had a home (`RecommendationOutcome.classification`, `TradeReview.review_text`,
+`BenchmarkSnapshot` respectively) that nothing had ever populated.
+
+- **FIFO accounting engine** (`services/portfolio_accounting.py`, new):
+  `apply_buy_execution()`/`apply_sell_execution()` derive holdings, cash,
+  lots, and realized P&L purely from `Execution`/`Fee`/`CashLedgerEntry`
+  rows using `Decimal` throughout. `apply_sell_execution()`'s `target_lane`
+  parameter is lane-aware FIFO — consumption is restricted to one lane's
+  open lots (in open-date order), never spilling into a different lane's
+  lots just because they're older. `target_lane=None` models a real
+  broker fill that reports no lane at all, and the result is disclosed
+  as `lane_selection_is_certain=False` — the required "lot-selection
+  uncertainty disclosure."
+- **Per-lane `Trade` round-trips**: adding `lane` to `Trade` means the
+  same instrument now has independent OPEN→CLOSED lifecycles per lane —
+  a `TACTICAL` trade can fully close while an `INVESTMENT` trade on the
+  identical instrument stays open throughout untouched (see
+  docs/ER_DIAGRAM.md §18). This is what makes "partial tactical exit
+  while investment lot remains" a correctly-modeled first-class scenario.
+- **Corporate actions, corrections, CSV import**
+  (`services/corporate_actions_apply.py`, `services/execution_corrections.py`,
+  `services/csv_import.py`, all new): split/dividend application is
+  idempotent per `(corporate_action_id, account_id)`; a correction is
+  always a new, real reversal `Execution` — the original row is never
+  touched ("never silently delete or rewrite an executed event");
+  CSV import is idempotent at both the file level (identical re-upload
+  is a no-op) and the row level (a partial unique index scoped to
+  `status = 'IMPORTED'` catches an overlapping fill across two different
+  files while still allowing multiple `DUPLICATE_SKIPPED` audit rows for
+  the same key).
+- **Broker-aggregate reconciliation** (`services/reconciliation.py`,
+  new): deliberately distinct from the pre-existing self-consistency
+  check at `GET /api/v1/orders/reconciliation/{account_id}` — see
+  docs/DECISIONS.md ADR-054 for why both exist and neither replaces the
+  other. A `MANUAL` account with no broker feed always reconciles
+  `MATCHED`, never a fabricated discrepancy.
+- **Holding guidance** (`services/holding_guidance.py`, new): per-lot
+  read models composing already-existing data (Revision Prompt 6's
+  committee output via `deterministic_inputs_snapshot`, R3's
+  `RecommendationLevel`/`InvestmentThesis`, Revision Prompt 4's
+  `EarningsEvent`, `Alert`) — no new business logic, purely a view.
+- **Trade journal** (`services/trade_journal.py`, new):
+  `compute_recommendation_outcome()` finally populates
+  `RecommendationOutcome.classification` (`FOLLOWED`/`IGNORED`/`MODIFIED`),
+  honoring its own R3-era docstring's "computed... never self-reported"
+  promise that nothing had implemented yet. `compute_mfe_mae()` derives
+  maximum favorable/adverse excursion from daily `MarketBar` rows.
+  `get_journal_entry_view()` composes everything the "JOURNAL" requirement
+  asks for into one read model.
+- **API**: `GET .../positions/{instrument_id}` (position detail: combined
+  + subpositions + per-lot guidance), `POST .../manual-fill`,
+  `POST .../import-csv` (multipart), `POST .../reconcile` +
+  `GET .../reconciliation-runs`, and `routers/journal.py`'s trade detail
+  extended with every new journal field.
+- **Tests:** 314 backend tests (up from 296) — `test_portfolio_accounting.py`
+  (9: same-symbol-two-lanes, partial-tactical-exit, lot-selection-uncertainty,
+  cash/position invariants), `test_corporate_actions_apply.py` (4: split/
+  dividend math + idempotency), `test_reconciliation.py` (4: broker
+  aggregate reconciliation including the MANUAL-account and
+  broker-reports-a-position-we-don't-have cases), `test_csv_import.py`
+  (3: import idempotency at both the file and row level). `ruff`/
+  `mypy --strict` clean across `src/`.
+- **A real design bug found and fixed during test-writing**: the initial
+  `ImportRow` schema used a blanket `UniqueConstraint(account_id, dedup_key)`
+  — but recording a `DUPLICATE_SKIPPED` audit row for an already-imported
+  fill *itself* violates that constraint (a second row with the same
+  key). Fixed with a partial unique index scoped to `status = 'IMPORTED'`
+  only, requiring a migration edit and a downgrade→edit→upgrade round
+  trip to fix in place (see docs/TEST_EVIDENCE.md).
+- **Demonstrated live** (`src/tradingos_api/scripts/demo_prompt8.py`):
+  AMD held simultaneously as a 50-share `INVESTMENT` lot and a 100-share
+  `TACTICAL` lot, combined-vs-subposition view, per-lane holding
+  guidance, a 60-share partial tactical exit (realized P&L $420, the
+  investment lot provably untouched at 50 shares throughout), a $0.25/share
+  dividend correctly credited against the post-exit combined position,
+  a broker reconciliation reporting `MATCHED`, and the tactical trade's
+  full journal view — all in one run, all committed to the dev database.
+- **Docs:** docs/DATA_DICTIONARY.md §14, docs/ER_DIAGRAM.md §18,
+  docs/API_CONTRACTS.md area 5, this entry, docs/TEST_EVIDENCE.md,
+  docs/DECISIONS.md (ADR-054).
 
 ## Revision Prompt 7 (2026-08-07) — decision policy, risk manager, and hybrid earnings recommendation engine
 

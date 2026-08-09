@@ -437,6 +437,29 @@ Tactical's existing `setup_and_event_phase`/`key_catalyst`/`gap_risk`/
 (`services/committee_orchestrator.py::_deterministic_inputs_snapshot()`)
 and surfaced by the recommendation detail endpoints (API area 22).
 
+## 14. Revision Prompt 8 — portfolio, lane attribution, trade journal, and reconciliation
+
+Additive: 2 new columns on `position_lots`, 8 new columns on `trades`,
+5 new tables, 4 new enums. No table from Phase 8/R3 was renamed or
+restructured — every existing `Account`/`CashLedgerEntry`/`Position`/
+`PositionLot`/`Order`/`Execution`/`Fee`/`Trade` column keeps its exact
+prior meaning.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `position_lots` (2 new columns) | `lane` (`lot_lane`, default `UNCLASSIFIED`), `source_recommendation_version_id` (nullable FK) | "Attribute every new lot to INVESTMENT, TACTICAL, or UNCLASSIFIED" — set once at lot-open time, never reattributed afterward. |
+| `trades` (8 new columns) | `lane` (`lot_lane`), `linked_order_id`, `modifications_text`, `mfe`, `mae`, `exit_reason` (`journal_exit_reason`), `benchmark_snapshot_id` | A `Trade` round-trip is now tracked **per lane**, not per combined position — the same instrument can have an `OPEN` `TACTICAL` trade and an `OPEN` `INVESTMENT` trade simultaneously, and one can close while the other stays open (the required "partial tactical exit while investment lot remains" case). |
+| `execution_corrections` (new) | `original_execution_id`, `reversal_execution_id` (unique), `reason`, `corrected_at` | "Never silently delete or rewrite an executed event" — a correction is always a new, real `Execution` row; the original is untouched. |
+| `corporate_action_applications` (new) | `corporate_action_id`, `account_id`, `instrument_id`, `quantity_before`/`quantity_after` (splits), `cash_credit_amount`/`cash_ledger_entry_id` (dividends), `idempotency_key` (unique, `"{corporate_action_id}:{account_id}"`) | Applying the Revision Prompt 4 evidence-layer `CorporateAction` fact to one account's actual lots/cash — idempotent by construction. |
+| `import_batches` / `import_rows` (new) | `idempotency_key` (file-bytes hash, unique) on the batch; `dedup_key` (fill-identity hash) with a **partial** unique index scoped to `status = 'IMPORTED'` on the row | Two-layer CSV import idempotency: re-uploading an identical file is a batch-level no-op; an overlapping row across two different files is caught per-row. The partial index (not a blanket unique constraint) is deliberate — multiple `DUPLICATE_SKIPPED` audit rows for the same key are legitimate, only one `IMPORTED` claim per key is not. |
+| `reconciliation_runs` / `reconciliation_lines` (new) | `overall_status`/`status` (`reconciliation_status`: `MATCHED`/`DISCREPANCY`), `internal_quantity`, `broker_reported_quantity` (nullable) | A `MANUAL` account has no broker feed — every line reconciles `MATCHED` with a `NULL` broker figure, never presented as a discrepancy. |
+
+**New enums**: `LotLane` (`INVESTMENT`/`TACTICAL`/`UNCLASSIFIED` — deliberately separate from `RecommendationMode`, which has no `UNCLASSIFIED` analog), `JournalExitReason`, `ImportRowStatus`, `ReconciliationStatus`.
+
+**Reused rather than duplicated** (see docs/DECISIONS.md ADR-054 for why): `RecommendationOutcome.classification` (already `FOLLOWED`/`IGNORED`/`MODIFIED`, "computed... never self-reported" per its own ADR-041 docstring) is this revision's "user response" — now actually computed by `services/trade_journal.py::compute_recommendation_outcome()`, closing a gap where the table existed but nothing populated it. `TradeReview.review_text` is "post-trade lesson." `BenchmarkSnapshot` is "benchmark result." None of these needed a new column.
+
+**New services**: `services/portfolio_accounting.py` (the core FIFO engine — `apply_buy_execution`/`apply_sell_execution`, lane-restricted `get_open_lots`, `get_subpositions_by_lane`, `recompute_position_aggregate`), `services/lane_attribution.py` (deriving a lot's lane, the combined-vs-subposition view, the lot-selection-certainty disclosure), `services/corporate_actions_apply.py`, `services/execution_corrections.py`, `services/csv_import.py`, `services/reconciliation.py`, `services/holding_guidance.py` (per-lot Investment/Tactical read models), `services/trade_journal.py` (the composed journal view).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

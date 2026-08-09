@@ -781,3 +781,104 @@ committee schema (§16) and R3's `Recommendation`/`RecommendationVersion`/
 `RecommendationInvalidationCondition` (§9/§10 area) — no pipeline-specific
 table exists because every intermediate artifact (a committee session, a
 recommendation version, an order proposal) already had a home.
+
+## 18. Revision Prompt 8 — portfolio, lane attribution, trade journal, and reconciliation
+
+```mermaid
+erDiagram
+    positions ||--o{ position_lots : "has"
+    position_lots }o--o| recommendation_versions : "source (nullable)"
+    accounts ||--o{ trades : "has"
+    trades }o--o| orders : "linked_order_id"
+    trades }o--o| benchmark_snapshots : "benchmark_snapshot_id"
+    executions ||--o| execution_corrections : "original"
+    executions ||--o| execution_corrections : "reversal"
+    corporate_actions ||--o{ corporate_action_applications : "applied to an account"
+    import_batches ||--o{ import_rows : "has"
+    reconciliation_runs ||--o{ reconciliation_lines : "has"
+
+    position_lots {
+        uuid id PK
+        uuid position_id FK
+        uuid opened_execution_id FK
+        numeric quantity_opened
+        numeric quantity_remaining
+        numeric cost_basis_price
+        string lane "INVESTMENT | TACTICAL | UNCLASSIFIED"
+        uuid source_recommendation_version_id FK "nullable"
+    }
+    trades {
+        uuid id PK
+        uuid account_id FK
+        uuid instrument_id FK
+        string status "OPEN | CLOSED, per LANE now"
+        string lane
+        uuid linked_order_id FK "nullable"
+        text modifications_text
+        numeric mfe
+        numeric mae
+        string exit_reason "nullable"
+        uuid benchmark_snapshot_id FK "nullable"
+    }
+    execution_corrections {
+        uuid id PK
+        uuid original_execution_id FK
+        uuid reversal_execution_id FK "unique"
+        text reason
+        datetime corrected_at
+    }
+    corporate_action_applications {
+        uuid id PK
+        uuid corporate_action_id FK
+        uuid account_id FK
+        numeric quantity_before "nullable, splits"
+        numeric quantity_after "nullable, splits"
+        numeric cash_credit_amount "nullable, dividends"
+        string idempotency_key "unique"
+    }
+    import_batches {
+        uuid id PK
+        uuid account_id FK
+        string idempotency_key "unique, file-bytes hash"
+        int row_count
+    }
+    import_rows {
+        uuid id PK
+        uuid import_batch_id FK
+        string dedup_key "partial-unique with account_id WHERE status='IMPORTED'"
+        string status "IMPORTED | DUPLICATE_SKIPPED | ERROR"
+        uuid resulting_execution_id FK "nullable"
+    }
+    reconciliation_runs {
+        uuid id PK
+        uuid account_id FK
+        string overall_status "MATCHED | DISCREPANCY"
+    }
+    reconciliation_lines {
+        uuid id PK
+        uuid reconciliation_run_id FK
+        numeric internal_quantity
+        numeric broker_reported_quantity "nullable"
+        string status
+    }
+```
+
+**The per-lane `Trade` is the load-bearing design decision here.** Before
+this revision, a `Trade` round-trip tracked one (account, instrument)
+pair going flat-to-open-to-flat. Adding `lane` means the *same*
+instrument now has independent round trips per lane — a `TACTICAL` trade
+can open and fully close (its own `OPEN`→`CLOSED` lifecycle, its own
+`realized_pnl`) while an `INVESTMENT` trade on the identical instrument
+stays `OPEN` throughout, completely unaffected. This is what makes
+"partial tactical exit while investment lot remains" a first-class,
+correctly-modeled scenario rather than a special case bolted onto a
+single combined `Trade` row.
+
+`services/portfolio_accounting.py::apply_sell_execution()`'s
+`target_lane` parameter is what keeps this correct at the accounting
+level: FIFO consumption is scoped to one lane's open lots, never spills
+into another lane's lots just because they happen to be older
+(`opened_at` order is only compared *within* the targeted lane's pool).
+`target_lane=None` is the honest fallback for a real broker fill that
+reports no lane at all — FIFO then runs across every lane's lots as one
+pool, and the result is flagged `lane_selection_is_certain=False`.

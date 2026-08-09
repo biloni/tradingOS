@@ -319,6 +319,36 @@
     ]
   ],
   [
+    "/api/v1/portfolio/accounts/{account_id}/import-csv",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/portfolio/accounts/{account_id}/manual-fill",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/portfolio/accounts/{account_id}/positions/{instrument_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/portfolio/accounts/{account_id}/reconcile",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/portfolio/accounts/{account_id}/reconciliation-runs",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/provider-diagnostics/conflicting-sources",
     [
       "get"

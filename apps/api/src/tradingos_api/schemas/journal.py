@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from tradingos_api.models.enums import TradeReviewRating, TradeStatus
+from tradingos_api.models.enums import JournalExitReason, LotLane, TradeReviewRating, TradeStatus
 from tradingos_api.schemas.instruments import InstrumentResponse
 
 
@@ -47,6 +47,23 @@ class TradeDetailResponse(BaseModel):
     thesis: TradeThesisResponse | None
     notes: list[TradeNoteResponse]
     reviews: list[TradeReviewResponse]
+    # Revision Prompt 8 — "capture recommendation, lane, user response,
+    # approval, order, fill, modifications, reason, outcome, maximum
+    # favorable/adverse excursion, exit reason, benchmark result, and
+    # post-trade lesson." See `services/trade_journal.py::JournalEntryView`
+    # — this is that same composed read model, flattened onto the
+    # existing trade-detail response rather than a second endpoint.
+    lane: LotLane
+    outcome: str
+    exit_reason: JournalExitReason | None
+    mfe: Decimal | None
+    mae: Decimal | None
+    modifications_text: str | None
+    recommendation_outcome: str | None
+    order_approval_status: str | None
+    benchmark_ticker: str | None
+    benchmark_return_pct: Decimal | None
+    post_trade_lesson: str | None
 
 
 class TradeNoteCreateRequest(BaseModel):

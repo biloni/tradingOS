@@ -2010,3 +2010,191 @@ disclosure correctly identifying a scenario where the stop is breached.
 No new secrets this revision — no new provider is contracted, no new
 credential is introduced; `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 8 — portfolio, lane attribution, trade journal, and reconciliation (2026-08-08)
+
+### A real design bug found via test-writing, and the migration fix
+
+Writing `test_csv_import.py::test_overlapping_row_across_two_different_files_is_row_level_deduped`
+immediately failed with a real Postgres error, not a test assertion
+failure:
+
+```
+psycopg.errors.UniqueViolation: duplicate key value violates unique
+constraint "import_rows_account_id_dedup_key_key"
+```
+
+Root cause: the initial `ImportRow` schema used a blanket
+`UniqueConstraint("account_id", "dedup_key")`. But recording that a
+fill was a **duplicate** requires inserting an `ImportRow` with
+`status=DUPLICATE_SKIPPED` carrying the *same* `dedup_key` as the
+original `IMPORTED` row — which the blanket constraint itself forbids.
+The constraint designed to prevent double-importing a fill was also,
+incorrectly, preventing the *audit record* of having caught the
+duplicate.
+
+Fixed by replacing the blanket constraint with a **partial** unique
+index — only enforced over rows where `status = 'IMPORTED'`:
+
+```python
+op.create_index(
+    "ix_import_rows_unique_imported", "import_rows",
+    ["account_id", "dedup_key"], unique=True,
+    postgresql_where=sa.text("status = 'IMPORTED'"),
+)
+```
+
+At most one row may ever hold the "this fill was actually applied"
+claim per `(account_id, dedup_key)`, but multiple `DUPLICATE_SKIPPED`
+rows for the same key are legitimate (the same file uploaded three
+times should show three audit attempts, not fail trying to record its
+own second skip). Required a full downgrade → edit model + migration →
+upgrade round trip on the already-applied migration, verified clean
+both ways afterward:
+
+```
+$ .venv/Scripts/alembic.exe downgrade -1
+$ .venv/Scripts/alembic.exe upgrade head
+$ .venv/Scripts/alembic.exe downgrade -1
+$ .venv/Scripts/alembic.exe upgrade head
+$ .venv/Scripts/alembic.exe current
+cf5dac1a66e8 (head)
+```
+
+### A test-isolation issue found and fixed (not an application bug)
+
+The first full-suite run after adding the new P8 tests showed 10
+failures — but every one was the new tests asserting *absolute*
+position quantities against the seeded `MRVL` instrument, which by that
+point already carried real, `db.commit()`-ted state from this session's
+own `demo_prompt6.py`/`demo_prompt7.py`/`demo_prompt8.py` runs against
+the same shared dev database. `tests/conftest.py`'s `db_session` fixture
+correctly rolls back after every test (savepoint-based), so this was
+never test-to-test pollution — it was demo-script commits (a deliberate,
+documented choice so a reviewer can inspect real persisted results)
+colliding with test assertions that assumed a pristine starting
+quantity. Fixed by switching the new P8 tests to the `AMD` instrument,
+which no demo script's accounting operations touch, rather than
+weakening the demo scripts' commit behavior (the persisted-state
+convention is intentional and shared with every earlier revision's demo
+script this session). Verified stable across two consecutive full runs.
+
+### `apps/api` full suite
+
+```
+$ .venv/Scripts/pytest.exe -q
+314 passed, 1 warning in ~25-30s (verified twice for stability)
+$ .venv/Scripts/ruff.exe check .
+All checks passed!
+$ .venv/Scripts/ruff.exe format --check .
+203 files already formatted
+$ .venv/Scripts/mypy.exe src/
+Success: no issues found in 140 source files
+```
+314/314 passing: 296 carried over from Revision Prompt 7 plus 18 new —
+`test_portfolio_accounting.py` (7: 1 same-symbol-two-lanes + 1
+partial-tactical-exit + 2 lot-selection-uncertainty + 3 cash/position
+invariants), `test_corporate_actions_apply.py` (4: split + dividend
+math, each with its own idempotency test), `test_reconciliation.py` (4),
+`test_csv_import.py` (3).
+
+All of this revision's explicitly required test categories present and
+passing:
+
+- **Same symbol with two lanes**
+  (`test_portfolio_accounting.py::TestSameSymbolTwoLanes`) — independent
+  `INVESTMENT` (50 shares @ $60) and `TACTICAL` (100 shares @ $50) lots
+  on the same instrument; the combined `Position.quantity` correctly
+  sums to 150, and both lanes have their own `OPEN` `Trade` row.
+- **Partial tactical exit while investment lot remains**
+  (`test_portfolio_accounting.py::TestPartialTacticalExitWhileInvestmentLotRemains`)
+  — selling 60 of the 100 tactical shares (`target_lane=TACTICAL`)
+  realizes exactly `(55-50)*60 = 300` P&L, leaves the tactical `Trade`
+  `OPEN` (40 remaining), and leaves the investment lot's
+  `quantity_remaining`/`closed_at` completely untouched.
+- **Broker aggregate position reconciliation**
+  (`test_reconciliation.py::TestBrokerAggregateReconciliation`) —
+  matching quantities reconcile `MATCHED`; a mismatch is `DISCREPANCY`;
+  a `broker_reported_positions=None` (`MANUAL` account, no broker feed)
+  always reconciles `MATCHED`; a broker-reported position with zero
+  internal lots is caught as a `DISCREPANCY` too, not just the reverse.
+- **Lot-selection uncertainty disclosure**
+  (`test_portfolio_accounting.py::TestLotSelectionUncertaintyDisclosure`)
+  — `target_lane=<a real lane>` reports `lane_selection_is_certain=True`;
+  `target_lane=None` (modeling a real broker fill with no lane
+  information) reports `False`.
+- **Corporate actions** (`test_corporate_actions_apply.py`) — a 2:1
+  split doubles `quantity_remaining` and halves `cost_basis_price`,
+  preserving total cost basis exactly; a $0.50/share dividend on 100
+  held shares credits exactly $50.00 cash; both are idempotent —
+  applying the same corporate action to the same account twice produces
+  the identical result the second time, not a double-adjustment.
+- **Cash and position invariants**
+  (`test_portfolio_accounting.py::TestCashAndPositionInvariants`) — cash
+  debits/credits match `quantity * price` exactly across a buy then a
+  sell; selling more than is open in the targeted pool raises
+  `InsufficientLotsError` rather than going negative; a sell targeting a
+  lane with zero lots in it fails closed rather than silently reaching
+  into a different lane that does have lots.
+- **Import idempotency** (`test_csv_import.py`) — re-uploading an
+  identical file is a batch-level no-op (verified: quantity stays 100,
+  not 200); an overlapping row across two *different* files is caught
+  per-row (`DUPLICATE_SKIPPED` then `IMPORTED`, quantity ends at 125 —
+  100 + 25 — not 225); an unknown ticker produces an `ERROR` row without
+  aborting the rest of the batch.
+
+### Live demo
+
+`src/tradingos_api/scripts/demo_prompt8.py`, full transcript:
+
+```
+Starting cash: 15211.500000
+
+=== 1. OPEN INVESTMENT LOT: MRVL ===
+Opened 50 shares @ $60.00 in the INVESTMENT lane.
+
+=== 2. OPEN TACTICAL LOT: MRVL (earnings trade) ===
+Opened 100 shares @ $75.00 in the TACTICAL lane.
+
+=== 3. COMBINED VS. SUBPOSITIONS ===
+Combined (what a broker statement shows): 150.00000000 shares @ avg 70.000000
+  INVESTMENT: 50.00000000 shares @ 60.000000 (1 lot(s))
+  TACTICAL: 100.00000000 shares @ 75.000000 (1 lot(s))
+
+=== 4. HOLDING GUIDANCE ===
+  INVESTMENT lot 7194f463-...: action=None weight%=None
+  TACTICAL lot 9c5b3c6a-...: action=None entry=None stop=None
+
+=== 5. PARTIAL TACTICAL EXIT (investment lot must remain untouched) ===
+Sold 60 tactical shares @ $82.00 -> realized P&L 420.000000
+Trade closed: False  This exit's lane attribution is a confirmed system record.
+  INVESTMENT: 50.00000000 shares remaining
+  TACTICAL: 40.00000000 shares remaining
+
+=== 6. DIVIDEND CORPORATE ACTION ===
+Dividend of $0.25/share credited $22.5000000000 to cash.
+
+=== 7. RECONCILIATION ===
+Reconciliation status: MATCHED
+
+=== 8. TRADE JOURNAL (TACTICAL) ===
+  lane=TACTICAL status=OPEN outcome=OPEN
+  realized_pnl=420.000000 recommendation_outcome=None
+
+All Prompt 8 demo state persisted.
+```
+
+Every number checks out by hand: combined avg cost `(50*60 + 100*75)/150
+= 70.00`; realized P&L on the partial exit `(82-75)*60 = 420`; dividend
+`0.25 * 90 (the post-exit combined quantity) = 22.50`; reconciliation
+against the post-exit, post-dividend combined quantity (90) matches
+exactly. `action=None`/`entry_price=None`/etc. in step 4 are correct,
+not missing data — these demo lots have no `source_recommendation_version_id`
+(manually entered, not traced to a real committee recommendation), so
+there is nothing for the holding-guidance functions to derive a plan
+from; `None` is the honest answer.
+
+### Secrets check before commit
+
+No new secrets this revision — `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

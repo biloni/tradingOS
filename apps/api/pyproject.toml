@@ -17,6 +17,11 @@ dependencies = [
     "psycopg[binary]==3.3.4",
     "alpaca-py==0.43.5",
     "anthropic==0.120.2",
+    # Revision Prompt 8's CSV import endpoint accepts a multipart file
+    # upload (`fastapi.UploadFile`) — FastAPI requires this at runtime
+    # for any Form/UploadFile parameter, even though nothing here
+    # imports it directly.
+    "python-multipart==0.0.32",
 ]
 
 [project.scripts]

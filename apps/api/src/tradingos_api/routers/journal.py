@@ -24,6 +24,7 @@ from tradingos_api.schemas.journal import (
     TradeReviewResponse,
     TradeThesisResponse,
 )
+from tradingos_api.services.trade_journal import get_journal_entry_view
 
 router = APIRouter(prefix="/api/v1/journal", tags=["journal"])
 
@@ -42,6 +43,7 @@ def _trade_detail(db: Session, trade: Trade) -> TradeDetailResponse:
         .where(TradeReview.trade_id == trade.id)
         .order_by(TradeReview.reviewed_at.desc())
     ).all()
+    journal_view = get_journal_entry_view(db, trade=trade)
     return TradeDetailResponse(
         id=trade.id,
         account_id=trade.account_id,
@@ -54,6 +56,17 @@ def _trade_detail(db: Session, trade: Trade) -> TradeDetailResponse:
         thesis=TradeThesisResponse.model_validate(thesis) if thesis else None,
         notes=[TradeNoteResponse.model_validate(n) for n in notes],
         reviews=[TradeReviewResponse.model_validate(r) for r in reviews],
+        lane=trade.lane,
+        outcome=journal_view.outcome,
+        exit_reason=trade.exit_reason,
+        mfe=trade.mfe,
+        mae=trade.mae,
+        modifications_text=trade.modifications_text,
+        recommendation_outcome=journal_view.recommendation_outcome,
+        order_approval_status=journal_view.order_approval_status,
+        benchmark_ticker=journal_view.benchmark_ticker,
+        benchmark_return_pct=journal_view.benchmark_return_pct,
+        post_trade_lesson=journal_view.post_trade_lesson,
     )
 
 

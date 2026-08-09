@@ -1792,3 +1792,61 @@ and the recommendation list/detail endpoints (API areas 14/15) needed
 zero special-casing for this: they already only look at `Recommendation`/
 `RecommendationVersion`, so a pre-flight `NO_ACTION` shows up exactly
 like any other recommendation would.
+
+## ADR-054: Two distinct "reconciliation" concepts coexist deliberately — self-consistency and broker-aggregate — neither replaces the other
+
+**Context.** `routers/orders.py`'s pre-existing
+`GET /api/v1/orders/reconciliation/{account_id}` (shipped before this
+revision) already uses the word "reconciliation": it compares
+`Position.quantity` against `sum(PositionLot.quantity_remaining)` per
+instrument and flags a non-zero `discrepancy`. Revision Prompt 8 asks
+for "broker aggregate position reconciliation" — comparing the
+system's derived position against what a broker reports. These sound
+like the same feature. The question is whether the new requirement is
+satisfied by the existing endpoint, or whether a second, differently-scoped
+reconciliation belongs alongside it.
+
+**Decision.** Both exist, and they check fundamentally different
+things:
+
+1. **Self-consistency** (existing,
+   `GET /api/v1/orders/reconciliation/{account_id}`): "does this app's
+   own derived aggregate agree with the sum of its own lots?" A
+   non-zero discrepancy here is *always a bug* in this codebase's own
+   accounting logic — `Position.quantity` and
+   `sum(PositionLot.quantity_remaining)` should be mathematically
+   identical by construction (`services/portfolio_accounting.py::recompute_position_aggregate()`
+   computes one directly from the other), so this check exists purely
+   as a tripwire against a future regression breaking that invariant.
+2. **Broker-aggregate** (new, `services/reconciliation.py::run_reconciliation()`,
+   `POST /api/v1/portfolio/accounts/{account_id}/reconcile`): "does
+   this app's internally-derived combined position agree with what an
+   external broker reports?" A discrepancy here is *not* a bug in this
+   codebase — it's a real-world fact (a missed fill, a corporate action
+   the system hasn't applied yet, a manual entry error) that needs
+   investigation outside the code. It is lane-blind by construction
+   (`recompute_position_aggregate()` sums across every lane, matching
+   what a broker — which has no concept of lanes — actually reports),
+   and it honestly reports `MATCHED` with a `NULL` broker figure for a
+   `MANUAL` account, which has no broker feed to compare against at all
+   (never presenting "nothing to compare" as a discrepancy).
+
+**Alternatives considered.** Replacing the old endpoint with the new
+one (rejected: the self-consistency tripwire is still valuable and
+checks a different failure mode — a broker-aggregate mismatch could
+itself be caused by a self-consistency bug, so collapsing the two would
+make root-causing a discrepancy harder, not easier, by conflating "my
+math is wrong" with "the world disagrees with my correct math").
+Extending the old endpoint with an optional broker-quantity parameter
+(rejected: the old endpoint's whole shape — one row per instrument, a
+single `discrepancy` number — doesn't have anywhere to put "no broker
+feed for this account" as a distinct, honest state without overloading
+what `discrepancy: 0` already means).
+
+**Consequences.** A future incident investigation has two independent
+signals instead of one conflated one: if self-consistency shows a
+discrepancy, the bug is in this codebase; if only broker-aggregate
+shows one, the bug (or simply reality) is external. `docs/API_CONTRACTS.md`
+area 5's new endpoints explicitly cross-reference the older area 6
+endpoint so a reader encountering both doesn't have to guess whether
+one is dead code.

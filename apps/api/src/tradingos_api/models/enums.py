@@ -694,3 +694,55 @@ class FeatureComponentStatus(StrEnum):
     MISSING_DATA = "MISSING_DATA"
     CAPABILITY_UNAVAILABLE = "CAPABILITY_UNAVAILABLE"
     INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
+
+
+# ---------------------------------------------------------------------------
+# Revision Prompt 8 — portfolio, lane attribution, trade journal, and
+# reconciliation (additive to Phase 8/R3).
+# ---------------------------------------------------------------------------
+
+
+class LotLane(StrEnum):
+    """Every `PositionLot` gets exactly one of these — "attribute every
+    new lot," not "attribute the ones that came with a clear enough
+    recommendation." `UNCLASSIFIED` is a first-class, queryable state
+    (e.g. a manual fill entered with no linked recommendation), never a
+    `NULL` a caller has to remember to treat specially. Deliberately a
+    separate enum from `RecommendationMode` (INVESTMENT/TACTICAL only)
+    rather than reusing it with a nullable column — a lot's lane and a
+    recommendation's lane are different concepts that happen to share
+    two of three values; `UNCLASSIFIED` has no recommendation-mode
+    analog at all."""
+
+    INVESTMENT = "INVESTMENT"
+    TACTICAL = "TACTICAL"
+    UNCLASSIFIED = "UNCLASSIFIED"
+
+
+class JournalExitReason(StrEnum):
+    """Why a `Trade` closed — one explicit reason, not inferred after the
+    fact from price action alone."""
+
+    STOP_HIT = "STOP_HIT"
+    TARGET_HIT = "TARGET_HIT"
+    TIME_EXIT = "TIME_EXIT"
+    THESIS_BROKEN = "THESIS_BROKEN"
+    TRAILING_STOP = "TRAILING_STOP"
+    POST_CONFIRMATION_FAILED = "POST_CONFIRMATION_FAILED"
+    MANUAL_EXIT = "MANUAL_EXIT"
+    OTHER = "OTHER"
+
+
+class ImportRowStatus(StrEnum):
+    """Per-row outcome of a CSV import — "import idempotency" requires a
+    re-imported row that already exists be visibly `DUPLICATE_SKIPPED`,
+    not silently absent from the result."""
+
+    IMPORTED = "IMPORTED"
+    DUPLICATE_SKIPPED = "DUPLICATE_SKIPPED"
+    ERROR = "ERROR"
+
+
+class ReconciliationStatus(StrEnum):
+    MATCHED = "MATCHED"
+    DISCREPANCY = "DISCREPANCY"

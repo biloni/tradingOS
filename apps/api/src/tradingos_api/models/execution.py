@@ -26,6 +26,8 @@ from tradingos_api.models.enums import (
     AccountType,
     CashLedgerEntryType,
     FeeType,
+    JournalExitReason,
+    LotLane,
     OrderLegRole,
     OrderSide,
     OrderStatus,
@@ -110,11 +112,21 @@ class PositionLot(UUIDPkMixin, CreatedAtMixin, Base):
     superseding the shipped MVP's simple weighted-average — ADR-013).
     `quantity_remaining` decreases as later closing executions consume this
     lot in open-date order; `quantity_opened` never changes once written
-    (append-only fact about what this lot originally was)."""
+    (append-only fact about what this lot originally was).
+
+    `lane`/`source_recommendation_version_id` (Revision Prompt 8) —
+    every lot is attributed to `INVESTMENT`, `TACTICAL`, or
+    `UNCLASSIFIED` at open time and never reattributed afterward (an
+    immutable fact about where this lot came from, same discipline as
+    `quantity_opened`); `source_recommendation_version_id` is the
+    specific recommendation version that produced it, when there was
+    one — a manually entered fill has no recommendation and stays
+    `NULL`/`UNCLASSIFIED`."""
 
     __tablename__ = "position_lots"
     __table_args__ = (
         sa.Index("ix_position_lots_open", "account_id", "instrument_id", "closed_at"),
+        sa.Index("ix_position_lots_lane", "account_id", "instrument_id", "lane"),
     )
 
     position_id: Mapped[uuid.UUID] = mapped_column(
@@ -134,6 +146,12 @@ class PositionLot(UUIDPkMixin, CreatedAtMixin, Base):
     cost_basis_price: Mapped[Decimal] = mapped_column(sa.Numeric(18, 6))
     opened_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    lane: Mapped[LotLane] = mapped_column(
+        sa.Enum(LotLane, name="lot_lane"), default=LotLane.UNCLASSIFIED
+    )
+    source_recommendation_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("recommendation_versions.id"), nullable=True
+    )
 
 
 class Order(UUIDPkMixin, TimestampMixin, Base):
@@ -219,7 +237,22 @@ class Fee(UUIDPkMixin, CreatedAtMixin, Base):
 
 class Trade(UUIDPkMixin, TimestampMixin, Base):
     """A round-trip: the span from a position opening from flat to
-    returning to flat. `realized_pnl` is only set once `status=CLOSED`."""
+    returning to flat. `realized_pnl` is only set once `status=CLOSED`.
+
+    Revision Prompt 8 additive journal columns — the remaining "JOURNAL"
+    capture fields with no existing home: `lane` (mirrors the
+    originating `PositionLot`(s), `UNCLASSIFIED` default), `linked_order_id`
+    (the entry order, so "order" is traceable from the journal without a
+    join through `PositionLot.opened_execution_id`), `modifications_text`
+    (how the user changed the recommendation's terms, if at all —
+    `RecommendationOutcome.classification` already computes `MODIFIED`
+    vs. `FOLLOWED` vs. `IGNORED` for "user response"; this is the
+    free-text detail of *what* was modified), `mfe`/`mae` (maximum
+    favorable/adverse excursion while the trade was open), `exit_reason`.
+    "Benchmark result" reuses the existing `BenchmarkSnapshot` table
+    (`benchmark_snapshot_id`) rather than duplicating it; "post-trade
+    lesson" reuses the existing `TradeReview.review_text` (`models/learning.py`)
+    rather than a second free-text field for the same idea."""
 
     __tablename__ = "trades"
 
@@ -234,6 +267,21 @@ class Trade(UUIDPkMixin, TimestampMixin, Base):
     closed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     quantity: Mapped[Decimal] = mapped_column(sa.Numeric(20, 8))
     realized_pnl: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 6), nullable=True)
+    lane: Mapped[LotLane] = mapped_column(
+        sa.Enum(LotLane, name="lot_lane"), default=LotLane.UNCLASSIFIED
+    )
+    linked_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("orders.id"), nullable=True
+    )
+    modifications_text: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    mfe: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 6), nullable=True)
+    mae: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 6), nullable=True)
+    exit_reason: Mapped[JournalExitReason | None] = mapped_column(
+        sa.Enum(JournalExitReason, name="journal_exit_reason"), nullable=True
+    )
+    benchmark_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("benchmark_snapshots.id"), nullable=True
+    )
 
 
 class TradeThesis(UUIDPkMixin, TimestampMixin, Base):

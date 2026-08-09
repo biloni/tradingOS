@@ -141,6 +141,65 @@ for why. `GET /health` is unchanged and still unversioned.
 }
 ```
 
+**Added Revision Prompt 8** (lane attribution, holding guidance, manual
+entry/import, broker reconciliation):
+
+- `GET /api/v1/portfolio/accounts/{account_id}/positions/{instrument_id}`
+  — the position-detail screen: `combined_quantity`/`combined_avg_cost`
+  (what a broker statement would show — lane-blind, summed across every
+  lane's open lots), `subpositions` (one entry per lane that currently
+  has open quantity), and `lots` (every open `PositionLot`, each paired
+  with its `investment_guidance` or `tactical_guidance` — never both,
+  `null` for the lane it isn't).
+- `POST /api/v1/portfolio/accounts/{account_id}/manual-fill` — the
+  manual entry screen. `{"side", "ticker", "quantity", "price",
+  "executed_at", "lane", "source_recommendation_version_id"}` — creates
+  a real `FILLED` `Order`/`Execution` pair and applies it through the
+  exact same `services/portfolio_accounting.py` engine every other fill
+  path uses; there is no separate "manual" code path in the accounting
+  layer itself.
+- `POST /api/v1/portfolio/accounts/{account_id}/import-csv` — multipart
+  CSV upload (`executed_at,side,ticker,quantity,price,lane` columns).
+  Two-layer idempotency: an identical file re-uploaded is a no-op at the
+  batch level; an overlapping row across two different files is a
+  `DUPLICATE_SKIPPED` row, not a silently-dropped or double-applied fill.
+- `POST /api/v1/portfolio/accounts/{account_id}/reconcile` /
+  `GET .../reconciliation-runs` — **broker** aggregate position
+  reconciliation: compares the internally-derived combined position
+  against a caller-supplied `{ticker: quantity}` map (what an actual
+  broker reports). **This is intentionally distinct from area 6's
+  pre-existing `GET /api/v1/orders/reconciliation/{account_id}`**, which
+  is a *self-consistency* check (`Position.quantity` vs.
+  `sum(PositionLot.quantity_remaining)` — catching a bug in this app's
+  own derivation) — the new endpoint catches *drift against an external
+  source of truth* instead. Both matter and neither replaces the other;
+  see docs/DECISIONS.md ADR-054.
+
+```json
+// GET /api/v1/portfolio/accounts/{account_id}/positions/{instrument_id}
+{
+  "instrument": {"ticker": "AMD", "...": "..."},
+  "combined_quantity": "90.00000000", "combined_avg_cost": "70.000000",
+  "subpositions": [
+    {"lane": "INVESTMENT", "quantity": "50.00000000", "avg_cost": "60.000000", "lot_count": 1},
+    {"lane": "TACTICAL", "quantity": "40.00000000", "avg_cost": "75.000000", "lot_count": 1}
+  ],
+  "lots": [
+    {"lot": {"lane": "INVESTMENT", "quantity_remaining": "50.00000000", "...": "..."},
+     "investment_guidance": {"current_action": null, "thesis_health": null, "portfolio_weight_pct": null},
+     "tactical_guidance": null},
+    {"lot": {"lane": "TACTICAL", "quantity_remaining": "40.00000000", "...": "..."},
+     "investment_guidance": null,
+     "tactical_guidance": {"current_action": null, "entry_price": null, "stop_price": null}}
+  ]
+}
+```
+`current_action`/`entry_price`/etc. are `null` above because these
+demo lots have no `source_recommendation_version_id` (manually entered,
+not traced to a real committee recommendation) — `null` is the honest
+answer, never a fabricated guess, when there is nothing to derive
+guidance from.
+
 ## 6. Manual trade entry, order import, fills, reconciliation (`routers/orders.py`)
 
 The largest area — the propose → confirm human-gate flow (ADR-014,
