@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from tradingos_api.core.dependencies import get_broker_provider
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import (
     ORDER_TRANSITIONS,
@@ -38,9 +39,12 @@ from tradingos_api.models.execution import (
     Position,
     PositionLot,
 )
+from tradingos_api.models.order_authority import CancelOpenOrdersEvent
 from tradingos_api.models.security_master import Instrument
+from tradingos_api.providers.broker import PaperBrokerProvider
 from tradingos_api.schemas.common import Page
 from tradingos_api.schemas.instruments import InstrumentResponse
+from tradingos_api.schemas.order_authority import CancelOpenOrdersRequest, CancelOpenOrdersResponse
 from tradingos_api.schemas.orders import (
     ExecutionResponse,
     OrderCreateRequest,
@@ -49,6 +53,7 @@ from tradingos_api.schemas.orders import (
     ReconciliationRow,
 )
 from tradingos_api.services.lifecycle import InvalidTransitionError, assert_transition_allowed
+from tradingos_api.services.order_execution import cancel_order_at_broker
 
 router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
 
@@ -353,3 +358,51 @@ def get_reconciliation(
             )
         )
     return rows
+
+
+@router.post("/cancel-open", response_model=CancelOpenOrdersResponse)
+def cancel_open_orders(
+    payload: CancelOpenOrdersRequest,
+    db: Session = Depends(get_db),
+    broker: PaperBrokerProvider = Depends(get_broker_provider),
+) -> CancelOpenOrdersResponse:
+    """OA-9/SS-4's second, independent control — "a separate action that
+    cancels every open order still at the broker, independent of the
+    kill switch." Scoped to `payload.account_id` (or every `PAPER_ALPACA`
+    account if omitted) and only orders that actually reached a broker
+    (`broker_order_id IS NOT NULL`) — a `MANUAL` account's orders have no
+    broker leg to cancel there. Every cancellation still goes through
+    `services/order_execution.py::cancel_order_at_broker()`, the only
+    other function besides the submit path that touches
+    `PaperBrokerProvider`."""
+    stmt = select(Order).where(
+        Order.status.in_((OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED)),
+        Order.broker_order_id.is_not(None),
+    )
+    if payload.account_id is not None:
+        stmt = stmt.where(Order.account_id == payload.account_id)
+    else:
+        paper_account_ids = db.scalars(
+            select(Account.id).where(Account.account_type == AccountType.PAPER_ALPACA)
+        ).all()
+        stmt = stmt.where(Order.account_id.in_(paper_account_ids))
+
+    open_orders = db.scalars(stmt).all()
+    canceled_ids: list[uuid.UUID] = []
+    for order in open_orders:
+        cancel_order_at_broker(db, order=order, broker=broker)
+        canceled_ids.append(order.id)
+
+    db.add(
+        CancelOpenOrdersEvent(
+            account_id=payload.account_id,
+            triggered_by=payload.triggered_by,
+            triggered_at=datetime.now(UTC),
+            reason=payload.reason,
+            orders_canceled_count=len(canceled_ids),
+        )
+    )
+    db.commit()
+    return CancelOpenOrdersResponse(
+        orders_canceled_count=len(canceled_ids), canceled_order_ids=canceled_ids
+    )

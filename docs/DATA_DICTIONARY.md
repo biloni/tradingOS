@@ -486,6 +486,42 @@ curates rather than computes), `services/morning_plan_dashboard.py`
 from the stored `PlanCompletenessStatus`), `services/morning_plan_export.py`
 (`render_markdown()`).
 
+## 16. Revision Prompt 10 — paper broker execution, approval queue, and bracket lifecycle
+
+Additive: 4 new columns across 3 existing R3/Revision-Prompt-8 tables,
+1 new enum value, 1 new enum, 2 new tables. No table was renamed or
+restructured.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `approval_bound_fields` (1 new column) | `quote_price_at_approval` (nullable numeric) | The concrete price snapshot the "price moved" invalidation check (`services/order_authority.py::price_move_requires_invalidation()`) compares a fresh quote against — previously only a timestamp existed (`order_proposal_versions.quote_observed_at`), with no comparable value. |
+| `broker_submission_attempts` (3 new columns) | `resulting_order_id` (nullable FK to `orders.id`), `request_snapshot`/`response_snapshot` (JSON, default `{}`, redacted) | Links one submission attempt to the real `Order` it produced (nullable — a `FAILED`/`DENIED`/`TIMEOUT_UNKNOWN` attempt produced none) and a redacted audit record of what was sent/received — `services/order_execution.py::_redact_broker_payload()` is the one place redaction rules live. |
+| `order_approvals` (1 new column) | `auto_policy_version_id` (nullable FK to `paper_auto_policy_versions.id`) | Which `PAPER_AUTO_POLICY` grant authorized an automatic submission, when there was one. |
+| `broker_submission_outcome` (1 new enum value) | `TIMEOUT_UNKNOWN` | A submit call whose HTTP response never arrived — genuinely unknown until a status query resolves it, never assumed `FAILED` (risks a duplicate resubmit) or `SUCCEEDED` (risks fabricating a fill). |
+| `paper_auto_policy_versions` (new table) | `owner_user_id`, `version_number`, `enabled` (default `false`), `eligible_strategy_families`/`allowed_time_windows`/`allowed_order_types` (JSON), `min_score`, `max_orders_per_day`, `max_daily_notional`, `max_per_order_risk_pct`, `kill_switch_behavior`, `created_by` | The explicitly-enabled, versioned `PAPER_AUTO_POLICY` grant OA-4 requires. Append-only, mirroring `RiskPolicyVersion`/`StrategyVersion` — no row at all and a row with `enabled=false` are treated identically ("disabled by default"). |
+| `cancel_open_orders_events` (new table) | `account_id` (nullable — `NULL` means every account), `triggered_by`, `triggered_at`, `reason`, `orders_canceled_count` | OA-9/SS-4's second, independent control, alongside the pre-existing `execution_kill_switch_events`. |
+| `kill_switch_behavior` (new enum) | `HALT_NEW_ONLY`, `HALT_AND_CANCEL_OPEN` | A policy-scoped preference for what an auto-policy's own already-open orders do when the (always-authoritative) global kill switch fires — never the kill switch's own behavior, which always invalidates every pending approval regardless. |
+
+**New services**: `services/order_execution.py` (the single
+broker-boundary entry point — `refresh_and_recalculate()`,
+`submit_paper_order()`, `submit_protective_leg()`,
+`poll_and_reconcile_fills()`, `cancel_order_at_broker()`),
+`services/bracket_execution.py` (`submit_bracket_order()` — native vs.
+emulated, `BRACKET_EMULATION_DISCLOSURE`), `services/paper_auto_policy.py`
+(`evaluate_auto_submission()` — ANDs policy conditions with hard-veto
+results, see docs/DECISIONS.md ADR-058), extensions to
+`services/order_authority.py` (`compute_effective_mode()`,
+`assert_broker_boundary_is_paper()`, `activate_kill_switch()`/
+`deactivate_kill_switch()`, `price_move_requires_invalidation()`).
+**New providers**: `providers/synthetic_paper_broker.py`
+(`SyntheticPaperBrokerProvider` — deterministic, in-memory, used by
+tests and `demo_prompt10.py` so the flow runs without real Alpaca
+credentials), `providers/synthetic_market_quote.py`. `providers/broker.py`
+gains `client_order_id`/`take_profit_price`/`stop_loss_price` on
+`PaperOrderRequest`, `find_order_by_client_id()`, and
+`BrokerSubmissionAmbiguous` (the one exception type that means "query
+status before any retry").
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

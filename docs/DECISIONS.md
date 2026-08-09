@@ -1916,3 +1916,97 @@ practical implication for a real deployment: an always-on worker's
 pipeline must run committees for the watchlist *before* 05:45 on its
 own schedule — the morning-plan job assumes fresh input exists, it does
 not create it.
+
+## ADR-056: Two distinct idempotency keys for broker submission — a per-attempt local key and a stable broker-facing client order id
+
+**Context.** Revision Prompt 10 requires "persist local idempotency
+key... for broker events" and, separately, "if a timeout is ambiguous,
+query status before any retry" and "never retry an unproven
+non-idempotent submit." A single idempotency key cannot satisfy both:
+if the key changes on every attempt, a real broker cannot deduplicate a
+resubmit after an ambiguous timeout (it looks like a brand-new order);
+if the key never changes, `BrokerSubmissionAttempt` (an append-only
+audit row per attempt, matching this project's append-only discipline
+everywhere else) cannot have a unique key per row.
+
+**Decision.** Two separate identifiers, deliberately: `BrokerSubmissionAttempt.idempotency_key`
+is per-attempt (`f"order-approval:{approval_id}:attempt{n}"`, the same
+numbered-attempt pattern `services/morning_plan_scheduler.py` already
+established for retries) — it is *our own* dedup key, guaranteeing each
+attempt row is unique. `services/order_execution.py::_client_order_id()`
+(`f"tos-{approval_id}"`) is the *broker-facing* id, stable across every
+attempt for the same approval — it is never stored as its own column
+since it is a pure function of `order_approval_id`, computed fresh
+whenever needed. A real broker (Alpaca) rejects or returns the existing
+order for a duplicate `client_order_id`, which is exactly the safety
+net `find_order_by_client_id()` relies on before ever considering a
+resubmit.
+
+**Consequences.** The two keys can look confusingly similar (both start
+`"order-approval:"`/`"tos-"` and both reference the same approval id) —
+documented explicitly in `BrokerSubmissionAttempt`'s own docstring so a
+future reader does not try to collapse them into one field.
+
+## ADR-057: Emulated brackets are independent orders sharing a `bracket_group_id`, gated behind a mandatory, un-bypassable disclosure acknowledgment
+
+**Context.** "Prefer broker-native bracket/OCO when supported. If
+unsupported, disclose the reliability limitation before allowing
+emulation" (Revision Prompt 10). The existing `OrderLeg.bracket_group_id`
+(Phase 8) already models a bracket relationship purely in this
+application's own schema, independent of whether any given broker
+supports native OCO — exactly the mechanism an emulated bracket needs.
+The open design question was whether the disclosure should be a UI
+convention (a modal the frontend is supposed to show) or something the
+backend itself refuses to bypass.
+
+**Decision.** `services/bracket_execution.py::submit_bracket_order()`
+takes `emulation_acknowledged: bool = False` and raises
+`BracketEmulationNotAcknowledged` (never silently emulating) whenever a
+bracket is requested, the broker's `BrokerCapabilities.supports_native_brackets`
+is `False`, and this flag was not explicitly set — the disclosure is an
+enforced precondition of the function itself, not a UI-layer suggestion
+a caller could accidentally skip. When emulation does proceed, the
+primary entry and each protective leg are submitted as fully
+independent broker orders (each gets its own `client_order_id`,
+`BrokerSubmissionAttempt`, and `Order` row) sharing one `bracket_group_id`
+— our own bookkeeping treats them as one unit; the broker does not.
+
+**Consequences.** `BRACKET_EMULATION_DISCLOSURE`'s text is deliberately
+specific about what can go wrong (a crash between the primary fill and
+the protective legs leaves the position naked; canceling one leg does
+not cancel the other at the broker) rather than a generic "this may not
+work as expected" — a disclosure that doesn't name the actual failure
+mode is not really a disclosure. Protective legs are only submitted
+once the primary has *filled* (fully or partially, sized to the filled
+quantity) — never against an unfilled entry, which would protect a
+position that does not yet exist.
+
+## ADR-058: Auto-policy eligibility is combined with hard-veto results by a plain AND, never evaluated as a standalone replacement
+
+**Context.** "Auto-policy can never override a hard risk or
+data-quality gate" (Revision Prompt 10, PAPER AUTO POLICY section) is a
+safety invariant, not just a configuration default — it needed to be
+true by construction, not by convention (a future call site simply
+"remembering" to check both).
+
+**Decision.** `services/paper_auto_policy.py::evaluate_auto_submission()`
+requires `hard_veto_results: list[VetoResult]` as a mandatory parameter
+(no default), computed by the caller via
+`services/hard_vetoes.py::evaluate_hard_vetoes()` — the same 10-veto
+engine Revision Prompt 7 already established. There is no code path in
+this module that returns `eligible=True` while `any_veto_triggered()`
+is `True`; `evaluate_auto_policy_conditions()` (the policy-only half:
+strategy family, score, notional/order caps, time window, per-order
+risk) is a separate, independently-testable function specifically so a
+test can assert the AND-gate behavior in isolation from the vetoes
+themselves (`demo_prompt10.py` step 6 demonstrates a policy-eligible
+order being blocked outright by an active kill-switch veto).
+
+**Consequences.** A caller cannot accidentally gate an automatic
+submission on `evaluate_auto_policy_conditions()` alone and get a
+falsely-permissive answer — the mandatory parameter makes omitting the
+veto check a type error, not a silent gap. The same AND-gate philosophy
+this project already applies everywhere a deterministic gate exists
+(`services/hard_vetoes.py` itself, `services/baseline_eligibility.py`,
+ADR-051's deterministic veto between the CIO and the persisted
+recommendation) is extended here to the newest decision surface.

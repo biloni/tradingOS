@@ -3,8 +3,27 @@ Phase 8/ADR-050) — the schema-backed proposal -> policy evaluation ->
 approval lifecycle docs/ORDER_AUTHORITY_MODEL.md defines, upstream of
 and distinct from the existing `Order`/`Execution` tables (Phase 8),
 which begin only once an approval is bound and (for paper accounts)
-submitted. **No table here is ever written by a live broker call in
-this revision** — "do not add a live broker submission endpoint yet."
+submitted. **No table here is ever written by a live broker call, in
+this revision or Revision Prompt 10** — "do not add a live broker
+submission endpoint yet" remains true; Revision Prompt 10 only wires
+real **paper** submission (`services/order_execution.py`, the single
+broker-boundary entry point).
+
+Revision Prompt 10 additive columns: `ApprovalBoundFields.quote_price_at_approval`
+(the concrete price snapshot the "price moved" invalidation check
+compares a fresh quote against — the architecture doc's own "moved a
+configurable percentage from the approval's snapshot price" question 5,
+previously only a timestamp with no comparable value);
+`BrokerSubmissionAttempt.resulting_order_id`/`request_snapshot`/
+`response_snapshot` (linking one submission attempt to the real `Order`
+it produced, plus a redacted request/response record for audit without
+ever storing a credential); `OrderApproval.auto_policy_version_id`
+(which `PaperAutoPolicyVersion` authorized an automatic submission, when
+there was one). New tables: `PaperAutoPolicyVersion` (the
+`PAPER_AUTO_POLICY` grant `policy.order_authority.AutoPolicyGrant`
+requires — disabled by default, versioned, append-only) and
+`CancelOpenOrdersEvent` (OA-9's second, independent control, alongside
+the pre-existing `ExecutionKillSwitchEvent`).
 
 This is deliberately a separate model module from
 `tradingos_api.policy.order_authority` (R0): that module is pure,
@@ -25,11 +44,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from tradingos_api.db.base import Base
 from tradingos_api.db.json_type import PORTABLE_JSON
-from tradingos_api.db.mixins import CreatedAtMixin, TimestampMixin, UUIDPkMixin
+from tradingos_api.db.mixins import CreatedAtMixin, OwnedMixin, TimestampMixin, UUIDPkMixin
 from tradingos_api.models.enums import (
     ApprovalInvalidationReason,
     BrokerSubmissionOutcome,
     EnvironmentLabel,
+    KillSwitchBehavior,
     OrderApprovalStatus,
     OrderAuthorityMode,
     OrderProposalStatus,
@@ -192,6 +212,9 @@ class OrderApproval(UUIDPkMixin, TimestampMixin, Base):
         default=OrderApprovalStatus.PENDING,
     )
     integrity_hash: Mapped[str] = mapped_column(sa.String(64))
+    auto_policy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("paper_auto_policy_versions.id"), nullable=True
+    )
 
 
 class ApprovalBoundFields(UUIDPkMixin, CreatedAtMixin, Base):
@@ -226,6 +249,9 @@ class ApprovalBoundFields(UUIDPkMixin, CreatedAtMixin, Base):
     recommendation_version_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("recommendation_versions.id"), nullable=True
     )
+    quote_price_at_approval: Mapped[Decimal | None] = mapped_column(
+        sa.Numeric(18, 6), nullable=True
+    )
 
 
 class ApprovalInvalidation(UUIDPkMixin, CreatedAtMixin, Base):
@@ -248,12 +274,31 @@ class ApprovalInvalidation(UUIDPkMixin, CreatedAtMixin, Base):
 
 
 class BrokerSubmissionAttempt(UUIDPkMixin, CreatedAtMixin, Base):
-    """Append-only. Schema-only this revision — every row this pass's
-    seed data writes has `outcome` in `{NOT_ATTEMPTED, DENIED}` and
-    `environment_label` in `{RESEARCH, PAPER}`; no code path exists that
-    could write `SUCCEEDED` for `LIVE` ("do not add a live broker
-    submission endpoint yet"). `idempotency_key` is the future broker-
-    request de-duplication key (e.g. a client-order-id)."""
+    """Append-only. Through R3/Revision Prompt 9, every row ever written
+    had `outcome` in `{NOT_ATTEMPTED, DENIED}` and `environment_label` in
+    `{RESEARCH, PAPER}` — no code path could write `SUCCEEDED` at all.
+    Revision Prompt 10 is what actually reaches a real (paper-only)
+    broker: `SUCCEEDED`/`FAILED`/`TIMEOUT_UNKNOWN` become real, live
+    outcomes for `environment_label=PAPER`; `environment_label=LIVE`
+    remains impossible to reach `SUCCEEDED` for by construction — no
+    code path in `services/order_execution.py` ever sets `is_live=True`
+    (see that module's docstring). `idempotency_key` is this **attempt's**
+    own local dedup key (`f"order-approval:{approval_id}:attempt{n}"`,
+    the same numbered-attempt pattern `services/morning_plan_scheduler.py`
+    already established) — distinct from the *broker-facing*
+    `client_order_id` (`services/order_execution.py::_client_order_id()`,
+    derived on demand, never stored as its own column since it is a pure
+    function of `order_approval_id` alone) that stays stable **across**
+    every attempt for the same approval, which is what lets a real broker
+    safely reject/de-duplicate a second submit if the first one actually
+    succeeded despite an ambiguous local timeout.
+    `resulting_order_id`/`request_snapshot`/`response_snapshot` are
+    Revision Prompt 10's additions: which real `Order` row this attempt
+    produced (nullable — a `FAILED`/`DENIED`/`TIMEOUT_UNKNOWN` attempt
+    produced none), and a **redacted** record of what was sent/received
+    (`services/order_execution.py::_redact_broker_payload()` is the one
+    place redaction rules live — no API key, secret, or full account
+    number is ever written into either snapshot)."""
 
     __tablename__ = "broker_submission_attempts"
 
@@ -269,6 +314,11 @@ class BrokerSubmissionAttempt(UUIDPkMixin, CreatedAtMixin, Base):
     )
     idempotency_key: Mapped[str | None] = mapped_column(sa.String(100), unique=True, nullable=True)
     detail: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    resulting_order_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("orders.id"), nullable=True
+    )
+    request_snapshot: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON, default=dict)
+    response_snapshot: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON, default=dict)
 
 
 class ExecutionKillSwitchEvent(UUIDPkMixin, CreatedAtMixin, Base):
@@ -308,15 +358,74 @@ class BrokerEnvironmentAttestation(UUIDPkMixin, CreatedAtMixin, Base):
     attested_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
 
 
+class PaperAutoPolicyVersion(UUIDPkMixin, OwnedMixin, CreatedAtMixin, Base):
+    """The explicitly-enabled, versioned automation grant
+    `policy.order_authority.AutoPolicyGrant`/OA-4 requires before
+    `PAPER_AUTO_POLICY` may submit anything without a per-order human
+    click (Revision Prompt 10). Append-only, mirroring `RiskPolicyVersion`/
+    `StrategyVersion`'s pattern — changing any field creates the next
+    `version_number`, it never edits a live row a currently-running
+    auto-submission might be mid-read of. **Disabled by default**: no row
+    at all (never having been configured) and a row with `enabled=False`
+    both mean "not authorized," identically to `AutoPolicyGrant(enabled=False, ...)`.
+    `services/paper_auto_policy.py` is the one place these fields are
+    evaluated; a policy can only ever narrow what the deterministic hard
+    vetoes (`services/hard_vetoes.py`) already allow, never widen it —
+    "auto-policy can never override a hard risk or data-quality gate" is
+    enforced by construction (the auto-policy check runs *in addition
+    to*, never *instead of*, `evaluate_hard_vetoes()`)."""
+
+    __tablename__ = "paper_auto_policy_versions"
+    __table_args__ = (sa.UniqueConstraint("owner_user_id", "version_number"),)
+
+    version_number: Mapped[int] = mapped_column(sa.Integer)
+    enabled: Mapped[bool] = mapped_column(sa.Boolean, default=False)
+    eligible_strategy_families: Mapped[list[str]] = mapped_column(PORTABLE_JSON, default=list)
+    min_score: Mapped[Decimal] = mapped_column(sa.Numeric(6, 2), default=Decimal(6))
+    max_orders_per_day: Mapped[int] = mapped_column(sa.Integer, default=1)
+    max_daily_notional: Mapped[Decimal] = mapped_column(sa.Numeric(18, 6))
+    max_per_order_risk_pct: Mapped[Decimal] = mapped_column(sa.Numeric(6, 4))
+    allowed_time_windows: Mapped[list[dict[str, Any]]] = mapped_column(PORTABLE_JSON, default=list)
+    allowed_order_types: Mapped[list[str]] = mapped_column(PORTABLE_JSON, default=list)
+    kill_switch_behavior: Mapped[KillSwitchBehavior] = mapped_column(
+        sa.Enum(KillSwitchBehavior, name="kill_switch_behavior"),
+        default=KillSwitchBehavior.HALT_AND_CANCEL_OPEN,
+    )
+    created_by: Mapped[str] = mapped_column(sa.String(80))
+
+
+class CancelOpenOrdersEvent(UUIDPkMixin, CreatedAtMixin, Base):
+    """OA-9's second, independent control — "a separate action that
+    cancels every open order still at the broker, independent of the
+    kill switch." Append-only, its own audited row distinct from
+    `ExecutionKillSwitchEvent` (a user may want to stop new entries
+    without touching existing open orders, or vice versa). `account_id`
+    NULL means "every account," matching this being a single-user,
+    small-account-count system where an unscoped cancel-all is itself a
+    meaningful, auditable action, not an oversight."""
+
+    __tablename__ = "cancel_open_orders_events"
+
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("accounts.id"), nullable=True
+    )
+    triggered_by: Mapped[str] = mapped_column(sa.String(80))
+    triggered_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    orders_canceled_count: Mapped[int] = mapped_column(sa.Integer, default=0)
+
+
 __all__ = [
     "ApprovalBoundFields",
     "ApprovalInvalidation",
     "BrokerEnvironmentAttestation",
     "BrokerSubmissionAttempt",
+    "CancelOpenOrdersEvent",
     "ExecutionKillSwitchEvent",
     "OperatingModeHistory",
     "OrderApproval",
     "OrderPolicyEvaluation",
     "OrderProposal",
     "OrderProposalVersion",
+    "PaperAutoPolicyVersion",
 ]

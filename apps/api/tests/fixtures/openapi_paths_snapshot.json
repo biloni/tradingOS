@@ -246,7 +246,19 @@
     ]
   ],
   [
+    "/api/v1/order-approvals/{approval_id}/refresh",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/order-approvals/{approval_id}/reject",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/order-approvals/{approval_id}/submit",
     [
       "post"
     ]
@@ -277,6 +289,12 @@
     ]
   ],
   [
+    "/api/v1/orders/cancel-open",
+    [
+      "post"
+    ]
+  ],
+  [
     "/api/v1/orders/import",
     [
       "post"
@@ -302,6 +320,19 @@
   ],
   [
     "/api/v1/orders/{order_id}/confirm",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/paper-auto-policy",
+    [
+      "get",
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/paper-auto-policy/disable",
     [
       "post"
     ]
@@ -436,6 +467,18 @@
     "/api/v1/settings/kill-switch-status",
     [
       "get"
+    ]
+  ],
+  [
+    "/api/v1/settings/kill-switch/activate",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/settings/kill-switch/deactivate",
+    [
+      "post"
     ]
   ],
   [

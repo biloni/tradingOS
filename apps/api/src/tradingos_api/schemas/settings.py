@@ -67,13 +67,14 @@ class RiskPolicyUpdateRequest(BaseModel):
 
 
 class OperatingModeResponse(BaseModel):
-    """Revision Prompt R2 scaffold. `mode` is one of
-    `models.enums`-equivalent `policy.order_authority.OrderAuthorityMode`'s
+    """`mode` is one of `policy.order_authority.OrderAuthorityMode`'s
     four values; `environment_label` is the coarser RESEARCH/PAPER/LIVE
     band PROJECT_INSTRUCTIONS.md's environment-banner requirement names.
-    This endpoint reports configuration only — it does not gate anything
-    yet (`assert_order_authorized()` is not wired into any router this
-    pass, docs/ORDER_AUTHORITY_MODEL.md's traceability table)."""
+    Since Revision Prompt 10, `can_submit_orders` reflects the
+    **effective** mode (`services/order_authority.py::compute_effective_mode()`
+    — kill-switch-aware), not just the configured one;
+    `assert_order_authorized()` is now called for real from
+    `routers/order_authority.py::submit_order_approval()`."""
 
     mode: str
     environment_label: str

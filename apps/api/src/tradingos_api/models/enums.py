@@ -666,12 +666,18 @@ class ApprovalInvalidationReason(StrEnum):
 class BrokerSubmissionOutcome(StrEnum):
     """`SUCCEEDED` exists in the vocabulary for schema completeness, but no
     code path in this revision ever writes it for a `LIVE` environment —
-    "do not add a live broker submission endpoint yet"."""
+    "do not add a live broker submission endpoint yet" (Revision Prompt
+    R3). Revision Prompt 10 adds `TIMEOUT_UNKNOWN` — a submit call whose
+    HTTP response never arrived, so this attempt's own outcome is
+    genuinely unknown until a status query resolves it one way or the
+    other (never assumed FAILED, which would risk a duplicate resubmit;
+    never assumed SUCCEEDED, which would risk fabricating a fill)."""
 
     NOT_ATTEMPTED = "NOT_ATTEMPTED"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     DENIED = "DENIED"
+    TIMEOUT_UNKNOWN = "TIMEOUT_UNKNOWN"
 
 
 class StrategyFamily(StrEnum):
@@ -764,3 +770,21 @@ class ImportRowStatus(StrEnum):
 class ReconciliationStatus(StrEnum):
     MATCHED = "MATCHED"
     DISCREPANCY = "DISCREPANCY"
+
+
+class KillSwitchBehavior(StrEnum):
+    """Revision Prompt 10 — one of the fields a `PAPER_AUTO_POLICY` grant
+    must explicitly choose: what an *automatic* submission path does
+    when the (always-authoritative) global kill switch is active.
+    `HALT_NEW_ONLY` stops the policy from generating new automatic
+    submissions but leaves whatever it already has open at the broker
+    alone; `HALT_AND_CANCEL_OPEN` additionally cancels every open order
+    this policy itself submitted. This is a *policy-scoped* preference,
+    never the kill switch's own behavior — the kill switch itself always
+    invalidates every pending approval regardless of this setting
+    (OA-9); this only governs the auto-policy's own already-open orders,
+    the "separate action" the architecture doc calls "cancel-open-orders"
+    scoped to what one policy is responsible for."""
+
+    HALT_NEW_ONLY = "HALT_NEW_ONLY"
+    HALT_AND_CANCEL_OPEN = "HALT_AND_CANCEL_OPEN"

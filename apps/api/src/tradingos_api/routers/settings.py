@@ -22,6 +22,7 @@ from tradingos_api.models.identity import (
 )
 from tradingos_api.models.order_authority import ExecutionKillSwitchEvent
 from tradingos_api.policy.order_authority import OrderAuthorityMode
+from tradingos_api.schemas.order_authority import KillSwitchActivateRequest
 from tradingos_api.schemas.settings import (
     InvestmentProfileResponse,
     KillSwitchStatusResponse,
@@ -29,6 +30,11 @@ from tradingos_api.schemas.settings import (
     ProviderStatusResponse,
     RiskPolicyResponse,
     RiskPolicyUpdateRequest,
+)
+from tradingos_api.services.order_authority import (
+    activate_kill_switch,
+    compute_effective_mode,
+    deactivate_kill_switch,
 )
 
 # HES-3's absolute hard ceiling ("configurable upper bound: 0.50%,
@@ -49,20 +55,20 @@ _ENVIRONMENT_LABEL_BY_MODE: dict[OrderAuthorityMode, str] = {
 
 
 @router.get("/operating-mode", response_model=OperatingModeResponse)
-def get_operating_mode() -> OperatingModeResponse:
-    """Revision Prompt R2 scaffold — the one server-side source of truth
-    the frontend's environment banner and operating-mode status component
-    read (PROJECT_INSTRUCTIONS.md's v2 amendment: "whose display value
-    comes from the API, not client storage"). Reports configuration only;
-    `assert_order_authorized()` (policy/order_authority.py, R0) is not
-    wired into any order-mutating router yet, so `can_submit_orders` here
-    is informational, not an active gate — see
-    docs/ORDER_AUTHORITY_MODEL.md for the traceability to when it becomes
-    one."""
+def get_operating_mode(db: Session = Depends(get_db)) -> OperatingModeResponse:
+    """The one server-side source of truth the frontend's environment
+    banner and operating-mode status component read
+    (PROJECT_INSTRUCTIONS.md's v2 amendment: "whose display value comes
+    from the API, not client storage"). Since Revision Prompt 10, `mode`
+    is the **effective** mode — `compute_effective_mode()` forces
+    `RESEARCH_ONLY` whenever the kill switch is active, regardless of
+    the configured value, so this display can never claim orders are
+    submittable while OA-9's switch says otherwise."""
     try:
-        mode = OrderAuthorityMode(get_settings().operating_mode)
+        configured_mode = OrderAuthorityMode(get_settings().operating_mode)
     except ValueError:
-        mode = OrderAuthorityMode.RESEARCH_ONLY
+        configured_mode = OrderAuthorityMode.RESEARCH_ONLY
+    mode = compute_effective_mode(db, configured_mode)
     return OperatingModeResponse(
         mode=mode.value,
         environment_label=_ENVIRONMENT_LABEL_BY_MODE[mode],
@@ -85,6 +91,50 @@ def get_kill_switch_status(db: Session = Depends(get_db)) -> KillSwitchStatusRes
         activated_at=latest.activated_at,
         deactivated_at=latest.deactivated_at,
         reason=latest.reason,
+    )
+
+
+@router.post("/kill-switch/activate", response_model=KillSwitchStatusResponse, status_code=201)
+def activate_kill_switch_endpoint(
+    payload: KillSwitchActivateRequest, db: Session = Depends(get_db)
+) -> KillSwitchStatusResponse:
+    """OA-9: immediately forces the effective operating mode to
+    `RESEARCH_ONLY` (via `compute_effective_mode()`, read by every other
+    endpoint) and invalidates every still-`PENDING` order approval in
+    the same call — "every in-flight order transitions to INVALIDATED,
+    not left pending." A distinct action from cancel-open-orders
+    (`POST /api/v1/orders/cancel-open`), which this does *not* also do."""
+    now = datetime.now(UTC)
+    event = activate_kill_switch(
+        db, activated_by=payload.activated_by, reason=payload.reason, now=now
+    )
+    db.commit()
+    db.refresh(event)
+    return KillSwitchStatusResponse(
+        is_active=True,
+        activated_by=event.activated_by,
+        activated_at=event.activated_at,
+        deactivated_at=event.deactivated_at,
+        reason=event.reason,
+    )
+
+
+@router.post("/kill-switch/deactivate", response_model=KillSwitchStatusResponse)
+def deactivate_kill_switch_endpoint(db: Session = Depends(get_db)) -> KillSwitchStatusResponse:
+    latest = db.scalar(
+        select(ExecutionKillSwitchEvent).order_by(ExecutionKillSwitchEvent.activated_at.desc())
+    )
+    if latest is None or latest.deactivated_at is not None:
+        raise HTTPException(status_code=400, detail="The kill switch is not currently active.")
+    event = deactivate_kill_switch(db, event=latest, now=datetime.now(UTC))
+    db.commit()
+    db.refresh(event)
+    return KillSwitchStatusResponse(
+        is_active=False,
+        activated_by=event.activated_by,
+        activated_at=event.activated_at,
+        deactivated_at=event.deactivated_at,
+        reason=event.reason,
     )
 
 

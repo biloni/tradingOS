@@ -370,6 +370,7 @@ class AlpacaBrokerCapabilityProvider:
             supported_order_types=("MARKET", "LIMIT", "STOP", "STOP_LIMIT"),
             supports_extended_hours=True,
             supports_fractional_shares=True,
+            supports_native_brackets=True,
         )
 
 

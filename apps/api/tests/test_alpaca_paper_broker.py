@@ -16,6 +16,7 @@ from alpaca.trading.enums import (
     PositionSide,
 )
 from alpaca.trading.models import Order, Position
+from alpaca.trading.requests import StopOrderRequest
 
 from tradingos_api.core.config import Settings
 from tradingos_api.providers.alpaca_paper_broker import AlpacaPaperBrokerProvider
@@ -99,6 +100,39 @@ class TestSubmitPaperOrder:
         with pytest.raises(ValueError, match="limit_price"):
             provider.submit_paper_order(
                 PaperOrderRequest(symbol="SPY", quantity=1, side="buy", order_type="limit")
+            )
+
+    def test_stop_order_sends_a_native_stop_order_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Revision Prompt 10 fix: a `stop` order must reach Alpaca as a
+        real `StopOrderRequest`, not silently fall through to the
+        market-order branch — the bug this test guards against."""
+        provider = AlpacaPaperBrokerProvider(_settings_with_keys())
+        order = _fake_order(order_type=OrderType.STOP, status=OrderStatus.NEW, filled_qty="0")
+        captured: dict[str, object] = {}
+
+        def _capture_submit(order_data: object) -> Order:
+            captured["order_data"] = order_data
+            return order
+
+        monkeypatch.setattr(provider._client, "submit_order", _capture_submit)
+
+        provider.submit_paper_order(
+            PaperOrderRequest(
+                symbol="SPY", quantity=1, side="sell", order_type="stop", stop_price="480.00"
+            )
+        )
+
+        submitted = captured["order_data"]
+        assert isinstance(submitted, StopOrderRequest)
+        assert submitted.stop_price == 480.00
+
+    def test_stop_order_without_stop_price_raises(self) -> None:
+        provider = AlpacaPaperBrokerProvider(_settings_with_keys())
+        with pytest.raises(ValueError, match="stop_price"):
+            provider.submit_paper_order(
+                PaperOrderRequest(symbol="SPY", quantity=1, side="sell", order_type="stop")
             )
 
 

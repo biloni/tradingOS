@@ -906,3 +906,75 @@ backtest re-run — nothing to activate.
 ### `GET /api/v1/strategy-versions` / `GET /api/v1/strategy-versions/{id}`
 
 List (newest-first) / detail. Same shape as `POST /api/v1/strategy-versions`.
+
+## 23. Paper broker execution (Revision Prompt 10)
+
+Extends areas 17/18 (`routers/order_authority.py`) with the two
+endpoints that actually reach a **paper-only** broker, plus new
+`routers/orders.py`/`routers/settings.py`/`routers/paper_auto_policy.py`
+routes. No endpoint anywhere in this area can submit live — see
+`services/order_execution.py`'s own module docstring and
+docs/ORDER_AUTHORITY_MODEL.md.
+
+### `GET /api/v1/order-approvals/{id}/refresh`
+
+ORDER FLOW steps 2-4 — a read-only preview. Returns `quote_price`,
+`quote_observed_at`, `buying_power`, `open_position_quantity`,
+`open_order_count`, `is_trading_day`, `market_closed_reason`,
+`upcoming_earnings_report_date`, `requires_reapproval`, `reason`. Never
+mutates anything — a client calls this to render the confirm screen
+before `/submit`.
+
+### `POST /api/v1/order-approvals/{id}/submit`
+
+**Request body**: `{"requested_mode", "confirmation"?, "lane"?, "source_recommendation_version_id"?, "emulation_acknowledged"?}`.
+Bracket prices are never in this request body — they were already
+bound into `ApprovalBoundFields.attached_legs` at approval time
+(`{"take_profit_price", "stop_loss_price"}`).
+
+Runs `services/bracket_execution.py::submit_bracket_order()`: refreshes
+and re-checks the price-move tolerance (invalidating the approval and
+returning `invalidated=true` if it fails), re-runs `assert_order_authorized()`,
+then submits through the paper broker — natively in one call if
+`BrokerCapabilities.supports_native_brackets`, otherwise as
+independent legs behind a mandatory `emulation_acknowledged=true` (a
+`409` with the disclosure text if omitted for a bracket request).
+Idempotent: a duplicate call for an already-`SUCCEEDED` approval
+returns the same `attempt`/`order_id`, never a second broker call.
+
+**Response `200`**: `{"attempt": {...}, "order_id", "order_status", "invalidated", "invalidation_reason", "used_native_bracket", "disclosure", "stop_loss_order_id", "take_profit_order_id"}`.
+**Response `403`** — `OrderAuthorityDenied` (not `APPROVED`, expired,
+not paper, or the confirmation/auto-policy grant is missing/stale).
+**Response `409`** — bracket emulation not acknowledged.
+
+### `POST /api/v1/orders/cancel-open`
+
+**Request body**: `{"account_id"? , "triggered_by", "reason"?}` — omit
+`account_id` to cancel across every `PAPER_ALPACA` account. Cancels
+every `SUBMITTED`/`PARTIALLY_FILLED` order with a `broker_order_id`
+through `services/order_execution.py::cancel_order_at_broker()` (the
+same single-entry-point broker boundary the submit path uses) and
+writes one `CancelOpenOrdersEvent` audit row.
+
+**Response `200`**: `{"orders_canceled_count", "canceled_order_ids": [...]}`.
+
+### `GET /api/v1/settings/operating-mode` — **extended**
+
+`mode`/`can_submit_orders` now reflect the **effective** mode
+(`compute_effective_mode()`) — forced to `RESEARCH_ONLY` whenever the
+kill switch is active, regardless of the configured value.
+
+### `POST /api/v1/settings/kill-switch/activate` / `POST /api/v1/settings/kill-switch/deactivate`
+
+**Request body** (activate only): `{"activated_by", "reason"?}`.
+Activating invalidates every still-`PENDING` `OrderApproval` in the
+same call (OA-9). **Response `200`**: the same shape as
+`GET /api/v1/settings/kill-switch-status`.
+
+### `GET /api/v1/paper-auto-policy` / `POST /api/v1/paper-auto-policy` / `POST /api/v1/paper-auto-policy/disable`
+
+CRUD over `PaperAutoPolicyVersion` (append-only, versioned — a write
+always creates the next version, never edits one in place). `POST`
+**request body**: `{"enabled"?, "eligible_strategy_families"?, "min_score"?, "max_orders_per_day"?, "max_daily_notional", "max_per_order_risk_pct", "allowed_time_windows"?, "allowed_order_types"?, "kill_switch_behavior"?, "created_by"}`
+— `enabled` defaults `false` ("disabled by default"). `GET` **response
+`404`** if never configured.

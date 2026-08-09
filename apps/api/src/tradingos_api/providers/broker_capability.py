@@ -28,6 +28,13 @@ class BrokerCapabilities(ProviderCapabilities):
     supported_order_types: tuple[str, ...]
     supports_extended_hours: bool
     supports_fractional_shares: bool
+    # Revision Prompt 10 — "prefer broker-native bracket/OCO when
+    # supported." `services/bracket_execution.py` reads this to decide
+    # whether a stop+target request can go through in one native broker
+    # call or must fall back to independently-tracked emulated legs
+    # (`OrderLeg.bracket_group_id`, Phase 8) with a disclosed reliability
+    # limitation.
+    supports_native_brackets: bool = False
 
 
 class BrokerCapabilityProvider(Protocol):

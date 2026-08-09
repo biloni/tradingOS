@@ -9,10 +9,14 @@ from pydantic import BaseModel
 
 from tradingos_api.models.enums import (
     ApprovalInvalidationReason,
+    BrokerSubmissionOutcome,
+    EnvironmentLabel,
+    LotLane,
     OrderApprovalStatus,
     OrderAuthorityMode,
     OrderProposalStatus,
     OrderSide,
+    OrderStatus,
     OrderType,
     RecommendationMode,
     TimeInForce,
@@ -107,6 +111,7 @@ class ApprovalBoundFieldsResponse(BaseModel):
     attached_legs: dict[str, Any]
     max_notional: Decimal | None
     recommendation_version_id: uuid.UUID | None
+    quote_price_at_approval: Decimal | None = None
 
     model_config = {"from_attributes": True}
 
@@ -138,3 +143,75 @@ class OrderApprovalDecisionRequest(BaseModel):
 class OrderApprovalInvalidateRequest(BaseModel):
     reason: ApprovalInvalidationReason
     detail: str | None = None
+
+
+class PreSubmissionSnapshotResponse(BaseModel):
+    """ORDER FLOW steps 2-4 — "refresh... recalculate... display the
+    complete entry and protective exits," always fresh at read time,
+    never a cached value from proposal- or approval-creation time."""
+
+    quote_price: Decimal | None
+    quote_observed_at: datetime | None
+    buying_power: Decimal
+    open_position_quantity: Decimal
+    open_order_count: int
+    is_trading_day: bool
+    market_closed_reason: str | None
+    upcoming_earnings_report_date: str | None
+    requires_reapproval: bool
+    reason: str | None
+
+
+class OrderSubmitRequest(BaseModel):
+    """`POST /order-approvals/{id}/submit` — ORDER FLOW step 7. Bracket
+    prices are never taken from this request: they were already bound
+    into `ApprovalBoundFields.attached_legs` at approval time
+    (`{"take_profit_price": "...", "stop_loss_price": "..."}`), so a
+    submit call cannot silently change what was approved."""
+
+    requested_mode: OrderAuthorityMode
+    confirmation: OrderConfirmationInput | None = None
+    lane: LotLane = LotLane.UNCLASSIFIED
+    source_recommendation_version_id: uuid.UUID | None = None
+    emulation_acknowledged: bool = False
+
+
+class BrokerSubmissionAttemptResponse(BaseModel):
+    id: uuid.UUID
+    order_approval_id: uuid.UUID
+    attempted_at: datetime
+    environment_label: EnvironmentLabel
+    outcome: BrokerSubmissionOutcome
+    idempotency_key: str | None
+    detail: str | None
+    resulting_order_id: uuid.UUID | None
+
+    model_config = {"from_attributes": True}
+
+
+class OrderSubmitResponse(BaseModel):
+    attempt: BrokerSubmissionAttemptResponse
+    order_id: uuid.UUID | None
+    order_status: OrderStatus | None
+    invalidated: bool
+    invalidation_reason: str | None
+    used_native_bracket: bool
+    disclosure: str | None
+    stop_loss_order_id: uuid.UUID | None
+    take_profit_order_id: uuid.UUID | None
+
+
+class KillSwitchActivateRequest(BaseModel):
+    activated_by: str
+    reason: str | None = None
+
+
+class CancelOpenOrdersRequest(BaseModel):
+    account_id: uuid.UUID | None = None
+    triggered_by: str
+    reason: str | None = None
+
+
+class CancelOpenOrdersResponse(BaseModel):
+    orders_canceled_count: int
+    canceled_order_ids: list[uuid.UUID]

@@ -2428,3 +2428,73 @@ isolation, demonstrated here end-to-end against the real API.
 
 No new secrets this revision — `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 10 — paper broker execution, approval queue, and bracket lifecycle (2026-08-09)
+
+### A real bug found and fixed while writing this section, not staged
+
+While cross-checking `services/order_execution.py`'s request-building
+against `providers/alpaca_paper_broker.py` for the documentation pass,
+found that `AlpacaPaperBrokerProvider.submit_paper_order()` only ever
+branched on `order_type.lower() == "limit"`, with every other value —
+including `"stop"` and `"stop_limit"` — silently falling through to the
+`MarketOrderRequest` branch. `PaperOrderRequest` also had no
+`stop_price` field at all, so even a caller that wanted to send one had
+no way to. A real stop-loss leg submitted through the real Alpaca paper
+API (`services/bracket_execution.py`'s emulated-bracket path) would
+have gone in as a plain market order, filling immediately instead of
+resting at the stop trigger. No test caught this originally because
+every existing test only exercised `market`/`limit`, and the
+deterministic `SyntheticPaperBrokerProvider` (what `tests/test_order_execution.py`
+and `demo_prompt10.py` both actually exercise) never distinguishes
+order types beyond market-fills-immediately, so the gap was invisible
+to the very suite meant to cover this revision's order types. Fixed:
+`PaperOrderRequest.stop_price` added; `services/order_execution.py`'s
+two request-building call sites populate it from
+`ApprovalBoundFields.stop_price` (the primary order) or the leg's own
+`price` when `order_type` is `STOP` (the emulated protective leg);
+`AlpacaPaperBrokerProvider` now builds a real `StopOrderRequest`/
+`StopLimitOrderRequest`. Two new regression tests added directly
+against the real (mocked) Alpaca client —
+`tests/test_alpaca_paper_broker.py::test_stop_order_sends_a_native_stop_order_request`
+asserts the exact request object type and `stop_price` value reaching
+`submit_order()`, closing the coverage gap the synthetic broker
+couldn't.
+
+### Live-verified once against the real Alpaca paper sandbox
+
+Before finalizing `demo_prompt10.py` on the deterministic synthetic
+broker (for reproducibility without network access), the full
+propose → policy-evaluate → approve → refresh → approve → submit →
+duplicate-submit flow was run once through `TestClient(app)` against
+this dev environment's real, already-configured Alpaca paper
+credentials (`GET /api/v1/settings/providers` confirms `BROKER`
+credentials present). The market order filled for real in the Alpaca
+paper sandbox (`AMZN`, quantity 5, filled at the actual quoted price
+from `AlpacaStockDataProvider`), the `refresh` endpoint correctly
+reported `is_trading_day=false` / a weekend `market_closed_reason`
+(the live run happened on a Sunday), and the duplicate-submit call
+returned the identical `attempt`/`order_id` — the real broker's own
+`client_order_id` de-duplication and this application's idempotent
+short-circuit both held. This is the one point in the whole session
+where a real (non-synthetic, non-mocked) broker call was made; it was
+against the paper endpoint only, using this session's existing
+`PAPER_ALPACA` demo account, with no manual cleanup required (the fill
+is a legitimate paper-account position, not test pollution).
+
+### Full suite
+
+375 passed (373 pre-existing/extended + the 2 new
+`test_alpaca_paper_broker.py` stop-order regression tests), 0 failed.
+`mypy src/` clean across 154 source files.
+
+### Secrets check before commit
+
+No new secrets this revision — `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging. The Alpaca paper credentials
+used for the one live-verification run were already present in this
+dev environment's `.env` from an earlier phase; nothing new was added
+or logged (the `_redact_broker_payload()` redaction list on
+`BrokerSubmissionAttempt.request_snapshot`/`response_snapshot` is what
+keeps a future real submission from ever writing a credential into the
+audit trail, even by accident).

@@ -934,3 +934,79 @@ separately" requirement hold across every very differently-shaped card
 (a held-position Act Now card vs. an upcoming-earnings card vs. a
 stale-data Data Problems card) without five separate columns that would
 be mostly `NULL` for any given section.
+
+## 20. Revision Prompt 10 — paper broker execution, approval queue, and bracket lifecycle
+
+Additive columns on 3 existing tables (§13), plus two new tables. No
+table was renamed or restructured; `order_legs.bracket_group_id`
+(Phase 8, unchanged) is the existing mechanism a native or emulated
+bracket both reuse to group a primary entry with its protective legs.
+
+```mermaid
+erDiagram
+    order_approvals }o--o| paper_auto_policy_versions : "auto_policy_version_id (nullable)"
+    broker_submission_attempts }o--o| orders : "resulting_order_id (nullable)"
+    paper_auto_policy_versions }o--|| user_profile : owner_user_id
+    cancel_open_orders_events }o--o| accounts : "account_id (nullable = all accounts)"
+
+    approval_bound_fields {
+        uuid id PK
+        uuid order_approval_id FK
+        uuid account_id FK
+        uuid instrument_id FK
+        numeric quote_price_at_approval "nullable, new"
+    }
+    broker_submission_attempts {
+        uuid id PK
+        uuid order_approval_id FK
+        enum outcome "+TIMEOUT_UNKNOWN"
+        string idempotency_key "per-attempt, unique"
+        uuid resulting_order_id FK "nullable, new"
+        json request_snapshot "new, redacted"
+        json response_snapshot "new, redacted"
+    }
+    order_approvals {
+        uuid id PK
+        uuid order_proposal_version_id FK
+        enum status
+        uuid auto_policy_version_id FK "nullable, new"
+    }
+    paper_auto_policy_versions {
+        uuid id PK
+        uuid owner_user_id FK
+        int version_number
+        bool enabled "default false"
+        json eligible_strategy_families
+        numeric min_score
+        int max_orders_per_day
+        numeric max_daily_notional
+        numeric max_per_order_risk_pct
+        json allowed_time_windows
+        json allowed_order_types
+        enum kill_switch_behavior
+        string created_by
+    }
+    cancel_open_orders_events {
+        uuid id PK
+        uuid account_id FK "nullable"
+        string triggered_by
+        datetime triggered_at
+        text reason "nullable"
+        int orders_canceled_count
+    }
+```
+
+**Two idempotency keys, deliberately distinct** (docs/DECISIONS.md
+ADR-056): `broker_submission_attempts.idempotency_key` is per-attempt
+(`"order-approval:{id}:attempt{n}"`, unique per row); the broker-facing
+`client_order_id` (`"tos-{order_approval_id}"`) is computed on demand
+by `services/order_execution.py`, never stored as its own column, and
+stays stable across every attempt for the same approval — what lets a
+real broker de-duplicate a resubmit after an ambiguous timeout.
+
+**Bracket legs reuse Phase 8's `order_legs` table unchanged** — a
+native bracket produces one `Order` with one `PRIMARY` `OrderLeg`; an
+emulated bracket produces up to three independent `Order` rows (one per
+leg), each with its own `OrderLeg` row, all sharing one
+`bracket_group_id` so this application's own bookkeeping treats them as
+one unit even though the broker does not.

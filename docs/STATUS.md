@@ -39,7 +39,7 @@ lane-scoped `Trade` round-trip, corporate action application, corrections
 through reversal, idempotent CSV import, broker-aggregate reconciliation,
 per-lot Investment/Tactical holding guidance, and the composed trade
 journal view; demonstrated with a symbol held simultaneously as an
-Investment thesis and a Tactical earnings trade), and Revision Prompt 9
+Investment thesis and a Tactical earnings trade), Revision Prompt 9
 (Morning Decision Dashboard and market-calendar scheduler, shipped — a
 hardcoded documented 2026 NYSE/Nasdaq calendar with DST-safe
 America/Los_Angeles display, an idempotent/retryable/resumable/versioned
@@ -48,8 +48,101 @@ that curates already-computed recommendations rather than running
 committees live (ADR-055), the dashboard read API with a richer
 computed `plan_status` than the stored completeness label, and
 Markdown export/in-app notification/read-only Cowork delivery; no
-broker calls, no order submission from the read-only delivery path).
-**Last updated:** 2026-08-08
+broker calls, no order submission from the read-only delivery path),
+and Revision Prompt 10 (paper broker execution, approval queue, and
+bracket lifecycle, shipped — the single broker-boundary entry point
+(`services/order_execution.py`), idempotent/ambiguous-timeout-safe
+paper submission, native-vs-emulated bracket orders with a mandatory
+reliability disclosure, a disabled-by-default versioned paper
+auto-policy that can never override a hard veto (ADR-058), the OA-9
+kill switch and cancel-open-orders controls, and OA-6 fail-closed
+paper-only enforcement; demonstrated end-to-end via both the real
+Alpaca paper sandbox and a deterministic synthetic broker, no live
+order submission anywhere in the codebase).
+**Last updated:** 2026-08-09
+
+## Revision Prompt 10 (2026-08-09) — paper broker execution, approval queue, and bracket lifecycle
+
+**Promoted docs/ORDER_AUTHORITY_MODEL.md from architecture-only to
+mostly-implemented** (status note added at the top of that document).
+One deliberate deviation from its original text: a missing/stale quote
+at submission time now transitions the approval straight to
+`INVALIDATED` rather than leaving it `APPROVED` "waiting on a quote" —
+documented inline in that file, reasoning in docs/DECISIONS.md.
+
+**Schema**: `approval_bound_fields.quote_price_at_approval`,
+`broker_submission_attempts.resulting_order_id`/`request_snapshot`/
+`response_snapshot`, `order_approvals.auto_policy_version_id`,
+`BrokerSubmissionOutcome.TIMEOUT_UNKNOWN`, two new tables
+(`paper_auto_policy_versions`, `cancel_open_orders_events`), one new
+enum (`KillSwitchBehavior`) — see docs/DATA_DICTIONARY.md §16 /
+docs/ER_DIAGRAM.md §20.
+
+**Services**: `services/order_execution.py` (the sole broker-boundary
+caller — `submit_paper_order()`, `submit_protective_leg()`,
+`poll_and_reconcile_fills()`, `cancel_order_at_broker()`,
+`refresh_and_recalculate()`), `services/bracket_execution.py`
+(native-vs-emulated + `BRACKET_EMULATION_DISCLOSURE`),
+`services/paper_auto_policy.py` (`evaluate_auto_submission()` — see
+ADR-058), extensions to `services/order_authority.py`
+(`compute_effective_mode()`, `assert_broker_boundary_is_paper()`,
+kill-switch activate/deactivate, `price_move_requires_invalidation()`).
+
+**Providers**: `providers/synthetic_paper_broker.py`
+(`SyntheticPaperBrokerProvider`/`SyntheticBrokerCapabilityProvider` —
+deterministic, no Alpaca credentials required),
+`providers/synthetic_market_quote.py`; `core/dependencies.py`'s
+`get_broker_provider()`/`get_broker_capability_provider()`/
+`get_market_quote_provider()` fall back to these automatically when no
+Alpaca credentials are configured (principle 5), so
+`demo_prompt10.py`/`tests/test_order_execution.py` never need network
+access. `providers/broker.py` gains `client_order_id`/bracket-leg
+fields, `find_order_by_client_id()`, and `BrokerSubmissionAmbiguous`.
+
+**Routers**: `routers/order_authority.py` gains
+`GET /order-approvals/{id}/refresh` and
+`POST /order-approvals/{id}/submit` (the only two HTTP routes that
+reach a broker); `routers/orders.py` gains `POST /orders/cancel-open`;
+`routers/settings.py` gains kill-switch activate/deactivate and an
+effective-mode-aware `GET /operating-mode`; new
+`routers/paper_auto_policy.py` (CRUD). See docs/API_CONTRACTS.md §23.
+
+**Tests**: `tests/test_order_execution.py` (22 tests, the 11 required
+categories — bracket lifecycle, partial fill/partial exit, rejection,
+accepted-order timeout, duplicate click, approval expiration, quote
+changes outside tolerance, cancel/replace race, gap through stop,
+broker/local reconciliation mismatch, attempted live configuration
+fails closed — plus the broker-boundary single-entry-point structural
+test), plus 2 new `tests/test_alpaca_paper_broker.py` tests guarding
+the stop-order fix below. Full suite: 375 passed.
+
+**Demo**: `demo_prompt10.py` — manual-approval flow through a real
+fill and reconciliation, a duplicate-click no-op, an emulated bracket
+with both protective legs submitted post-fill, a kill switch
+invalidating a pending approval, and a paper auto-policy evaluation
+correctly blocked by an active hard veto despite otherwise qualifying.
+Also live-verified once against the real Alpaca paper sandbox (the dev
+environment's configured credentials) via a full HTTP round trip
+through `TestClient` — propose → policy-evaluate → approve → refresh →
+submit → duplicate-submit — before switching the demo script itself to
+the deterministic synthetic broker for reproducibility.
+
+**Bug found and fixed during this revision's own documentation pass**:
+`AlpacaPaperBrokerProvider.submit_paper_order()` originally only
+branched on `"limit"` vs. everything-else-is-market, so a `STOP` or
+`STOP_LIMIT` order (e.g. `services/bracket_execution.py`'s emulated
+stop-loss leg) would have silently reached the real Alpaca client as a
+plain market order, and `PaperOrderRequest` had no `stop_price` field
+at all for `services/order_execution.py` to populate in the first
+place. Fixed: `PaperOrderRequest.stop_price` added,
+`services/order_execution.py`'s two request-building sites populate it
+from `ApprovalBoundFields.stop_price`/the protective-leg price, and
+`AlpacaPaperBrokerProvider` now sends a native `StopOrderRequest`/
+`StopLimitOrderRequest` for those two order types
+(`tests/test_alpaca_paper_broker.py::test_stop_order_sends_a_native_stop_order_request`
+guards against the regression). The deterministic synthetic broker
+(used by all other tests and the demo) never had this gap, since it
+does not distinguish order types beyond market-fills-immediately.
 
 ## Revision Prompt 9 (2026-08-08) — Morning Decision Dashboard and market-calendar scheduler
 
