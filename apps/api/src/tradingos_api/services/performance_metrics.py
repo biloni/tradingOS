@@ -426,3 +426,54 @@ def concentration_hhi(position_weights_pct: list[Decimal]) -> Decimal:
     if not position_weights_pct:
         return Decimal(0)
     return sum(((w / Decimal(100)) ** 2 for w in position_weights_pct), Decimal(0))
+
+
+# ---------------------------------------------------------------------------
+# Calibration (Revision Prompt 14)
+# ---------------------------------------------------------------------------
+
+WILSON_Z_95 = Decimal("1.959964")
+"""The z-score for a 95% Wilson score interval — a fixed, versioned
+constant (principle 8), not a magic number buried in the formula below."""
+
+
+def brier_score(predicted_probabilities: list[Decimal], outcomes: list[bool]) -> Decimal | None:
+    """`mean((p_i - o_i)^2)` over paired predicted probabilities (each in
+    `[0, 1]`) and boolean outcomes — lower is better calibrated, `0` is
+    perfect. `None` for an empty sample (never a fabricated `0`, which
+    would misread as "perfectly calibrated" rather than "no data").
+    `predicted_probabilities` must never originate from an LLM's own
+    self-reported confidence (docs/MODEL_GOVERNANCE.md's "confidence is
+    not a probability until it's calibrated") — callers pass a
+    deterministic, versioned proxy instead (e.g.
+    `services/calibration.py::score_to_predicted_probability()`)."""
+    if not predicted_probabilities or len(predicted_probabilities) != len(outcomes):
+        return None
+    squared_errors = [
+        (p - (Decimal(1) if o else Decimal(0))) ** 2
+        for p, o in zip(predicted_probabilities, outcomes, strict=True)
+    ]
+    return sum(squared_errors, Decimal(0)) / Decimal(len(squared_errors))
+
+
+def wilson_confidence_interval(
+    successes: int, n: int, *, z: Decimal = WILSON_Z_95
+) -> tuple[Decimal, Decimal] | None:
+    """The Wilson score interval for a binomial proportion — well-behaved
+    at small `n` and at `p` near 0 or 1 (unlike the naive normal-
+    approximation interval, which can produce a bound outside `[0, 1]`
+    exactly in the small-sample/extreme-rate cases a sparse calibration
+    bin is most likely to hit). Returns `None` for `n == 0` rather than
+    dividing by zero."""
+    if n == 0:
+        return None
+    p_hat = Decimal(successes) / Decimal(n)
+    z_sq = z**2
+    denominator = Decimal(1) + z_sq / Decimal(n)
+    center = (p_hat + z_sq / (Decimal(2) * n)) / denominator
+    margin = (
+        z * (p_hat * (Decimal(1) - p_hat) / Decimal(n) + z_sq / (Decimal(4) * n * n)).sqrt()
+    ) / denominator
+    low = max(center - margin, Decimal(0))
+    high = min(center + margin, Decimal(1))
+    return low, high

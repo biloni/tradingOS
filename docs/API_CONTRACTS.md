@@ -1171,3 +1171,121 @@ run is persisted (call `POST /run` explicitly to keep a specific result
 for drill-down). This is a heavier endpoint (many backtest runs per
 call) — acceptable for this exercise's read-only reporting screen, not
 intended for high-frequency polling.
+
+## 27. Controlled learning, calibration, and strategy governance (Revision Prompt 14)
+
+New `routers/governance.py`, prefix `/api/v1/governance`. Six screens —
+calibration, agent evaluation, change review, approval, activation, and
+rollback — over the pre-existing `ModelChangeProposal`/`ModelChangeApproval`
+schema fixtures (unpopulated by any live service since Revision Prompt
+R3; see docs/DECISIONS.md ADR-064). **No endpoint here can activate a
+proposal as a side effect of any other action** — `/activate` is its own
+endpoint, gated by `APPROVED` as a precondition
+(`services/change_governance.py`'s own structural guarantee: the
+`ModelChangeProposalStatus` transition map has no `PROPOSED -> ACTIVATED`
+edge, so self-activation is unrepresentable, not just discouraged).
+
+### `GET /api/v1/governance/calibration?axis=&since=`
+
+The calibration screen. `axis` selects one of Prompt 14's seven required
+segmentation dimensions: `confidence`, `score`, `strategy`, `sector`,
+`regime`, `event_timing`, `holding_period`. **`422`** for an unknown
+axis. Every returned bin carries `sample_size` and `is_adequate` honestly
+— below `services/calibration.py::MIN_SAMPLE_SIZE_FOR_CALIBRATION` (20),
+`observed_hit_rate_pct`/`ci_low_pct`/`ci_high_pct`/`brier_score` are all
+`null` rather than a rate computed from a handful of outcomes. `since`
+optionally restricts to recommendations generated on or after that date.
+
+### `GET /api/v1/governance/agent-evaluation`
+
+The agent evaluation screen for every committee role at once — all 25
+`AgentRole` values, each with the six required dimensions (factual
+accuracy, evidence coverage, contradiction detection, directional
+usefulness, contribution after deterministic features, minority-opinion
+usefulness), every metric sample-size gated
+(`services/agent_evaluation.py::MIN_SAMPLE_SIZE_FOR_AGENT_EVAL`, 10)
+independently of the others.
+
+### `GET /api/v1/governance/agent-evaluation/{role}`
+
+The same six metrics for one role.
+
+### `POST /api/v1/governance/proposals`
+
+The generic change-review intake — for a feature, threshold, prompt,
+provider, risk, or execution-policy change with no dedicated
+deep-integration helper. `evidence_package` is validated against Prompt
+14's own "every proposal must contain" list
+(`schemas/governance.py::EvidencePackage` — evidence, sample size,
+current/proposed version, economic rationale, train/validation/
+out-of-sample/walk-forward results, sensitivity, costs, operational
+risks, rollback plan) before it reaches the service layer. **`422`** if
+any required section is missing. Returns `201` with status `PROPOSED`.
+
+### `POST /api/v1/governance/proposals/strategy-parameter`
+
+The deep-integration path — a change to the backtest engine's own
+`BacktestRunConfig` parameters (score threshold, expected-move threshold,
+normal risk %) for an earnings-strategy `StrategyDefinition`. Runs
+`services/change_governance.py::run_backtest_splits()`
+(train/validation/out-of-sample/walk-forward, reusing Revision Prompt
+13's engine verbatim) for both the current and proposed configuration
+and assembles the full evidence package automatically, plus creates the
+real candidate `StrategyVersion` row (status `PROPOSED`) that
+`/activate` later flips to `ACTIVE` — "current and proposed version" is
+therefore a real schema row, not only JSON. **`404`** if
+`strategy_definition_id` doesn't exist. Returns `201`.
+
+### `GET /api/v1/governance/proposals?limit=&offset=`
+
+Paginated list of every proposal (`schemas/common.py::Page`), newest
+first.
+
+### `GET /api/v1/governance/proposals/{proposal_id}`
+
+The change review screen — full `evidence_package` plus every
+`ModelChangeApproval` decision recorded against this proposal, in order.
+**`404`** if the proposal doesn't exist.
+
+### `POST /api/v1/governance/proposals/{proposal_id}/approve`
+
+The approval screen. Writes an `APPROVED` status plus an audit
+`ModelChangeApproval` row. **Never activates** — approving only ever
+changes `ModelChangeProposal.status`, it never touches the subject's
+live configuration. **`404`** unknown proposal, **`409`** illegal
+transition (e.g. approving an already-`REJECTED` proposal).
+
+### `POST /api/v1/governance/proposals/{proposal_id}/reject`
+
+Same shape as `/approve`; `REJECTED` is terminal (no further transitions
+are legal from it).
+
+### `POST /api/v1/governance/proposals/{proposal_id}/withdraw`
+
+Withdraws a still-`PROPOSED` proposal; `WITHDRAWN` is terminal.
+
+### `POST /api/v1/governance/proposals/{proposal_id}/activate`
+
+**The only endpoint in this codebase that makes a proposal's change
+take effect.** Requires `APPROVED` (**`409`** otherwise — proven live in
+`tests/test_change_governance.py::TestNoSelfActivation` and in
+`scripts/demo_prompt14.py`, which deliberately attempts activation
+straight from `PROPOSED` and shows the rejection). For a
+`STRATEGY_PARAMETER` proposal, flips the candidate `StrategyVersion` to
+`ACTIVE` and supersedes whatever `StrategyVersion` was previously active
+for that `StrategyDefinition`. Requires a distinct `activated_by` actor
+— never implicitly the same person who approved it. **`404`** unknown
+proposal.
+
+### `POST /api/v1/governance/proposals/{proposal_id}/rollback`
+
+Only legal from `ACTIVATED` (**`409`** otherwise). For a
+`STRATEGY_PARAMETER` subject, supersedes the activated `StrategyVersion`
+and clones the proposal's own `evidence_package["current_version_snapshot"]`
+into a **brand-new** `StrategyVersion` row, activated immediately —
+rollback redeploys the last known-good config as a new version rather
+than resurrecting the superseded row (`StrategyVersionStatus` has no
+edge back out of `SUPERSEDED`, by design). Neither `/activate` nor
+`/rollback` ever writes to `RecommendationVersion` — proven byte-for-byte
+in `tests/test_change_governance.py::TestNeverRewritesHistoricalRecommendations`
+and demonstrated live in `scripts/demo_prompt14.py`.

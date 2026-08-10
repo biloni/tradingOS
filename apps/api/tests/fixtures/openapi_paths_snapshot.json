@@ -126,6 +126,73 @@
     ]
   ],
   [
+    "/api/v1/governance/agent-evaluation",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/governance/agent-evaluation/{role}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/governance/calibration",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals",
+    [
+      "get",
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals/strategy-parameter",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals/{proposal_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals/{proposal_id}/activate",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals/{proposal_id}/approve",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals/{proposal_id}/reject",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals/{proposal_id}/rollback",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/governance/proposals/{proposal_id}/withdraw",
+    [
+      "post"
+    ]
+  ],
+  [
     "/api/v1/instruments",
     [
       "get"

@@ -394,10 +394,18 @@ class BacktestTradeExitReason(StrEnum):
 
 MODEL_CHANGE_PROPOSAL_TRANSITIONS: dict[str, set[str]] = {
     "PROPOSED": {"APPROVED", "REJECTED", "WITHDRAWN"},
-    "APPROVED": set(),
+    "APPROVED": {"ACTIVATED"},
+    "ACTIVATED": {"ROLLED_BACK"},
     "REJECTED": set(),
     "WITHDRAWN": set(),
+    "ROLLED_BACK": set(),
 }
+"""Revision Prompt 14 extends this transition map with `ACTIVATED`/
+`ROLLED_BACK` — `APPROVED -> ACTIVATED` is deliberately its own edge,
+never collapsed into the approval transition itself, so "no proposal may
+activate itself" is enforced by requiring a second, distinct state
+transition (and therefore a second, distinct human action) rather than
+by convention alone. See `services/change_governance.py`."""
 
 
 class ModelChangeProposalStatus(StrEnum):
@@ -405,12 +413,21 @@ class ModelChangeProposalStatus(StrEnum):
     change is a strategy change like any other) — `strategy_versions`
     covers numeric-threshold changes; this covers everything else a future
     governance UI might route through the same review discipline (e.g. an
-    agent prompt version bump, a committee pre-filter bar change)."""
+    agent prompt version bump, a committee pre-filter bar change).
+
+    `ACTIVATED`/`ROLLED_BACK` (Revision Prompt 14): a proposal reaching
+    `APPROVED` has not yet taken effect — `services/change_governance.py::activate_change()`
+    is the one and only code path that flips a subject's live
+    configuration, and it requires `APPROVED` as a precondition plus its
+    own explicit actor/timestamp, never triggered as a side effect of
+    approval."""
 
     PROPOSED = "PROPOSED"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     WITHDRAWN = "WITHDRAWN"
+    ACTIVATED = "ACTIVATED"
+    ROLLED_BACK = "ROLLED_BACK"
 
 
 # ---------------------------------------------------------------------------

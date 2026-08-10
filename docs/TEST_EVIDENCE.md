@@ -2844,3 +2844,158 @@ verified clean for `5078feb6e647_prompt13_event_backtest_engine`.
 
 No new secrets this revision. `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 14 — controlled learning, calibration, and strategy governance (2026-08-10)
+
+### Sparse-sample suppression is structural, verified for both new services independently
+
+`tests/test_calibration.py::TestSparseBinSuppression` proves `_bin_from_outcomes()`
+reports `sample_size` truthfully at `n-1`, `n`, and `0` relative to
+`MIN_SAMPLE_SIZE_FOR_CALIBRATION=20`, with every derived statistic
+(`observed_hit_rate_pct`, `ci_low_pct`/`ci_high_pct`, `brier_score`)
+`None` below threshold and populated at/above it — including the `n=0`
+case reporting zero rather than crashing. `tests/test_agent_evaluation.py::TestSparseSample`
+proves the same property for `evaluate_agent_role()` against
+`MIN_SAMPLE_SIZE_FOR_AGENT_EVAL=10`, live against this dev environment's
+own pre-existing seeded `AgentRun` rows for `LONG_TERM_BULL_ANALYST`
+rather than an artificially empty fixture.
+
+### Regime segmentation never blends distinct regimes
+
+`tests/test_calibration.py::TestRegimeSegmentationNeverBlends` builds 25
+CALM outcomes (all wins) and 25 STRESSED outcomes (all losses) in one
+call to `calibration_by_regime()` and asserts two separate bins come
+back — `CALM` at 100% hit rate, `STRESSED` at 0% — proving the grouping
+function never averages across regimes into one misleading figure. A
+second test proves an outcome with `regime=None` is excluded from every
+bin rather than guessed into one.
+
+### The required "data revisions" category, proven against a real correction row
+
+`tests/test_agent_evaluation.py::TestDataRevisions` is the concrete test
+for Prompt 14's "test... data revisions" requirement. Two tests:
+(1) `MIN_SAMPLE_SIZE_FOR_AGENT_EVAL` runs citing a *clean* `EarningsEvent`
+(no correction ever recorded against it) yield `factual_accuracy_pct ==
+100`; (2) the same number of runs citing an event with a real
+`EarningsEventCorrection` row (`corrected_field="report_date"`, recorded
+*after* the event exists — the actual temporal order a data revision
+happens in) yield a `factual_accuracy_pct` strictly below the same
+role's baseline. Both tests run against `NEWS_CATALYST_ANALYST`, deliberately
+chosen because no other test file in this suite exercises that role,
+avoiding cross-test sample contamination within the shared `db_session`
+transaction.
+
+### Version comparison — current vs. proposed captured exactly
+
+`tests/test_change_governance.py::TestVersionComparison` asserts
+`proposal.evidence_package["current_version_snapshot"]["score_threshold"]
+== 5` and `["proposed_version_snapshot"]["score_threshold"] == 6` after
+calling `propose_strategy_parameter_change()` with those two configs —
+proving the "current and proposed version" evidence-package requirement
+holds the actual input configs, not a re-derived or approximate summary.
+A second test asserts all 13 of Prompt 14's required evidence-package
+keys are present (`sample_size`, `evidence`, `current_version_snapshot`,
+`proposed_version_snapshot`, `economic_rationale`, `train_results`,
+`validation_results`, `out_of_sample_results`, `walk_forward_results`,
+`sensitivity`, `costs`, `operational_risks`, `rollback_plan`).
+
+### No-self-activation, proven as a caught exception, not just documented
+
+`tests/test_change_governance.py::TestNoSelfActivation` calls
+`activate_change()` directly against a proposal still in `PROPOSED`
+status and asserts it raises `InvalidTransitionError` (not returns an
+error object, not silently no-ops) — then re-reads the proposal from the
+database and confirms its status is still `PROPOSED`, ruling out a
+partial-write bug where the exception fires after a mutation already
+landed. A second test proves rollback before activation is equally
+illegal (`APPROVED -> ROLLED_BACK` has no edge either).
+
+### Never rewrites historical recommendations — proven byte-for-byte
+
+`tests/test_change_governance.py::TestNeverRewritesHistoricalRecommendations`
+snapshots every field of a real `RecommendationVersion` row
+(`action`, `confidence`, `score`, `rationale`, `generated_at`) before
+running a complete propose -> approve -> activate -> rollback lifecycle,
+re-reads the row via `db_session.refresh()`, and asserts the two
+snapshots are equal — not "no obvious rewrite," a literal dict equality
+check across the full lifecycle including activation (which does mutate
+`StrategyVersion` rows) and rollback (which creates a new one).
+
+### Full lifecycle exercised through the real HTTP layer, not just the service
+
+`tests/test_governance_endpoints.py::TestProposalLifecycle::test_full_lifecycle_via_api`
+drives the entire propose -> premature-activate (`409`) -> approve ->
+activate -> rollback sequence through `TestClient` HTTP calls against
+`/api/v1/governance/proposals/*`, then confirms the detail endpoint shows
+exactly one recorded `ModelChangeApproval`. A second test confirms
+`POST /proposals/strategy-parameter` 404s cleanly for an unknown
+`strategy_definition_id` rather than surfacing a raw `IntegrityError` —
+a real bug caught and fixed during this revision (see below). A third
+confirms the generic `/proposals` endpoint 422s when `evidence_package`
+is missing required Prompt-14 fields, proving the pydantic-level
+validation actually runs before the service layer.
+
+### Two real bugs found and fixed live
+
+**Raw 500 on a bad strategy-definition FK.** `POST
+/api/v1/governance/proposals/strategy-parameter` with a nonexistent
+`strategy_definition_id` originally surfaced an uncaught `IntegrityError`
+as a raw 500 — the FK violation happened deep inside
+`propose_strategy_parameter_change()`, after `run_backtest_splits()` had
+already run twice. Fixed by adding an explicit `db.get(StrategyDefinition,
+...)` existence check and a `404` before calling the service at all,
+avoiding the wasted backtest work as a side benefit.
+
+**Mid-function inline imports in the router.** An earlier draft of
+`routers/governance.py` imported `get_current_user_id` inside two
+endpoint function bodies (rather than as a top-level `Depends(...)`
+default) and placed a schema import after function definitions in the
+same file. Neither is a correctness bug, but both diverge from every
+other router in this codebase (confirmed by grep against
+`routers/alerts.py`). Fixed by moving both imports to the top of the
+file and using `Depends(get_current_user_id)` as the parameter default,
+matching the established pattern.
+
+**A third bug, found running the demo, not the test suite.** Every
+`demo_promptN.py` script deliberately commits real rows to the shared
+dev database (the same convention as `demo_prompt12.py`/`demo_prompt13.py`
+— "All Prompt N demo state persisted"). `demo_prompt14.py`'s agent-
+evaluation section originally used `AgentRole.NEWS_CATALYST_ANALYST` —
+the exact role `test_agent_evaluation.py` picks specifically because no
+other test file touches it — to seed 10 corrected-event-citing
+`AgentRun` rows. Running the demo once permanently broke that
+assumption: `test_citing_a_later_corrected_event_lowers_factual_accuracy`'s
+`== Decimal(100)` and `test_always_wrong_direction_scores_0`'s `==
+Decimal(0)` assertions both failed on the very next full-suite run,
+because the demo's committed rows were now part of the role's
+permanent baseline. Fixed two ways: (1) a one-off cleanup deleted
+exactly the rows traceable to that demo run (`AgentVersion.version_label
+LIKE 'demo-prompt14-%'` and its dependent `AgentRun`/`AgentOpinion`/
+`AgentEvidenceLink`/`CommitteeSession`/`RecommendationVersion`/
+`RecommendationOutcome`/`Recommendation` rows, deleted in explicit
+child-before-parent order — the ORM's automatic dependency sort does
+not span these particular tables since no `relationship()` links them),
+restoring the pre-demo baseline; (2) the demo script itself now uses
+`AgentRole.EARNINGS_GUIDANCE_ANALYST` instead, with a comment explaining
+why, so a future re-run can't repeat the collision. Re-verified: full
+suite passes at 595 both immediately after the demo re-run and
+independently of run order.
+
+### Full suite
+
+595 passed, 0 failed (549 before this revision + 46 new/extended:
+`test_calibration.py` 11, `test_performance_metrics.py` +9,
+`test_agent_evaluation.py` 6, `test_change_governance.py` 9,
+`test_governance_endpoints.py` 11). `mypy src/` clean across 182 source
+files; `ruff check` clean across `src/` and `tests/`.
+`tests/fixtures/openapi_paths_snapshot.json` already reflects the 9 new
+`/api/v1/governance/*` endpoints (127 paths total) from the router-wiring
+step earlier in this revision — `test_openapi_snapshot.py` passing as
+part of the full suite confirms no drift. Migration round-trip (`upgrade
+head` → `downgrade -1` → `upgrade head`) verified clean for
+`488f095f1425_prompt14_change_governance_activation`.
+
+### Secrets check before commit
+
+No new secrets this revision. `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

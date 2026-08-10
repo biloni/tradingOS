@@ -91,8 +91,96 @@ concentration subset, 3-window walk-forward), a go/no-go report, golden/
 regression tests, and 7 new API endpoints; this dev environment's real
 market/earnings history — ~3 months across 6 instruments, 3 total
 events — was nowhere near sufficient for the prompt's 2-year/~25-trade
-requirements, honestly disclosed rather than glossed over).
-**Last updated:** 2026-08-09
+requirements, honestly disclosed rather than glossed over), and Revision
+Prompt 14 (controlled learning, calibration, and strategy governance,
+shipped — calibration across all 7 required segmentation axes with
+structural sparse-bin suppression, agent evaluation's 6 required
+dimensions including the "data revisions" category proven against a
+real `EarningsEventCorrection` row, and a propose -> approve -> activate
+-> rollback change-governance engine where self-activation is
+structurally unrepresentable in the state machine (never just a
+convention) and neither activation nor rollback ever touches
+`RecommendationVersion` history, proven byte-for-byte, ADR-064; no new
+tables — calibration and agent evaluation compute on demand from
+existing rows, and the pre-existing `ModelChangeProposal`/
+`ModelChangeApproval` schema fixtures get their first live service).
+**Last updated:** 2026-08-10
+
+## Revision Prompt 14 (2026-08-10) — controlled learning, calibration, and strategy governance
+
+**Schema**: additive columns only, no new tables — extends the
+pre-existing `model_change_proposals` fixture (unpopulated by any live
+service since Revision Prompt R3) with `evidence_package` (JSON),
+`activated_at`/`activated_by`, `rolled_back_at`/`rolled_back_by`/
+`rollback_reason`, and two new `ModelChangeProposalStatus` values
+(`ACTIVATED`, `ROLLED_BACK`). See docs/DATA_DICTIONARY.md §20 /
+docs/ER_DIAGRAM.md §24.
+
+**Calibration** (`services/calibration.py`): distinguishes ranking score,
+direction confidence, and expected-move magnitude as three genuinely
+separate axes, never blended (extends DQ-4's existing "confidence and
+magnitude are different numbers" rule). `get_closed_outcomes()` pulls
+every recommendation with a *determined* real or hypothetical outcome;
+seven segmentation functions (confidence, score, strategy, sector,
+regime, event timing, holding period) each report `sample_size`/
+`is_adequate` honestly and suppress hit rate/confidence interval/Brier
+score below `MIN_SAMPLE_SIZE_FOR_CALIBRATION=20`. The Wilson score
+interval (`services/performance_metrics.py::wilson_confidence_interval()`,
+new) was chosen over the naive normal approximation for its better
+behavior at small `n` and extreme rates.
+
+**Agent evaluation** (`services/agent_evaluation.py`): all 6 required
+dimensions — factual accuracy, evidence coverage, contradiction
+detection, directional usefulness, contribution after deterministic
+features, minority-opinion usefulness — computed from real `AgentRun`/
+`AgentOpinion`/`AgentEvidenceLink`/`CommitteeSession` data joined to real
+outcomes, never a second LLM grading the first one's prose
+(docs/MODEL_GOVERNANCE.md already scoped that out). Factual accuracy
+uses `EarningsEventCorrection` as the checkable "data revisions" signal:
+a citation of evidence tied to a later-corrected earnings event is
+treated as tainted. Every metric gated at
+`MIN_SAMPLE_SIZE_FOR_AGENT_EVAL=10`, independently per role.
+
+**Change governance** (`services/change_governance.py`): `propose_change()`
+(generic path, caller-supplied evidence package validated against
+Prompt 14's own required-fields list) and
+`propose_strategy_parameter_change()` (deep-integration path — runs
+`run_backtest_splits()` against Revision Prompt 13's real engine for
+train/validation/out-of-sample/walk-forward, and creates the actual
+candidate `StrategyVersion` row). `approve_change()`/`reject_change()`/
+`withdraw_change()` only ever touch `ModelChangeProposal.status`.
+`activate_change()` is the only function that flips a subject's live
+configuration, and `MODEL_CHANGE_PROPOSAL_TRANSITIONS` has no
+`PROPOSED -> ACTIVATED` edge — self-activation is unrepresentable, not
+discouraged. `rollback_change()` clones the proposal's own
+`evidence_package["current_version_snapshot"]` into a **new**
+`StrategyVersion` (never resurrects the superseded row —
+`StrategyVersionStatus` has no edge back out of `SUPERSEDED`, by
+design). See ADR-064 for the full reasoning.
+
+**Routers**: new `routers/governance.py`, prefix `/api/v1/governance` —
+calibration, agent-evaluation (all roles + single role), and the full
+proposal lifecycle (create/create-strategy-parameter/list/detail/
+approve/reject/withdraw/activate/rollback). See docs/API_CONTRACTS.md §27.
+
+**Tests**: 46 new/extended tests — `test_calibration.py` (11, sparse-bin
+suppression, regime segmentation never blending, confidence/score axis
+independence, DB-level smoke test), `test_performance_metrics.py`
+(+9, Brier score, Wilson interval known vector), `test_agent_evaluation.py`
+(6, sparse sample, the required data-revisions category against a real
+`EarningsEventCorrection`, directional usefulness), `test_change_governance.py`
+(9, no-self-activation, full state machine, version comparison snapshot,
+never-rewrites-history), `test_governance_endpoints.py` (11, full
+lifecycle via the API, 404s, 422 on an incomplete evidence package); full
+suite: 595 passed. `mypy src/` and `ruff check src/ tests/` both clean.
+
+**Demo**: `demo_prompt14.py` — calibration against real dev-DB closed
+outcomes (honestly inadequate on most segments given this dev
+environment's small sample), agent evaluation showing factual accuracy
+fall live after seeding 10 runs that cite a newly-corrected earnings
+event, and the full propose -> reject-premature-activation ->
+approve -> activate -> rollback lifecycle with a byte-for-byte proof
+that a pre-existing `RecommendationVersion` survives unchanged.
 
 ## Revision Prompt 13 (2026-08-09) — event-driven backtesting and walk-forward validation
 

@@ -639,6 +639,46 @@ concentration subset, 3-window walk-forward, the go/no-go report),
 `services/backtest_persistence.py` (save/list/get against the new
 tables).
 
+## 20. Revision Prompt 14 — controlled learning, calibration, and strategy governance
+
+Additive only: no new tables. Extends the pre-existing
+`ModelChangeProposal`/`ModelChangeApproval` schema fixtures (unpopulated
+by any live service since Revision Prompt R3 — confirmed by grep, see
+docs/DECISIONS.md ADR-064) with the columns and enum values a real
+propose -> approve -> **activate** -> rollback lifecycle needs.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `model_change_proposals.evidence_package` (new column, JSON, `server_default='{}'`) | Prompt 14's own required-fields list: `sample_size`, `evidence`, `current_version_snapshot`, `proposed_version_snapshot`, `economic_rationale`, `train_results`, `validation_results`, `out_of_sample_results`, `walk_forward_results`, `sensitivity`, `costs`, `operational_risks`, `rollback_plan` | Validated at the API boundary by `schemas/governance.py::EvidencePackage`; for the deep-integration `STRATEGY_PARAMETER` path it's assembled automatically from real `run_backtest_splits()` output, never hand-typed. |
+| `model_change_proposals.activated_at`/`activated_by` (new columns, nullable) | Set only by `activate_change()` | The one and only function that writes these — never set at proposal creation or approval time. |
+| `model_change_proposals.rolled_back_at`/`rolled_back_by`/`rollback_reason` (new columns, nullable) | Set only by `rollback_change()` | |
+| `model_change_proposal_status` (enum, extended) | Existing: `PROPOSED`, `APPROVED`, `REJECTED`, `WITHDRAWN`. New: `ACTIVATED`, `ROLLED_BACK` | `MODEL_CHANGE_PROPOSAL_TRANSITIONS` has no `PROPOSED -> ACTIVATED` edge — self-activation is structurally unrepresentable, not just discouraged by convention. |
+
+**No new tables for calibration or agent evaluation** — both are
+computed on demand from existing rows (`RecommendationVersion`,
+`RecommendationOutcome`, `HypotheticalTradeOutcome`, `AgentRun`,
+`AgentOpinion`, `AgentEvidenceLink`, `CommitteeSession`,
+`EarningsEventCorrection`) rather than persisted, matching this
+project's own "current state is a derived view" principle
+(`getWorkforceSnapshot`-style point-in-time derivation, applied here to
+calibration bins and per-role evaluation results instead of workforce
+figures).
+
+**New services**: `services/calibration.py` (`get_closed_outcomes()`,
+seven segmentation functions — confidence, score, strategy, sector,
+regime, event timing, holding period — every bin sample-size gated at
+`MIN_SAMPLE_SIZE_FOR_CALIBRATION=20`), `services/agent_evaluation.py`
+(`evaluate_agent_role()`, six dimensions per role, gated at
+`MIN_SAMPLE_SIZE_FOR_AGENT_EVAL=10`), `services/change_governance.py`
+(`propose_change()`, `propose_strategy_parameter_change()`,
+`run_backtest_splits()`, `approve_change()`/`reject_change()`/
+`withdraw_change()`/`activate_change()`/`rollback_change()`).
+`services/performance_metrics.py` gained two shared, DB-free primitives
+reused by calibration: `brier_score()` and `wilson_confidence_interval()`
+(chosen over the naive normal-approximation interval specifically for
+its better behavior at small `n` and extreme observed rates — exactly
+the conditions a sparse calibration bin hits).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

@@ -165,7 +165,20 @@ class ModelChangeProposal(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
     other governed config that isn't a `StrategyVersion` itself routes
     through this instead. `subject_ref_id` is a generic UUID (same
     `record_type`-style reasoning as `AuditEvent.ref_id`, ADR-015) since
-    the subject can be several different entity types."""
+    the subject can be several different entity types.
+
+    Revision Prompt 14 additive columns: `evidence_package` is the one
+    JSON home for every structured artifact the prompt's own requirement
+    list names (evidence + sample size, current/proposed version
+    snapshots, economic rationale, train/validation/out-of-sample/walk-
+    forward results, sensitivity, costs, operational risks, rollback
+    plan) — a rich, self-describing blob rather than a dozen narrow
+    columns, matching this project's existing convention for this kind
+    of structured artifact (`EventBacktestRun.config`/`results_summary`,
+    `StrategyVersion.config`). `activated_at`/`activated_by`/
+    `rolled_back_at`/`rolled_back_by`/`rollback_reason` record the two
+    state transitions this revision adds — see
+    `models/enums.py::MODEL_CHANGE_PROPOSAL_TRANSITIONS`."""
 
     __tablename__ = "model_change_proposals"
 
@@ -176,6 +189,16 @@ class ModelChangeProposal(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
         sa.Enum(ModelChangeProposalStatus, name="model_change_proposal_status")
     )
     proposed_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    evidence_package: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON, default=dict)
+    activated_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    activated_by: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
+    rolled_back_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    rolled_back_by: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
+    rollback_reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
 
 
 class ModelChangeApproval(UUIDPkMixin, CreatedAtMixin, Base):

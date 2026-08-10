@@ -8,6 +8,7 @@ from tradingos_api.routers import (
     earnings,
     event_backtests,
     feature_diagnostics,
+    governance,
     health,
     instruments,
     investment,
@@ -62,3 +63,4 @@ app.include_router(committee.router)
 app.include_router(paper_auto_policy.router)
 app.include_router(monitoring.router)
 app.include_router(event_backtests.router)
+app.include_router(governance.router)

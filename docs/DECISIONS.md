@@ -2276,3 +2276,101 @@ explicitly that it validates the engine's mechanics, not the live
 strategy's real-world edge, and names re-running against real multi-year
 point-in-time data as the next required step before any paper-activation
 decision.
+
+## ADR-064: Revision Prompt 14's governance engine makes self-activation structurally unrepresentable, rollback redeploys rather than resurrects, and factual accuracy is measured against a real correction ledger instead of a second LLM grading the first
+
+**Context.** Prompt 14 asks for a review system that "can recommend
+changes but cannot deploy them automatically," calibration segmented
+across seven axes without overinterpreting sparse bins, six agent-
+evaluation dimensions including "contradiction detection" and "minority-
+opinion usefulness," and change proposals that require "user approval"
+with "no proposal may activate itself" and "no result may rewrite
+historical recommendations." `ModelChangeProposal`/`ModelChangeApproval`
+have existed as unpopulated schema fixtures since Revision Prompt R3 —
+this is the first revision to write a live service against them. Three
+design questions had to be answered before any code was written.
+
+**Decision 1 — no-self-activation is enforced by the state machine's own
+shape, not by a code-review convention.** `MODEL_CHANGE_PROPOSAL_TRANSITIONS`
+(`models/enums.py`) defines `PROPOSED -> {APPROVED, REJECTED, WITHDRAWN}`
+and, as a separate edge, `APPROVED -> {ACTIVATED}` — there is no
+`PROPOSED -> ACTIVATED` edge anywhere in the map.
+`services/change_governance.py::activate_change()` is the only function
+in this codebase that mutates a subject's live configuration, and it
+calls `services/lifecycle.py::assert_transition_allowed()` against this
+map before doing anything else. The consequence is that "a proposal
+cannot activate itself" is not a promise this module keeps by being
+careful — it is a state the schema's own transition graph does not
+contain a path to, proven directly (not just asserted) in
+`tests/test_change_governance.py::TestNoSelfActivation` via a caught
+`InvalidTransitionError`, and demonstrated live in
+`scripts/demo_prompt14.py`'s step 3, which deliberately tries the
+illegal transition first and shows the rejection before proceeding
+through the legal path.
+
+**Decision 2 — rollback clones the prior config into a new
+`StrategyVersion` rather than reactivating the superseded one.**
+`StrategyVersionStatus`'s own transition map
+(`STRATEGY_VERSION_TRANSITIONS`) has no edge back out of `SUPERSEDED` —
+a pre-existing, deliberate terminal state predating this revision (a
+`RecommendationVersion`, once superseded, is never un-superseded
+either; this is one more instance of the same append-only-lineage
+principle, not a new one invented for Prompt 14). Rather than adding a
+new edge to an existing, possibly load-bearing state machine,
+`rollback_change()` reads the prior config from the proposal's own
+`evidence_package["current_version_snapshot"]` — never a second live
+query that could disagree with what was actually proposed — and creates
+a brand-new `StrategyVersion` row from it, immediately activated. This
+mirrors how a real deployment rollback actually works (redeploy the last
+known-good build as a new release, not resurrect the old one), and it
+keeps the full lineage (candidate -> activated -> superseded, clone ->
+activated) reconstructable from `StrategyVersion` rows and their
+`decision_comment`s rather than destroyed.
+
+**Decision 3 — "no result may rewrite historical recommendations" is
+enforced by omission, and proven by a byte-identical before/after
+diff.** `activate_change()` and `rollback_change()` import, query for
+update, or write to `RecommendationVersion` nowhere in
+`services/change_governance.py` — grep confirms it. `tests/test_change_governance.py::TestNeverRewritesHistoricalRecommendations`
+snapshots every field of a real `RecommendationVersion` row before
+running a full propose -> approve -> activate -> rollback lifecycle and
+asserts the snapshot is unchanged after; `scripts/demo_prompt14.py`
+repeats the same proof live against the dev database.
+
+**Decision 4 — factual accuracy is measured against this project's own
+correction ledger, never a second LLM grading the first one's prose.**
+docs/MODEL_GOVERNANCE.md's "Evaluation" section already scoped "grading
+committee narrative quality" out of this project's design. Rather than
+inventing an oracle for "was this citation actually true,"
+`services/agent_evaluation.py::_correction_tainted_evidence_ids()` uses
+`EarningsEventCorrection` — a table this project already writes to
+whenever a previously-ingested earnings figure is revised — as the
+concrete, checkable signal: a role's cited evidence tied to an event
+that was later corrected is treated as tainted, regardless of how
+confident the role's stance sounded. This is exactly the required "data
+revisions" test category, proven against a real `EarningsEventCorrection`
+row (not a mock) in `tests/test_agent_evaluation.py::TestDataRevisions`
+and demonstrated live in `scripts/demo_prompt14.py`'s step 2, which
+seeds a correction and shows factual accuracy fall.
+
+**Sparse-bin protection is structural in both new services, not a
+display-layer convention.** `services/calibration.py::_bin_from_outcomes()`
+and `services/agent_evaluation.py::evaluate_agent_role()` both always
+report `sample_size`/`is_adequate` honestly, but every derived statistic
+(hit rate, confidence interval, Brier score, any of the six evaluation
+percentages) is `None` below their respective thresholds
+(`MIN_SAMPLE_SIZE_FOR_CALIBRATION=20`, `MIN_SAMPLE_SIZE_FOR_AGENT_EVAL=10`)
+— the same guardrail `services/performance_coach.py` established for the
+Revision Prompt 12 AI coach (ADR-061), applied here per-segment and
+per-role instead of per-LLM-call. The Wilson score interval (not the
+naive normal-approximation CI) was chosen specifically because it stays
+well-behaved at small `n` and extreme observed rates — exactly the
+conditions a sparse calibration bin hits most often.
+
+**Consequences.** Calibration and agent evaluation add no new tables —
+both compute on demand from rows this project already writes, matching
+the "current state is a derived view" principle applied everywhere else
+in this schema. Every segmentation axis that has no real data path in
+this dev environment (event timing, most sector bins) honestly reports
+zero or inadequate bins rather than a guessed rate — `scripts/demo_prompt14.py`
+shows this directly rather than curating a friendlier synthetic sample.

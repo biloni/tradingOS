@@ -1132,3 +1132,52 @@ emulated bracket produces up to three independent `Order` rows (one per
 leg), each with its own `OrderLeg` row, all sharing one
 `bracket_group_id` so this application's own bookkeeping treats them as
 one unit even though the broker does not.
+
+## 24. Revision Prompt 14 — controlled learning, calibration, and strategy governance
+
+Additive columns only, no new tables — extends the pre-existing
+`model_change_proposals` schema fixture (unpopulated by any live service
+since Revision Prompt R3) with the fields a real activate/rollback
+lifecycle needs. Calibration and agent evaluation are computed on demand
+from existing rows; see docs/DATA_DICTIONARY.md §20 for the full field
+list.
+
+```mermaid
+erDiagram
+    model_change_proposals ||--o{ model_change_approvals : "proposal_id"
+    model_change_proposals }o--o| strategy_versions : "subject_ref_id (STRATEGY_PARAMETER only)"
+
+    model_change_proposals {
+        uuid id PK
+        string subject_type "STRATEGY_PARAMETER/FEATURE/THRESHOLD/PROMPT/PROVIDER/RISK/EXECUTION_POLICY"
+        uuid subject_ref_id "nullable, FK to strategy_versions for STRATEGY_PARAMETER"
+        enum status "PROPOSED/APPROVED/REJECTED/WITHDRAWN/ACTIVATED (new)/ROLLED_BACK (new)"
+        json evidence_package "new column, server_default '{}'"
+        datetime proposed_at
+        datetime activated_at "nullable, new"
+        string activated_by "nullable, new"
+        datetime rolled_back_at "nullable, new"
+        string rolled_back_by "nullable, new"
+        text rollback_reason "nullable, new"
+    }
+    model_change_approvals {
+        uuid id PK
+        uuid proposal_id FK
+        enum decision
+        text comment "nullable"
+        datetime decided_at
+    }
+```
+
+**`activate_change()` is the only function that writes `activated_at`/
+`activated_by`, and only from `APPROVED`** — `MODEL_CHANGE_PROPOSAL_TRANSITIONS`
+has no `PROPOSED -> ACTIVATED` edge, so a proposal cannot activate
+itself as a matter of what states the schema even allows, not just as a
+matter of service-layer discipline. **Rollback never resurrects a
+superseded `strategy_versions` row** — `rollback_change()` clones the
+proposal's own `evidence_package["current_version_snapshot"]` into a
+brand-new `strategy_versions` row and activates that, since
+`strategy_version_status` has no transition back out of `SUPERSEDED`
+(pre-existing, by design). Neither `activate_change()` nor
+`rollback_change()` ever writes to `recommendation_versions` — proven
+byte-for-byte in `tests/test_change_governance.py::TestNeverRewritesHistoricalRecommendations`.

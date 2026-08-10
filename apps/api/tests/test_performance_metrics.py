@@ -13,6 +13,7 @@ from tradingos_api.services.performance_metrics import (
     align_return_series,
     annualized_volatility,
     beta_alpha,
+    brier_score,
     compute_trade_stats,
     concentration_hhi,
     daily_returns_from_equity_curve,
@@ -22,6 +23,7 @@ from tradingos_api.services.performance_metrics import (
     sortino_ratio,
     time_weighted_return,
     turnover_pct,
+    wilson_confidence_interval,
 )
 
 TOL = Decimal("0.0001")
@@ -252,3 +254,51 @@ class TestExposureTurnoverConcentration:
 
     def test_concentration_hhi_empty_portfolio(self) -> None:
         assert concentration_hhi([]) == Decimal(0)
+
+
+class TestBrierScore:
+    """Revision Prompt 14 — calibration primitives."""
+
+    def test_perfect_predictions_score_zero(self) -> None:
+        result = brier_score([Decimal(1), Decimal(0)], [True, False])
+        assert result == Decimal(0)
+
+    def test_always_wrong_predictions_score_one(self) -> None:
+        result = brier_score([Decimal(1), Decimal(0)], [False, True])
+        assert result == Decimal(1)
+
+    def test_maximally_uncertain_predictions_score_quarter(self) -> None:
+        result = brier_score([Decimal("0.5"), Decimal("0.5")], [True, False])
+        assert result == Decimal("0.25")
+
+    def test_empty_sample_is_none(self) -> None:
+        assert brier_score([], []) is None
+
+    def test_mismatched_lengths_is_none(self) -> None:
+        assert brier_score([Decimal("0.5")], [True, False]) is None
+
+
+class TestWilsonConfidenceInterval:
+    def test_known_vector_8_of_10(self) -> None:
+        # Standard reference value for Wilson 95% CI, n=10, x=8: ~[0.49, 0.94]
+        result = wilson_confidence_interval(8, 10)
+        assert result is not None
+        low, high = result
+        assert _close(low, Decimal("0.4902"), Decimal("0.001"))
+        assert _close(high, Decimal("0.9433"), Decimal("0.001"))
+
+    def test_zero_n_is_none(self) -> None:
+        assert wilson_confidence_interval(0, 0) is None
+
+    def test_bounds_never_exceed_zero_one(self) -> None:
+        result = wilson_confidence_interval(0, 5)
+        assert result is not None
+        low, high = result
+        assert low >= Decimal(0)
+        assert high <= Decimal(1)
+
+    def test_perfect_record_upper_bound_stays_at_or_below_one(self) -> None:
+        result = wilson_confidence_interval(20, 20)
+        assert result is not None
+        _, high = result
+        assert high <= Decimal(1)
