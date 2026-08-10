@@ -2999,3 +2999,112 @@ head` → `downgrade -1` → `upgrade head`) verified clean for
 
 No new secrets this revision. `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 15 — executive-quality morning dashboard UX (2026-08-10)
+
+### Three real frontend/backend contract bugs, found live-verifying in a browser, not by code inspection
+
+The prompt's own instruction to "run responsive screenshots... and
+user-flow tests" meant actually loading pages against a live backend,
+not trusting that code which merely *looked* wired was actually correct.
+Doing so on `/portfolio` surfaced `GET /api/v1/portfolio → 404`,
+`GET /api/v1/paper-orders → 404`; the same check on `/symbols` surfaced
+`GET /api/v1/symbols → 404`. Grepping every `router = APIRouter(prefix=...)`
+across `apps/api` confirmed these paths never existed — the real
+endpoints are `/api/v1/portfolio/accounts/*`, `/api/v1/orders`,
+`/api/v1/instruments`, and `/api/v1/market/instruments/{ticker}/*`. All
+three pages were rewired (`lib/api/portfolio.ts`, `lib/api/paperOrders.ts`,
+`lib/api/symbols.ts`, plus `app/portfolio/page.tsx`,
+`app/legacy-dashboard/page.tsx`, and their components) — see
+docs/DECISIONS.md ADR-065 for the full reasoning, including why
+`/strategy-versions` (a fourth broken page, but with *no* backend to
+point at rather than a wrong URL) was flagged instead of built.
+
+### The tests that should have caught this were mocking the phantom contract
+
+`tests/portfolio.test.tsx` and `tests/legacy-dashboard.test.tsx` both
+stubbed `fetch` for `/api/v1/portfolio` and `/api/v1/paper-orders*` —
+literal, working mocks of endpoints that don't exist on the real
+backend. This is precisely how the bug survived: a green test suite
+proved the *mocked* contract worked, never the real one. Both files
+were rewritten against the corrected endpoints and response shapes
+(`/api/v1/portfolio/accounts/{id}`, `/api/v1/orders?account_id=`, the
+real paginated `{items, total, limit, offset}` shape) — full suite
+re-verified at 55, then 64, passing after the additional Prompt 15
+components landed.
+
+### Full order-approval lifecycle proven against the real backend, not mocked, before writing the unit tests
+
+Before writing `tests/order-approval.test.tsx`, the actual flow was
+exercised end-to-end via the real running API: `POST /order-proposals`
+→ `POST /order-proposals/{id}/policy-evaluation` (first attempt denied
+with `"PAPER_MANUAL_APPROVAL requires an explicit confirmation"` —
+real server validation caught a missing `confirmation` object, not a
+mock) → a fresh proposal evaluated correctly with confirmation supplied,
+`authorized: true` → `POST /order-approvals` → the real
+`/approvals/{id}` page loaded in a browser, showing the true immutable
+`bound_fields`. Clicking through Approve required the real two-step
+`ConfirmButton` gate (`"Are you sure?"` before the mutation fires,
+status verified still `PENDING` at that point). Two distinct real
+terminal states were then produced, not simulated: (1) a `MANUAL`
+account produced `"Blocked: account_type=MANUAL is not a broker-backed
+account."` from `assert_broker_boundary_is_paper()` (OA-6) — the actual
+fail-closed boundary firing correctly; (2) a `PAPER_ALPACA`
+(broker-backed) account passed the pre-submission check cleanly and
+reached the Submit step, which then correctly denied with
+`"RESEARCH_ONLY cannot create broker orders"` since this dev
+environment's global operating mode is `RESEARCH_ONLY`. That second
+result led directly to a real UX fix (see below), and both terminal
+states are what `tests/order-approval.test.tsx`'s mocked fixtures
+(`requires_reapproval` with a real-looking `reason` string,
+`can_submit_orders: false`) actually encode — copied from what the live
+system said, not invented.
+
+### A real UX bug found in the same live pass: letting the user discover an unavoidable denial only after two confirm clicks
+
+The first implementation always rendered the refresh/submit UI once an
+approval reached `APPROVED`, deriving `requested_mode` from the app's
+*current* global operating mode. Since `GET /api/v1/settings/operating-mode`
+already exposes `can_submit_orders`, and this dev environment's mode is
+`RESEARCH_ONLY`, every real submit attempt was going to fail — but the
+user had no way to know that until after clicking Submit, then
+"Yes, submit exactly as shown above," then reading a denial. Fixed by
+checking `can_submit_orders` immediately after approval and rendering a
+clear, immediate explanation instead of the submit UI at all
+(docs/DECISIONS.md ADR-065) — `tests/order-approval.test.tsx`'s
+`"blocks submission upfront..."` test locks this in, asserting the
+`Submit to broker` button is never rendered in that state at all, not
+merely disabled.
+
+### A real horizontal-overflow bug found via `resize_window`, not assumed fixed by "looks responsive"
+
+`document.documentElement.scrollWidth` (417px) exceeded `clientWidth`
+(375px) on `/` at the `mobile` preset before this revision's sidebar
+change — the permanent 224px-wide `Sidebar` column was the direct
+cause. Fixed by making the sidebar an off-canvas drawer below the `md`
+breakpoint (closed by default, hamburger-toggled); re-measured after
+the fix confirmed `scrollWidth === clientWidth` (375 === 375) at the
+same viewport. `tests/sidebar.test.tsx`'s three new tests cover the
+toggle's open/close state and its `aria-expanded` accessibility
+attribute (jsdom has no real viewport, so these assert on the toggle's
+actual behavior, not the CSS breakpoint itself).
+
+### Full suite
+
+Frontend: 64 passed (0 failed) — 10 files before this revision's new
+`order-approval.test.tsx` (6 tests) and the extended `sidebar.test.tsx`
+(+3 tests), plus the rewritten `page.test.tsx` (7, now against real
+dashboard data instead of the R2 static scaffold) and
+`portfolio.test.tsx`/`legacy-dashboard.test.tsx` (corrected contracts).
+`tsc --noEmit`, `eslint .`, and `next build` (21 routes, including the
+new dynamic `/approvals/[id]`) all clean. Backend: 595 passed, `mypy
+src/` clean across 183 source files, `ruff check` clean across `src/`
+and `tests/` — the one new endpoint
+(`GET /api/v1/recommendations/versions/{version_id}`) required
+regenerating `tests/fixtures/openapi_paths_snapshot.json` (127 → 128
+paths); `test_openapi_snapshot.py` passing confirms no further drift.
+
+### Secrets check before commit
+
+No new secrets this revision. `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

@@ -4,8 +4,10 @@ import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
-import { useProposeOrder } from "@/lib/hooks/usePaperOrders";
-import type { PaperOrderSide, PaperOrderType } from "@/lib/api/paperOrders";
+import { useSymbols } from "@/lib/hooks/useSymbols";
+import { useCreateOrder } from "@/lib/hooks/usePaperOrders";
+import type { OrderSide, OrderType } from "@/lib/api/paperOrders";
+import { ApiError } from "@/lib/api/client";
 
 const SELECT_CLASSES =
   "w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-black focus:border-black focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-50";
@@ -21,41 +23,55 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-/** Step 1 of 2 (ADR-014, principle 11) — only proposes a DRAFT order.
- * Nothing reaches Alpaca here; the OrderList's Confirm button is the
- * actual human-confirmation gate. */
-export function OrderForm() {
+/**
+ * Step 1 of 2 (ADR-014, principle 11) — only proposes a DRAFT order.
+ * Nothing reaches a broker here; OrderList's Confirm button is the
+ * actual human-confirmation gate. Price is always required (not only
+ * for LIMIT orders): confirming a `MANUAL`-account order fills it
+ * immediately at this price — there is no broker to derive one from
+ * (`routers/orders.py::confirm_order()` 422s a manual fill with no
+ * price), so this form never lets a user reach that error at confirm
+ * time instead of here.
+ */
+export function OrderForm({ accountId }: { accountId: string | undefined }) {
   const [ticker, setTicker] = useState("");
-  const [side, setSide] = useState<PaperOrderSide>("BUY");
+  const [side, setSide] = useState<OrderSide>("BUY");
   const [quantity, setQuantity] = useState("1");
-  const [orderType, setOrderType] = useState<PaperOrderType>("MARKET");
-  const [limitPrice, setLimitPrice] = useState("");
+  const [orderType, setOrderType] = useState<OrderType>("MARKET");
+  const [price, setPrice] = useState("");
 
-  const propose = useProposeOrder();
+  const symbols = useSymbols();
+  const create = useCreateOrder(accountId);
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    propose.mutate(
+    if (!accountId) return;
+    const instrument = symbols.data?.find((s) => s.ticker === ticker.toUpperCase());
+    if (!instrument) return;
+    create.mutate(
       {
-        ticker: ticker.toUpperCase(),
+        accountId,
+        instrumentId: instrument.id,
         side,
-        quantity: Number(quantity),
-        order_type: orderType,
-        limit_price: orderType === "LIMIT" && limitPrice ? limitPrice : null,
+        orderType,
+        quantity,
+        limitPrice: price || null,
       },
       {
         onSuccess: () => {
           setTicker("");
           setQuantity("1");
-          setLimitPrice("");
+          setPrice("");
         },
       },
     );
   }
 
+  const knownTicker = symbols.data?.some((s) => s.ticker === ticker.toUpperCase()) ?? false;
+
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
         <Field label="Ticker">
           <Input
             value={ticker}
@@ -67,7 +83,7 @@ export function OrderForm() {
         <Field label="Side">
           <select
             value={side}
-            onChange={(e) => setSide(e.target.value as PaperOrderSide)}
+            onChange={(e) => setSide(e.target.value as OrderSide)}
             className={SELECT_CLASSES}
           >
             <option value="BUY">BUY</option>
@@ -86,28 +102,38 @@ export function OrderForm() {
         <Field label="Order type">
           <select
             value={orderType}
-            onChange={(e) => setOrderType(e.target.value as PaperOrderType)}
+            onChange={(e) => setOrderType(e.target.value as OrderType)}
             className={SELECT_CLASSES}
           >
             <option value="MARKET">MARKET</option>
             <option value="LIMIT">LIMIT</option>
           </select>
         </Field>
-        {orderType === "LIMIT" && (
-          <Field label="Limit price">
-            <Input
-              value={limitPrice}
-              onChange={(e) => setLimitPrice(e.target.value)}
-              placeholder="0.00"
-              required
-            />
-          </Field>
-        )}
+        <Field label="Price (used to record the fill on confirm)">
+          <Input
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            placeholder="0.00"
+            required
+          />
+        </Field>
       </div>
-      <ErrorBanner error={propose.error} />
+      {ticker && !knownTicker && !symbols.isLoading && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          &quot;{ticker.toUpperCase()}&quot; isn&apos;t a known symbol.
+        </p>
+      )}
+      <ErrorBanner
+        error={create.error}
+        messages={
+          create.error instanceof ApiError
+            ? { 422: "Unknown account or symbol, or a price is required to confirm this order." }
+            : undefined
+        }
+      />
       <div>
-        <Button type="submit" disabled={propose.isPending}>
-          {propose.isPending ? "Proposing…" : "Propose order"}
+        <Button type="submit" disabled={create.isPending || !accountId || !knownTicker}>
+          {create.isPending ? "Proposing…" : "Propose order"}
         </Button>
       </div>
     </form>

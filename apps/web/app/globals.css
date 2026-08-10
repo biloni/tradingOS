@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/*
+ * Manual theme toggle (Revision Prompt 15): `dark:` utilities across this
+ * entire app already exist as class names on every component — this
+ * custom variant is the ONLY change needed to make them respond to a
+ * `.dark` class on <html> instead of only `prefers-color-scheme`, so no
+ * component file needs to change. `components/layout/ThemeToggle.tsx`
+ * sets/removes that class and persists the choice; `app/theme-init.js`
+ * (loaded via next/script beforeInteractive) applies it before first
+ * paint so there is no flash of the wrong theme.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -12,15 +24,57 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Keyboard-navigation focus ring — visible only for keyboard users
+   (`:focus-visible`), never a mouse click, and never removed by any
+   component (Prompt 15's "keyboard navigation" requirement is
+   cross-cutting, not per-component). */
+:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.dark :focus-visible {
+  outline-color: #60a5fa;
+}
+
+/* Screen-reader-only utility — visually hidden, still announced. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Skip-to-content link (Prompt 15 keyboard navigation) — hidden until
+   focused, then jumps a keyboard user straight past the sidebar nav. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  background: #2563eb;
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0 0 0.375rem 0;
+}
+
+.skip-link:focus {
+  left: 0;
 }

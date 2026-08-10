@@ -5,7 +5,7 @@ export function useSymbols() {
   return useQuery({ queryKey: ["symbols"], queryFn: getSymbols });
 }
 
-export function useBars(ticker: string, params?: { start?: string; end?: string }) {
+export function useBars(ticker: string, params?: { limit?: number }) {
   return useQuery({
     queryKey: ["symbols", ticker, "bars", params ?? {}],
     queryFn: () => getBars(ticker, params),
@@ -13,10 +13,10 @@ export function useBars(ticker: string, params?: { start?: string; end?: string 
   });
 }
 
-export function useIndicators(ticker: string, asOf?: string) {
+export function useIndicators(ticker: string) {
   return useQuery({
-    queryKey: ["symbols", ticker, "indicators", asOf ?? null],
-    queryFn: () => getIndicators(ticker, asOf),
+    queryKey: ["symbols", ticker, "indicators"],
+    queryFn: () => getIndicators(ticker),
     enabled: Boolean(ticker),
   });
 }

@@ -24,15 +24,27 @@ function mockFetchByUrl(responses: Record<string, unknown>) {
   );
 }
 
+const ACCOUNT_ID = "acc-1";
+
 describe("LegacyDashboardPage", () => {
   beforeEach(() => {
     mockFetchByUrl({
       "/health": { status: "ok", time_utc: "2026-08-03T00:00:00+00:00" },
-      "/api/v1/portfolio": {
-        cash_usd: "9245.080000",
-        positions: [{ ticker: "SPY", quantity: 1, avg_entry_price: "754.920000", current_price: "747.030000", market_value: "747.030000", unrealized_pl: "-7.890000" }],
-        total_market_value: "747.030000",
-        total_equity: "9992.110000",
+      "/api/v1/portfolio/accounts": [
+        { id: ACCOUNT_ID, account_type: "MANUAL", name: "Test", base_currency: "USD", is_active: true },
+      ],
+      [`/api/v1/portfolio/accounts/${ACCOUNT_ID}`]: {
+        account: { id: ACCOUNT_ID, account_type: "MANUAL", name: "Test", base_currency: "USD", is_active: true },
+        cash: { account_id: ACCOUNT_ID, cash: "9245.080000", starting_cash: "10000.00" },
+        positions: [
+          {
+            instrument: { id: "inst-spy", ticker: "SPY", name: "SPDR S&P 500", exchange: "NYSE", asset_type: "EQUITY", active: true },
+            quantity: "1",
+            avg_cost: "754.920000",
+            market_value: null,
+          },
+        ],
+        latest_risk_snapshot: null,
       },
     });
   });
@@ -51,9 +63,9 @@ describe("LegacyDashboardPage", () => {
     renderWithQueryClient(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("$9,992.11")).toBeInTheDocument();
+      expect(screen.getByText("$9,245.08")).toBeInTheDocument();
     });
-    expect(screen.getByText("$9,245.08")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
   });
 
   it("links to every other section", () => {

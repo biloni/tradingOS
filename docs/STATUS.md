@@ -103,8 +103,99 @@ convention) and neither activation nor rollback ever touches
 `RecommendationVersion` history, proven byte-for-byte, ADR-064; no new
 tables — calibration and agent evaluation compute on demand from
 existing rows, and the pre-existing `ModelChangeProposal`/
-`ModelChangeApproval` schema fixtures get their first live service).
+`ModelChangeApproval` schema fixtures get their first live service), and
+Revision Prompt 15 (executive-quality morning dashboard UX, shipped —
+`app/page.tsx` rebuilt against real `GET /api/v1/morning-plan/dashboard`
+data (status strip, portfolio strip, and Prompt 15's own 8-section
+primary layout, no longer the Revision Prompt R2 static scaffold),
+one-click evidence/committee-disagreement/risk/audit drill-in per card,
+a real order-approval confirmation page (`/approvals/[id]`) built on the
+already-shipped Revision Prompt R3/10 approval flow with a two-click
+confirm gate at both approve and submit, manual dark/light theming and
+an off-canvas mobile nav drawer app-wide, and — found live-verifying the
+above in a browser — three pre-existing frontend/backend contract
+mismatches fixed (`/portfolio`, `/legacy-dashboard`, `/symbols` were all
+calling nonexistent endpoints from an earlier backend generation,
+ADR-065; `/strategy-versions`'s complete absence of a backend was
+flagged, not built, as out-of-scope real UX debt).
 **Last updated:** 2026-08-10
+
+## Revision Prompt 15 (2026-08-10) — executive-quality morning dashboard UX
+
+**No schema changes.** One additive, read-only response field
+(`RecommendationVersionResponse.committee_session_id`) and one new
+read-only endpoint (`GET /api/v1/recommendations/versions/{version_id}`)
+— see docs/API_CONTRACTS.md area 4. No trading/scoring/sizing/policy
+logic changed anywhere in `apps/api`.
+
+**The dashboard** (`app/page.tsx`, fully rebuilt): status strip (market
+date, countdown, plan state, evidence cutoff, regime, operating mode,
+kill switch) and portfolio strip (equity, cash, day/week P&L, drawdown,
+exposure, risk budget — the latter two sourced from Revision Prompt 12's
+own performance endpoint, never re-derived) sit above the fixed section
+order Prompt 15 specifies: Act Now, Approval Required, Buy and Hold,
+Tactical Earnings, Existing Positions, Upcoming Events, Watch/Avoid,
+Data and Job Health — mapped onto Revision Prompt 9's own shipped
+section keys, with Existing Positions as a client-side cross-cut (no
+matching backend section key exists; docs/UX_MAP.md records this as
+known UX debt) and Data and Job Health additionally surfacing
+`provider_broker_status` and failed plan quality checks. Investment/
+Tactical labels render as both plain text (already in every card's
+headline) and an icon+text badge — never color alone, matching this
+app's pre-existing badge convention.
+
+**Evidence/audit drill-in**: `components/dashboard/EvidenceDetails.tsx`,
+a `<details>` disclosure (not a modal, same precedent `ConfirmButton`
+already set) showing the five `card_detail` keys immediately, plus a
+lazily-loaded recommendation-version risk/committee/audit view behind
+two endpoints new this revision.
+
+**Order approval** (`app/approvals/[id]/page.tsx`, new): built directly
+on the already-shipped `/api/v1/order-approvals/*` flow — the immutable
+`ApprovalBoundFields` snapshot, a live pre-submission refresh, and a
+`ConfirmButton`-gated approve/submit, each requiring a distinct second
+click. Live-verified end-to-end against the real backend (not mocked):
+a real `OrderProposal` → policy-evaluation → `OrderApproval` created via
+the actual HTTP API, clicked through Approve (real state transition
+PENDING → APPROVED), the pre-submission refresh (real quote/buying-power
+snapshot), and two real terminal states — a hard `MANUAL`-account block
+(`assert_broker_boundary_is_paper()`, OA-6, firing correctly) and this
+dev environment's `RESEARCH_ONLY` operating mode correctly denying
+submission, the latter surfaced by the page *before* the two-click
+confirm dance rather than after.
+
+**Cross-cutting**: manual dark/light theme (`@custom-variant dark` in
+`app/globals.css` — every existing `dark:` utility across the whole app
+now responds to a `.dark` class instead of only `prefers-color-scheme`,
+no component file touched), a skip-link + app-wide `:focus-visible` ring
+for keyboard navigation, and an off-canvas mobile sidebar drawer (fixed
+a real, confirmed horizontal-overflow bug on `/` at 375px width).
+
+**Real bugs found and fixed live** (docs/DECISIONS.md ADR-065):
+`/portfolio`, `/legacy-dashboard`, and `/symbols`/`/symbols/[ticker]`
+were all calling backend endpoints that don't exist (a leftover from an
+earlier, integer-PK backend generation) — rewired to the real
+`/api/v1/portfolio/accounts/*`, `/api/v1/orders`, `/api/v1/instruments`,
+and `/api/v1/market/instruments/*` endpoints; the tests that should have
+caught this were themselves mocking the phantom contract. Separately,
+`/strategy-versions` has no backend at all — flagged as real, pre-existing
+UX debt rather than built unprompted. The dashboard's own "Approval
+Required" cards previously always claimed `NOT_YET_PROPOSED` regardless
+of reality; `services/morning_plan_generate.py::_order_authority_state()`
+(new, read-only) now reports the real `OrderProposal`/`OrderApproval`
+state.
+
+**Tests**: 70 new/extended frontend tests (Vitest + Testing Library) —
+`page.test.tsx` rewritten for the real dashboard (7), `order-approval.test.tsx`
+new (6, immutable summary, two-step confirm at both approve and submit,
+real denial surfacing, upfront operating-mode block, hard pre-submission
+block with its real reason), `sidebar.test.tsx` extended (+3, mobile
+off-canvas toggle), `portfolio.test.tsx` and `legacy-dashboard.test.tsx`
+rewritten against the corrected real contracts. Full frontend suite: 64
+passed. `tsc --noEmit`, `eslint`, and `next build` (21 routes, including
+the new `/approvals/[id]`) all clean. Backend: 595 passed (unchanged
+count from Revision Prompt 14 plus the schema/endpoint additions above),
+mypy/ruff clean.
 
 ## Revision Prompt 14 (2026-08-10) — controlled learning, calibration, and strategy governance
 

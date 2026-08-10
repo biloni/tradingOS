@@ -107,9 +107,23 @@ for why. `GET /health` is unchanged and still unversioned.
   (`RecommendationStatus`).
 - `GET /api/v1/recommendations/{id}` — detail with `latest_version`
   (nested `RecommendationVersionResponse`, including `levels`).
+- `GET /api/v1/recommendations/versions/{version_id}` (Revision Prompt
+  15) — resolves one `RecommendationVersion` directly, without needing
+  its parent `Recommendation`'s id first. Added because
+  `MorningPlanItem.recommendation_version_id` (docs/MORNING_PLAN_SPEC.md's
+  version-scoped job-lineage manifest) only ever carries a version id —
+  the dashboard's evidence/audit drill-in needed a way to resolve it
+  that didn't exist. Read-only; reuses the same `_version_response()`
+  helper the other two endpoints already use, byte-for-byte.
 - `GET /api/v1/recommendations/committee-sessions/{session_id}` — the full
   committee run: every `agent_runs` row (role, status, timing) with its
   `agent_opinions` row nested inline.
+
+`RecommendationVersionResponse` gained `committee_session_id: uuid.UUID
+| None` (Revision Prompt 15) — read-only exposure of a column that
+already existed on `RecommendationVersion` but wasn't surfaced in any
+response model; lets a client go recommendation-version → committee
+session → per-role opinions ("committee disagreement") in one hop.
 
 ```json
 // GET .../committee-sessions/{id}  (real seeded example, live-verified)

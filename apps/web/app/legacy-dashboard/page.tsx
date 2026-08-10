@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { getHealth } from "@/lib/api/health";
-import { usePortfolio } from "@/lib/hooks/usePortfolio";
+import { useAccountDetail } from "@/lib/hooks/usePortfolio";
+import { useDefaultAccount } from "@/lib/hooks/useAccounts";
 import { Card } from "@/components/ui/Card";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
@@ -62,7 +63,8 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 export default function LegacyDashboardPage() {
   const health = useQuery({ queryKey: ["health"], queryFn: getHealth, retry: false });
-  const portfolio = usePortfolio();
+  const { data: account } = useDefaultAccount();
+  const portfolio = useAccountDetail(account?.id);
 
   return (
     <div className="flex flex-col gap-6 p-8">
@@ -100,10 +102,9 @@ export default function LegacyDashboardPage() {
         {portfolio.isLoading && <LoadingSpinner label="Loading portfolio…" />}
         {portfolio.error && <ErrorBanner error={portfolio.error} />}
         {portfolio.data && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Metric label="Cash" value={formatUsd(portfolio.data.cash_usd)} />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Metric label="Cash" value={formatUsd(portfolio.data.cash.cash)} />
             <Metric label="Positions" value={String(portfolio.data.positions.length)} />
-            <Metric label="Total equity" value={formatUsd(portfolio.data.total_equity)} />
           </div>
         )}
       </Card>

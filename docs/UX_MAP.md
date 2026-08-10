@@ -162,6 +162,81 @@ with the fixed seven-section grouping, dual-refresh timing, and the
   and regime summary stay pinned at top on scroll (they're the context
   every other card depends on for interpretation).
 
+**Status: implemented (Revision Prompt 15, 2026-08-10).** `app/page.tsx`
+is rebuilt against real `GET /api/v1/morning-plan/dashboard` data (no
+longer synthetic). Primary layout matches Prompt 15's own live
+instruction, which supersedes this section's earlier sketch the same
+way `docs/MORNING_PLAN_SPEC.md` already documents for its own section
+list: **Status strip** (market date, countdown, plan state, freshness,
+evidence cutoff, regime, operating mode, kill switch —
+`components/dashboard/StatusStrip.tsx`), **Portfolio strip** (equity,
+cash, day/week P&L, drawdown, exposure, risk budget —
+`components/dashboard/PortfolioStrip.tsx`, cross-referencing Revision
+Prompt 12's own performance endpoint so dashboard and payroll-equivalent
+figures tie out), then **Act Now**, **Approval Required**, **Buy and
+Hold**, **Tactical Earnings**, **Existing Positions**, **Upcoming
+Events**, **Watch/Avoid**, **Data and Job Health** — the backend's own
+`BUY_AND_HOLD`/`TACTICAL_TRADES`/`UPCOMING_EVENTS`/`WATCH_AND_AVOID`/
+`DATA_PROBLEMS` section keys (Revision Prompt 9's shipped hierarchy, not
+this section's older `HOLD_MANAGE`/`INVESTMENT_WATCH`/`TACTICAL_WATCH`/
+`AVOID` sketch) relabeled to Prompt 15's exact section names. **Existing
+Positions** has no dedicated backend section key — it's a client-side
+cross-cut of Act Now/Buy and Hold/Tactical Earnings, filtered by
+`card_detail.evidence.lot_id` (see `app/page.tsx::existingPositions()`);
+a held symbol can legitimately appear there *and* in its action section
+at once, the same "two distinct entries, never merged" rule
+`docs/MORNING_PLAN_SPEC.md` already applies to dual Investment/Tactical
+identity. **Data and Job Health** additionally surfaces
+`provider_broker_status` and the plan's own failed `quality_checks` —
+real job/data-health signals, not just the `DATA_PROBLEMS` section
+renamed. Every card's evidence/deterministic/AI-synthesis/policy-result/
+user-broker-state detail is one click away via
+`components/dashboard/EvidenceDetails.tsx` (a `<details>` disclosure,
+not a modal — same "second explicit interaction, not a full dialog"
+precedent `components/ui/ConfirmButton.tsx` already set); opening it for
+a recommendation-backed card also lazily loads that
+recommendation-version's entry/stop/target levels and committee
+per-role stances (disagreement count) via two new endpoints (see
+docs/API_CONTRACTS.md §28). "Approval Required" cards link to the new
+`/approvals/[id]` page below when a real `OrderProposal`/`OrderApproval`
+already exists for that recommendation version — `services/morning_plan_generate.py`
+now looks this up honestly instead of hardcoding `NOT_YET_PROPOSED`
+(docs/DECISIONS.md ADR-065).
+
+### Order Approval (`/approvals/[id]`, new: `app/approvals/[id]/page.tsx`)
+
+**Status: implemented (Revision Prompt 15, 2026-08-10).** The "final
+immutable summary and deliberate confirmation" screen the prompt asks
+for, built directly against the real, already-shipped Revision Prompt
+R3/10 `OrderApproval` flow (`/api/v1/order-approvals/*`) — no new
+backend business logic, only a UI on an existing contract.
+
+- **Key content:** `ApprovalBoundFields` rendered verbatim as the
+  immutable summary (side, quantity, order type, prices, time in force,
+  max notional, the quote price captured at approval time, the integrity
+  hash, expiry) — this is the same row the backend hashes and never
+  mutates after creation. Once `APPROVED`, a second card shows the
+  live ORDER FLOW steps 2-4 pre-submission snapshot (fresh quote, buying
+  power, open positions/orders, trading-day check), recalculated on
+  load, never reused from approval time.
+- **Key actions:** `ConfirmButton`-gated Approve (`PENDING` → `APPROVED`)
+  and, once approved, a second independently-gated Submit — both require
+  a distinct second click ("Yes, approve/submit exactly as shown above"),
+  never a single click reaching a broker.
+- **Empty/error/stale states:** an unknown id shows an honest error, not
+  a blank page; a denied approve/submit call (expired approval, a
+  non-broker-backed `MANUAL` account, a market-moved pre-submission
+  check) surfaces the server's real reason text, never a generic
+  failure. If the app's global operating mode cannot submit orders
+  (`can_submit_orders=false`, e.g. `RESEARCH_ONLY`), the page says so
+  immediately after approval — before the two-click submit dance, not
+  after — since it's a known-in-advance state, not a possible outcome
+  worth making the user click through to discover (docs/DECISIONS.md
+  ADR-065).
+- **Mobile:** single-column card stack, same as every other page; all
+  risk/warning text (denial reasons, emulation disclosure, expiry) stays
+  full-width and un-truncated.
+
 ### Watchlist (`/watchlist`)
 
 - **Key content:** Tier 1 list with validation status badge per symbol
@@ -342,3 +417,89 @@ app's own order lifecycle for orders it proposed and/or submitted itself.
   as every shipped-MVP page) — single-column stacking, horizontally-
   scrollable tables/charts inside their own container, no fixed-width
   layout assumptions.
+
+**Added, Revision Prompt 15 (2026-08-10) — applies app-wide, not just to
+new pages:**
+
+- **Dark/light theme, manually switchable.** Previously `prefers-color-scheme`
+  only. `app/globals.css`'s `@custom-variant dark` makes every existing
+  `dark:` utility class across the whole app respond to a `.dark` class
+  on `<html>` instead — no component file needed to change.
+  `components/layout/ThemeToggle.tsx` (top bar, every page) toggles and
+  persists it; `app/layout.tsx`'s `beforeInteractive` script applies the
+  persisted-or-system choice before first paint, so there's no flash of
+  the wrong theme.
+- **Keyboard navigation.** A skip-to-content link (first focusable
+  element, jumps past the sidebar), a visible `:focus-visible` ring
+  app-wide (never removed by a component), and every interactive control
+  introduced this revision is a native `<button>`/`<a>`/`<input>` —
+  reachable and operable by keyboard with no custom key handling needed.
+- **Mobile navigation.** The sidebar (`components/layout/Sidebar.tsx`)
+  is now an off-canvas drawer below the `md` breakpoint — closed by
+  default, opened by a hamburger button, closed again on nav-link click
+  or its own close button — rather than a permanent 224px-wide column
+  that would otherwise cause horizontal page overflow on a phone-width
+  viewport (a real, confirmed bug on `/` before this fix: `document.documentElement.scrollWidth`
+  exceeded `clientWidth` at 375px).
+- **Screen-reader summaries and accessible charts.** Every new dashboard
+  region has an explicit `aria-label` (Status, Portfolio, per-section);
+  status/lane/freshness badges throughout the app already carry text
+  labels alongside color/icon (pre-existing `StatusPill`/`DecisionLaneBadge`/
+  `DataFreshnessBadge` convention, unchanged, reused here). Charts
+  (`CandlestickChart`/`EquityCurveChart`) are unchanged this revision —
+  no new chart type was introduced.
+- **Export, sorting, filtering.** Not newly added this revision beyond
+  what already existed (the morning plan's own Markdown export from
+  Revision Prompt 9, `GET /versions/{id}/export.md`); recorded as known
+  UX debt below rather than fabricated.
+
+## Known UX debt (Revision Prompt 15, 2026-08-10)
+
+Recorded honestly rather than silently deferred — these are real gaps a
+future pass should close:
+
+1. **No sorting/filtering controls on the dashboard itself.** Sections
+   render in the backend's own order with no column-sort or client-side
+   filter UI. The "show more" expansion for a capped section (Act Now)
+   is the only interactive list control added this revision.
+2. **No CSV/PDF export of the dashboard view itself** — only the
+   pre-existing morning-plan Markdown export (a different artifact, the
+   full plan version, not this rendered screen).
+3. **Expected-move magnitude is not shown separately from direction
+   confidence on dashboard cards**, despite Prompt 15 asking for both.
+   `card_detail.policy_result.confidence` is real and shown; a magnitude
+   figure isn't present in `MorningPlanItem.card_detail` for most card
+   types (only `UPCOMING_EVENTS` items carry a `days_remaining`, not a
+   move estimate) — adding it would mean joining
+   `EventExpectedMoveSnapshot` into `services/morning_plan_generate.py`,
+   a real backend change out of scope for this frontend-focused pass.
+   Confidence is never mislabeled as a probability or blended with a
+   magnitude in its place — it's simply omitted where unavailable,
+   consistent with this app's "never fabricate a missing figure" rule.
+4. **"Existing Positions" is a client-side derived section**, not a
+   first-class backend one — see the Morning Decision Dashboard entry
+   above. It works correctly for what the current holding-guidance
+   classification produces, but a future revision adding a dedicated
+   backend section key would be more architecturally honest than a
+   `lot_id`-presence filter.
+5. **The Approval Queue list page (`/approvals`, not `/approvals/[id]`)
+   remains an unwired R2 scaffold.** There is no `GET /api/v1/order-approvals?status=`
+   list endpoint on the backend — only get-by-id, so a real "queue" list
+   view isn't buildable without an additive backend endpoint. The
+   dashboard's own Approval Required section is the real, live
+   equivalent for now; the sidebar's "Approval Queue" link still points
+   at unwired placeholder content.
+6. **`/strategy-versions` has no backend at all** — not a wiring bug
+   like the three fixed this revision (`/portfolio`, `/symbols`,
+   `/legacy-dashboard`, all previously calling nonexistent endpoint
+   prefixes, now pointed at the real `/api/v1/portfolio/accounts/*`,
+   `/api/v1/instruments`, `/api/v1/market/instruments/*`, and
+   `/api/v1/orders`), but a genuinely unbuilt feature (no propose/
+   approve/compare router is mounted anywhere in `main.py`). Flagged
+   separately rather than built in this pass — a real new backend
+   feature, out of scope for a UX pass.
+7. **Accessibility was verified structurally** (roles, labels, focus
+   order, keyboard-operability of every new control, mobile overflow)
+   but **not run through an automated axe-core/Lighthouse audit** — this
+   revision's checks were manual/DOM-inspection based via the available
+   browser tooling, not a formal automated accessibility test suite.

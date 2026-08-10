@@ -1,10 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
-import { getPortfolio, getReconciliation } from "@/lib/api/portfolio";
+import { getAccountDetail, listReconciliationRuns } from "@/lib/api/portfolio";
 
-export function usePortfolio() {
-  return useQuery({ queryKey: ["portfolio"], queryFn: getPortfolio });
+export function useAccountDetail(accountId: string | undefined) {
+  return useQuery({
+    queryKey: ["portfolio", "accounts", accountId],
+    queryFn: () => getAccountDetail(accountId as string),
+    enabled: Boolean(accountId),
+  });
 }
 
-export function useReconciliation() {
-  return useQuery({ queryKey: ["portfolio", "reconciliation"], queryFn: getReconciliation });
+export function useReconciliationRuns(accountId: string | undefined) {
+  return useQuery({
+    queryKey: ["portfolio", "accounts", accountId, "reconciliation-runs"],
+    queryFn: () => listReconciliationRuns(accountId as string),
+    enabled: Boolean(accountId),
+  });
 }

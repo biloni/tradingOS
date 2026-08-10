@@ -60,6 +60,7 @@ def _version_response(db: Session, version: RecommendationVersion) -> Recommenda
         rationale=version.rationale,
         generated_at=version.generated_at,
         levels=[RecommendationLevelResponse.model_validate(level_) for level_ in levels],
+        committee_session_id=version.committee_session_id,
     )
 
 
@@ -92,6 +93,22 @@ def list_recommendations(
             )
         )
     return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/versions/{version_id}", response_model=RecommendationVersionResponse)
+def get_recommendation_version(
+    version_id: uuid.UUID, db: Session = Depends(get_db)
+) -> RecommendationVersionResponse:
+    """Revision Prompt 15 — the dashboard's `MorningPlanItem` only carries
+    `recommendation_version_id` (docs/MORNING_PLAN_SPEC.md's job-lineage
+    manifest is version-scoped, never a bare recommendation id), so the
+    evidence/audit drill-in needs to resolve a version directly rather
+    than through its parent `Recommendation`. Read-only; reuses
+    `_version_response()` verbatim."""
+    version = db.get(RecommendationVersion, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Recommendation version not found.")
+    return _version_response(db, version)
 
 
 @router.get("/{recommendation_id}", response_model=RecommendationSummaryResponse)

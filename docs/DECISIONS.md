@@ -2374,3 +2374,103 @@ in this schema. Every segmentation axis that has no real data path in
 this dev environment (event timing, most sector bins) honestly reports
 zero or inadequate bins rather than a guessed rate — `scripts/demo_prompt14.py`
 shows this directly rather than curating a friendlier synthetic sample.
+
+## ADR-065: Revision Prompt 15's dashboard rebuild surfaced three real frontend/backend contract mismatches pre-dating this revision, fixed as scoped bug fixes rather than left broken; the dashboard's own new gaps (a client-derived section, an honest order-authority lookup, an upfront operating-mode block) were each resolved by extending existing state rather than inventing new trading logic
+
+**Context.** Prompt 15 asks for a focused UX pass on the Morning Decision
+Dashboard "without changing validated trading logic." Building it
+against real data (rather than continuing `app/page.tsx`'s Revision
+Prompt R2 static scaffold) required live-verifying the app in a browser
+— which surfaced that several *other*, already-"shipped" pages were
+themselves calling backend endpoints that don't exist, a pre-existing
+defect this revision's own verification work happened to uncover.
+
+**Decision 1 — three real 404s, diagnosed and fixed, not worked around.**
+`/portfolio`, `/legacy-dashboard`, and `/symbols`/`/symbols/[ticker]`
+were calling `/api/v1/portfolio`, `/api/v1/paper-orders*`, and
+`/api/v1/symbols*` — none of which exist on the current backend
+(confirmed by grepping every `router = APIRouter(prefix=...)` and
+`main.py`'s `include_router` calls). These are leftover references to
+an earlier backend generation (integer-PK `PaperOrder`/`Symbol` types in
+`lib/api/paperOrders.ts`/`symbols.ts` are the tell — every current
+schema uses UUID primary keys). Rewired to the real, already-shipped
+endpoints instead of adding parallel new ones: `/api/v1/portfolio/accounts/*`
+(Revision Prompt 8), `/api/v1/orders` (the real order lifecycle router,
+distinct from the phantom paper-orders path), and
+`/api/v1/instruments` + `/api/v1/market/instruments/{ticker}/*`
+(Revision Prompt 4). `tests/portfolio.test.tsx` and
+`tests/legacy-dashboard.test.tsx` were themselves mocking the phantom
+endpoints — which is exactly why the bug went undetected: the test
+doubles reimplemented the fictional contract instead of the documented
+real one. Rewritten against the real contracts; `Symbol.id`'s type
+(`number` → `string`) fixed alongside it for the same reason.
+
+**Decision 2 — `/strategy-versions` is flagged, not fixed.** Unlike the
+three above, no propose/approve/compare router for `StrategyVersion`
+exists anywhere in `main.py`'s router list — not a wrong URL, a
+genuinely unbuilt feature. Building it would be new backend surface
+unrelated to a UX pass; flagged as known UX debt
+(docs/UX_MAP.md) and as a separate, explicitly-scoped follow-up task
+rather than built unprompted mid-revision.
+
+**Decision 3 — the dashboard's "Approval Required" cards report real
+order-authority state instead of a hardcoded placeholder.**
+`services/morning_plan_generate.py` previously wrote
+`card_detail.user_broker_state = {"approval_state": "NOT_YET_PROPOSED"}`
+unconditionally for every recommendation-backed card — never checking
+whether a real `OrderProposal`/`OrderApproval` already existed for that
+`recommendation_version_id` (created by `services/recommendation_pipeline.py`,
+Revision Prompt 7's own tactical-post-confirmation path). A dashboard
+claiming "not yet proposed" when a real `PENDING` approval sits one
+click away is exactly the kind of dishonest state
+docs/MORNING_PLAN_SPEC.md's `COMPLETE`/`INCOMPLETE` labeling discipline
+argues against elsewhere in the same module. `_order_authority_state()`
+(new, read-only — creates nothing, decides nothing) looks up the real
+latest `OrderProposal` → `OrderProposalVersion` → `OrderApproval` chain
+and reports its actual status. This is presentation-layer truth-telling,
+not new trading logic: no proposal, approval, or order is ever created
+by this lookup.
+
+**Decision 4 — "Existing Positions" is a client-side cross-cut, not a
+new backend section.** Prompt 15 names it as a primary-layout section
+distinct from Buy and Hold/Tactical Earnings; the backend has no
+matching `MorningPlanSectionKey` (an open lot's guidance action already
+routes it into one of the existing action sections). Rather than adding
+a new backend classification path — real scope creep for a UX-only
+pass — `app/page.tsx::existingPositions()` filters the sections it
+already has for `card_detail.evidence.lot_id` presence. A held symbol
+can appear in both its action section and here at once, deliberately
+mirroring the "two distinct entries, never merged" rule
+docs/MORNING_PLAN_SPEC.md already applies to dual Investment/Tactical
+identity — recorded as known UX debt (docs/UX_MAP.md) rather than
+presented as an equivalent, first-class backend concept.
+
+**Decision 5 — the order-approval page blocks submission *before* the
+two-click confirm dance when it's known in advance to be impossible,
+not after.** Live-testing the full approve→refresh→submit flow against
+a real `OrderApproval` (created via the real API, not a mock) surfaced
+that this dev environment's global operating mode is `RESEARCH_ONLY` —
+under which `submit_order_approval()` correctly, and unavoidably, denies
+every submission (`"RESEARCH_ONLY cannot create broker orders"`). The
+first implementation let a user click Submit, confirm a second time,
+and *then* discover this. Since `GET /api/v1/settings/operating-mode`
+already exposes `can_submit_orders`, `app/approvals/[id]/page.tsx` now
+checks it immediately after approval and shows a clear, immediate
+explanation instead of the refresh/submit UI at all — the same "publish
+`INCOMPLETE` rather than let the user discover it the hard way"
+philosophy this project already applies to the morning plan itself,
+applied here to a different kind of foreseeable dead end. A second,
+separate live test against a broker-backed `PAPER_ALPACA` account (not
+`MANUAL`) proved the real hard block that fires when an account genuinely
+isn't broker-backed (`assert_broker_boundary_is_paper()`, OA-6) — both
+paths were verified against the real backend, not assumed from reading
+the code.
+
+**Consequences.** Every fix in this ADR is either (a) pointing an
+existing frontend call at an existing, already-correct backend endpoint,
+or (b) exposing already-computed backend state more honestly — no
+existing trading/scoring/sizing/policy logic changed. `tests/order-approval.test.tsx`
+(6 tests) and the updated `tests/portfolio.test.tsx`/`tests/legacy-dashboard.test.tsx`
+lock in the corrected contracts; docs/UX_MAP.md's new "Known UX debt"
+section keeps the two deliberately-deferred gaps (the Approval Queue
+list page, `/strategy-versions`) visible rather than silently dropped.

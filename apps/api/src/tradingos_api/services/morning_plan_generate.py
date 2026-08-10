@@ -54,6 +54,7 @@ from tradingos_api.models.morning_plan import (
     MorningPlanSection,
     MorningPlanVersion,
 )
+from tradingos_api.models.order_authority import OrderApproval, OrderProposal, OrderProposalVersion
 from tradingos_api.models.recommendations import Recommendation, RecommendationVersion
 from tradingos_api.models.security_master import Instrument, WatchlistItem
 from tradingos_api.services.holding_guidance import (
@@ -402,7 +403,7 @@ def generate_morning_plan(
                 "lane_action": candidate.lane_action,
                 "confidence": candidate.version.confidence.value,
             },
-            "user_broker_state": {"approval_state": "NOT_YET_PROPOSED"},
+            "user_broker_state": _order_authority_state(db, candidate.version.id),
         }
         section_items[candidate_section_key].append(
             MorningPlanItem(
@@ -560,3 +561,45 @@ def _classify_recommendation(
     if lane_action in _AVOID_TACTICAL:
         return MorningPlanSectionKey.WATCH_AND_AVOID
     return None
+
+
+def _order_authority_state(db: Session, recommendation_version_id: uuid.UUID) -> dict[str, Any]:
+    """Revision Prompt 15 — the dashboard's Approval Required cards must
+    reflect whatever `OrderProposal`/`OrderApproval` actually exists for
+    a recommendation, not a hardcoded placeholder: a card claiming
+    `NOT_YET_PROPOSED` when a real `PENDING` approval is sitting one
+    click away would be exactly the kind of dishonest dashboard state
+    docs/MORNING_PLAN_SPEC.md's `COMPLETE`/`INCOMPLETE` labeling
+    discipline argues against elsewhere in this same module. Read-only:
+    looks up existing rows, creates nothing, changes no trading
+    decision — `services/recommendation_pipeline.py` remains the only
+    code path that ever creates an `OrderProposal`."""
+    proposal = db.scalar(
+        select(OrderProposal)
+        .where(OrderProposal.recommendation_version_id == recommendation_version_id)
+        .order_by(OrderProposal.created_at.desc())
+    )
+    if proposal is None:
+        return {"approval_state": "NOT_YET_PROPOSED"}
+
+    latest_proposal_version = db.scalar(
+        select(OrderProposalVersion)
+        .where(OrderProposalVersion.order_proposal_id == proposal.id)
+        .order_by(OrderProposalVersion.version_number.desc())
+    )
+    if latest_proposal_version is None:
+        return {"approval_state": proposal.status.value, "order_proposal_id": str(proposal.id)}
+
+    approval = db.scalar(
+        select(OrderApproval)
+        .where(OrderApproval.order_proposal_version_id == latest_proposal_version.id)
+        .order_by(OrderApproval.requested_at.desc())
+    )
+    if approval is None:
+        return {"approval_state": proposal.status.value, "order_proposal_id": str(proposal.id)}
+
+    return {
+        "approval_state": approval.status.value,
+        "order_proposal_id": str(proposal.id),
+        "order_approval_id": str(approval.id),
+    }

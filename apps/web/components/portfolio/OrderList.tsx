@@ -6,30 +6,22 @@ import { Button } from "@/components/ui/Button";
 import { ConfirmButton } from "@/components/ui/ConfirmButton";
 import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
-import {
-  useCancelOrder,
-  useConfirmOrder,
-  usePaperOrders,
-  useRefreshOrder,
-} from "@/lib/hooks/usePaperOrders";
+import { useCancelOrder, useConfirmOrder, useOrders } from "@/lib/hooks/usePaperOrders";
 
-const NON_TERMINAL = new Set(["SUBMITTED", "PARTIALLY_FILLED"]);
-
-export function OrderList() {
-  const orders = usePaperOrders();
-  const confirm = useConfirmOrder();
-  const cancel = useCancelOrder();
-  const refresh = useRefreshOrder();
+export function OrderList({ accountId }: { accountId: string | undefined }) {
+  const orders = useOrders(accountId);
+  const confirm = useConfirmOrder(accountId);
+  const cancel = useCancelOrder(accountId);
 
   if (orders.isLoading) return <LoadingSpinner label="Loading orders…" />;
   if (orders.error) return <ErrorBanner error={orders.error} />;
-  if (!orders.data || orders.data.length === 0) {
-    return <p className="text-sm text-zinc-500 dark:text-zinc-400">No paper orders yet.</p>;
+  if (!orders.data || orders.data.items.length === 0) {
+    return <p className="text-sm text-zinc-500 dark:text-zinc-400">No orders yet.</p>;
   }
 
   return (
     <div className="flex flex-col gap-3">
-      <ErrorBanner error={confirm.error ?? cancel.error ?? refresh.error} />
+      <ErrorBanner error={confirm.error ?? cancel.error} />
       <Table>
         <Thead>
           <Tr>
@@ -44,25 +36,28 @@ export function OrderList() {
           </Tr>
         </Thead>
         <Tbody>
-          {orders.data.map((order) => (
-            <Tr key={order.id}>
-              <Td className="font-medium">{order.ticker}</Td>
-              <Td>{order.side}</Td>
-              <Td>
-                {order.filled_quantity}/{order.quantity}
-              </Td>
-              <Td>{order.order_type}</Td>
-              <Td>
-                <StatusPill status={order.status} />
-              </Td>
-              <Td>
-                {order.filled_avg_price ? `$${Number(order.filled_avg_price).toFixed(2)}` : "—"}
-              </Td>
-              <Td>{new Date(order.created_at).toLocaleString()}</Td>
-              <Td>
-                <div className="flex justify-end gap-2">
+          {orders.data.items.map((order) => {
+            const filledAvg =
+              order.executions.length > 0
+                ? (
+                    order.executions.reduce((sum, e) => sum + Number(e.price) * Number(e.quantity), 0) /
+                    order.executions.reduce((sum, e) => sum + Number(e.quantity), 0)
+                  ).toFixed(2)
+                : null;
+            return (
+              <Tr key={order.id}>
+                <Td className="font-medium">{order.instrument.ticker}</Td>
+                <Td>{order.side}</Td>
+                <Td>{order.quantity}</Td>
+                <Td>{order.order_type}</Td>
+                <Td>
+                  <StatusPill status={order.status} />
+                </Td>
+                <Td>{filledAvg ? `$${filledAvg}` : "—"}</Td>
+                <Td>{new Date(order.created_at).toLocaleString()}</Td>
+                <Td>
                   {order.status === "DRAFT" && (
-                    <>
+                    <div className="flex justify-end gap-2">
                       <ConfirmButton
                         label="Confirm"
                         onConfirm={() => confirm.mutate(order.id)}
@@ -75,21 +70,12 @@ export function OrderList() {
                       >
                         Cancel
                       </Button>
-                    </>
+                    </div>
                   )}
-                  {NON_TERMINAL.has(order.status) && (
-                    <Button
-                      variant="secondary"
-                      onClick={() => refresh.mutate(order.id)}
-                      disabled={refresh.isPending}
-                    >
-                      Refresh
-                    </Button>
-                  )}
-                </div>
-              </Td>
-            </Tr>
-          ))}
+                </Td>
+              </Tr>
+            );
+          })}
         </Tbody>
       </Table>
     </div>

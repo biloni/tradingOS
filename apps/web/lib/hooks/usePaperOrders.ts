@@ -2,64 +2,51 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelOrder,
   confirmOrder,
-  getOrder,
+  createOrder,
   listOrders,
-  proposeOrder,
-  refreshOrder,
+  type CreateOrderInput,
 } from "@/lib/api/paperOrders";
 
-export function usePaperOrders() {
-  return useQuery({ queryKey: ["paper-orders"], queryFn: listOrders });
-}
-
-export function usePaperOrder(id: number) {
+export function useOrders(accountId: string | undefined) {
   return useQuery({
-    queryKey: ["paper-orders", id],
-    queryFn: () => getOrder(id),
-    enabled: Number.isFinite(id),
+    queryKey: ["orders", accountId],
+    queryFn: () => listOrders(accountId as string),
+    enabled: Boolean(accountId),
   });
 }
 
-/** A confirm/cancel/refresh can change both the order and the derived
+/** A confirm/cancel/create can change both the order and the derived
  * portfolio (cash/positions), so every mutation here invalidates both
  * domains rather than just its own — avoids showing stale cash/position
  * figures right after an action that just changed them. */
-function useInvalidateOrdersAndPortfolio() {
+function useInvalidateOrdersAndPortfolio(accountId: string | undefined) {
   const queryClient = useQueryClient();
   return () => {
-    void queryClient.invalidateQueries({ queryKey: ["paper-orders"] });
-    void queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+    void queryClient.invalidateQueries({ queryKey: ["orders", accountId] });
+    void queryClient.invalidateQueries({ queryKey: ["portfolio", "accounts", accountId] });
   };
 }
 
-export function useProposeOrder() {
-  const invalidate = useInvalidateOrdersAndPortfolio();
+export function useCreateOrder(accountId: string | undefined) {
+  const invalidate = useInvalidateOrdersAndPortfolio(accountId);
   return useMutation({
-    mutationFn: proposeOrder,
+    mutationFn: (input: CreateOrderInput) => createOrder(input),
     onSuccess: invalidate,
   });
 }
 
-export function useConfirmOrder() {
-  const invalidate = useInvalidateOrdersAndPortfolio();
+export function useConfirmOrder(accountId: string | undefined) {
+  const invalidate = useInvalidateOrdersAndPortfolio(accountId);
   return useMutation({
-    mutationFn: confirmOrder,
+    mutationFn: (id: string) => confirmOrder(id),
     onSuccess: invalidate,
   });
 }
 
-export function useRefreshOrder() {
-  const invalidate = useInvalidateOrdersAndPortfolio();
+export function useCancelOrder(accountId: string | undefined) {
+  const invalidate = useInvalidateOrdersAndPortfolio(accountId);
   return useMutation({
-    mutationFn: refreshOrder,
-    onSuccess: invalidate,
-  });
-}
-
-export function useCancelOrder() {
-  const invalidate = useInvalidateOrdersAndPortfolio();
-  return useMutation({
-    mutationFn: cancelOrder,
+    mutationFn: (id: string) => cancelOrder(id),
     onSuccess: invalidate,
   });
 }

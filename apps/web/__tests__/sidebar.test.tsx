@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
@@ -61,6 +62,55 @@ describe("Sidebar navigation", () => {
     expect(screen.getByRole("link", { name: "Morning Dashboard" })).toHaveAttribute(
       "aria-current",
       "page",
+    );
+  });
+});
+
+/**
+ * Revision Prompt 15 — mobile layout must not let the sidebar eat the
+ * whole viewport. Below `md`, the nav is an off-canvas drawer closed by
+ * default; these tests don't assert on the CSS breakpoint itself
+ * (jsdom has no real viewport), only on the toggle's actual open/close
+ * behavior and its accessible state.
+ */
+describe("Sidebar mobile off-canvas toggle", () => {
+  it("starts closed and opens on toggle, with aria-expanded reflecting state", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar />);
+
+    const toggle = screen.getByRole("button", { name: "Open navigation menu" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("closes when a nav link is activated, so navigating doesn't leave the drawer open", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Open navigation menu" }));
+    expect(screen.getByRole("button", { name: "Open navigation menu" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    await user.click(screen.getByRole("link", { name: "Portfolio" }));
+    expect(screen.getByRole("button", { name: "Open navigation menu" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("closes via the explicit close button", async () => {
+    const user = userEvent.setup();
+    render(<Sidebar />);
+
+    await user.click(screen.getByRole("button", { name: "Open navigation menu" }));
+    await user.click(screen.getByRole("button", { name: "Close navigation menu" }));
+    expect(screen.getByRole("button", { name: "Open navigation menu" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
     );
   });
 });

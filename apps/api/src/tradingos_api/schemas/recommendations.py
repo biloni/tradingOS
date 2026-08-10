@@ -36,6 +36,11 @@ class RecommendationVersionResponse(BaseModel):
     rationale: str
     generated_at: datetime
     levels: list[RecommendationLevelResponse]
+    committee_session_id: uuid.UUID | None = None
+    """Revision Prompt 15 — the one-click path from a recommendation to
+    its committee's per-role opinions (`GET .../committee-sessions/{id}`).
+    Read-only exposure of an already-existing column; adds no new
+    computation and changes no trading decision."""
 
 
 class RecommendationSummaryResponse(BaseModel):

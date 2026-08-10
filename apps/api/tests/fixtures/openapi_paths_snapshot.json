@@ -681,6 +681,12 @@
     ]
   ],
   [
+    "/api/v1/recommendations/versions/{version_id}",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/recommendations/{recommendation_id}",
     [
       "get"
