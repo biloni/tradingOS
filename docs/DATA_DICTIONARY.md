@@ -560,6 +560,49 @@ module docstring for the split against the workflow's alert types).
 (idempotent by `(earnings_event_id, metric, source)`, the same pattern
 every other `ingest_*` function in that module already uses).
 
+## 18. Revision Prompt 12 — performance, decision quality, and recommendation-versus-reality analytics
+
+No new tables, columns, or enum values — every metric in this revision
+is derived on demand from data that already existed (`CashLedgerEntry`,
+`Execution`, `Trade`, `MarketBar`, `RecommendationAttribution`,
+`MorningPlanRun`/`MorningPlanVersion`, `OrderApproval`,
+`BrokerSubmissionAttempt`), matching this project's derived-never-stored
+philosophy (ADR-013) extended to portfolio-level reporting. There is no
+`PortfolioPerformanceSnapshot` table to fall out of sync with the ledger
+it summarizes.
+
+One exception, in the same spirit as Prompt 11's ADR-054 note
+("`RecommendationOutcome` existed but nothing populated it"):
+`HypotheticalTradeOutcome` (§7's schema fixture since Revision Prompt R3)
+is, for the first time, actually written to — by
+`services/recommendation_reality.py::compute_and_persist_hypothetical_outcome()`
+— for `IGNORED`/`EXPIRED`/`VETOED` recommendations, walking real
+`MarketBar` history forward from the recommended entry/stop/target
+levels. `PerformanceSnapshot`/`BenchmarkSnapshot`/
+`ConfidenceCalibrationRecord` remain unpopulated by live code (their
+seed-only status is unchanged); the equivalent live-computed figures
+are exposed instead through the new `services/performance_*.py`
+modules and `GET /api/v1/performance/*` endpoints (docs/API_CONTRACTS.md
+§25), which read the underlying facts directly rather than through
+those three tables.
+
+**New services** (all DB-session-free formulas live in one pure module,
+so the exact same math can later back Revision Prompt 13's backtest
+engine without a second implementation):
+`services/performance_metrics.py` (Sharpe/Sortino/drawdown/TWR/MWR/
+trade-stats/beta-alpha/turnover/concentration — every formula documented
+in its own docstring, no separate formulas doc duplicating them),
+`services/performance_portfolio.py` (`get_equity_curve()`,
+`get_portfolio_performance()` — the DB-aware layer feeding the pure
+module), `services/performance_strategy.py` (lane/pre-post-confirmation/
+score-band/sector/score-threshold-sensitivity/policy-veto breakdowns,
+all built on `compute_trade_stats()`), `services/recommendation_reality.py`
+(`compute_hypothetical_outcome()` + the table write above),
+`services/morning_plan_quality.py` (plan on-time/completeness rates,
+realized results by section, approval-to-submission conversion),
+`services/performance_coach.py` (the AI coach — see ADR-061 for the
+structural sample-size guardrail).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

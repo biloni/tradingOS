@@ -2618,3 +2618,120 @@ work. The 8 evidence types with no contracted vendor (including the new
 
 No new secrets this revision. `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 12 — performance, decision quality, and recommendation-versus-reality analytics (2026-08-09)
+
+### A real P&L calculation bug caught by a hand-computed test vector
+
+`compute_hypothetical_outcome()`'s first draft computed
+`pnl_pct = (exit_price - entry_bar[1]) / entry_price * 100` —
+`entry_bar[1]` is the entry bar's intrabar *low* (the price that merely
+proved the recommended entry zone was touched), not the recommended
+`entry_price` itself. A test expecting exactly `-5.00%` for a
+`entry_price=100`/`stop_price=95` known vector got `-4.00%` instead,
+because the entry bar's low (99) was silently substituted for the entry
+price (100) in the P&L subtraction. Exactly the class of bug "test every
+formula with known vectors" exists to catch — an off-by-one-variable
+substitution that a property-only test (e.g. "pnl is negative when the
+stop is hit") would never have surfaced. Fixed to subtract the actual
+`entry_price`; documented in the function's own inline comment ("a limit
+order fills at its limit price, not at whatever the intrabar low
+happened to be").
+
+### A real `since`-filter inconsistency bug in morning plan quality
+
+`get_morning_plan_quality_summary(db, *, since=None)`'s first draft
+applied `since` to the `MorningPlanRun` query only, not to the
+`MorningPlanVersion` ("final versions") or `MorningPlanQualityCheck`
+queries. A test passing `since=date(2099, 1, 1)` — expecting every
+statistic to report `None` (no runs exist that far in the future) —
+instead got `complete_final_rate_pct=Decimal('100')`, because the two
+unfiltered queries silently computed against all-time data regardless of
+`since`. Fixed by threading `since` through `final_versions_stmt` (via
+`MorningPlanVersion.plan_date >= since`) and `checks_stmt` (via an
+explicit join to `MorningPlanVersion.plan_date`) — a sparse-sample test
+category catching a real inconsistency, not just a missing-data edge case.
+
+### A design correction in approval-conversion, caught before it shipped
+
+An early draft of `get_approval_conversion()` computed "approved →
+actually submitted" via a self-referential subquery
+(`OrderProposalVersion.id.in_(select(OrderProposalVersion.id)...)`) that
+was circular and logically meaningless — caught during review, before
+any test was written against it, and replaced with a proper join through
+`BrokerSubmissionAttempt.order_approval_id` filtered on
+`outcome == BrokerSubmissionOutcome.SUCCEEDED`, the real signal for "did
+this approval actually result in a submitted order."
+
+### A `SessionLocal`-autoflush gotcha found writing the demo (not a service bug)
+
+See docs/STATUS.md's Revision Prompt 12 entry — `demo_prompt12.py`
+under-reported 11 trades instead of 12 on its first run because the
+script itself (not `services/performance_portfolio.py`) never flushed
+after the very last round trip's `apply_execution()` call, and
+`SessionLocal` is configured `autoflush=False`. Fixed in the demo
+script; re-verified against the full 12-trade set (`realized_pnl=530`,
+`win_rate_pct≈66.67`, matching the hand-summed pnls of all 12 round
+trips) on the next run.
+
+### The 6 required test categories
+
+| Category | Where covered |
+|---|---|
+| Known vectors | `test_performance_metrics.py` (31 tests — TWR chaining, IRR bisection, Sharpe/Sortino, drawdown/recovery, trade stats, beta/alpha, turnover, HHI) |
+| Cash flows | `test_performance_metrics.py::test_irregular_intermediate_cash_flow`; `test_performance_portfolio.py` (equity curve built from real `CashLedgerEntry` rows via manual fills) |
+| Sparse samples | `test_performance_metrics.py`'s `test_sparse_*` tests (single-flow IRR, single-return volatility/Sharpe, single-point drawdown, empty/single-sided trade stats, sparse beta); `test_morning_plan_quality.py`'s `since`-filter sparse test; `test_performance_coach.py::TestSampleSizeGuardrail` (0 trades, exactly-at-threshold) |
+| Open positions | `test_performance_portfolio.py::TestEquityCurveWithAnOpenPosition`, `TestSparsePortfolioSamples::test_open_position_pnl_excluded_from_trade_stats` — explicitly named as satisfying this required category in the test's own docstring |
+| Benchmark calendars | `test_performance_metrics.py::test_inner_join_drops_dates_only_one_side_has`, `test_no_overlapping_dates_returns_empty` (`align_return_series()`'s exact-inner-join contract) |
+| Hypothetical-fill edge cases | `test_recommendation_reality.py` (9 tests — entry never reached, entry reached outside the window, stop hit, target hit, stop/target same-bar ambiguity resolved conservatively, time exit, end-of-history mark, no-stop-or-target-configured, sparse DB-level PENDING) |
+
+### AI coach guardrail — proven structurally, not just by assertion on the output
+
+`test_performance_coach.py::TestSampleSizeGuardrail` uses a
+`_NeverCalledLLM` test double whose `complete()` raises `AssertionError`
+unconditionally — a test built specifically so that if
+`get_coach_summary()` ever called the LLM below the sample-size
+threshold, the test itself would fail loudly, rather than merely
+checking that the *returned* narrative happened to be `None`. Also
+covers: exactly-at-threshold is adequate, `llm=None` is accepted (never
+raises) when the caller already knows the sample is inadequate, an
+adequate sample with `llm=None` raises `ValueError` (a caller-contract
+violation, not a runtime state to degrade gracefully for), and a
+`LLMProviderNotConfigured` failure on an adequate sample degrades to a
+message rather than crashing. `test_performance_endpoints.py::TestCoachEndpoint`
+confirms the same at the HTTP layer: a `fresh_account` (0 trades) gets a
+`200` with `is_sample_adequate: false` in this test environment, which
+has no real `ANTHROPIC_API_KEY` configured — proof that the router's
+lazy `LLMProvider` resolution (ADR-061) actually works, not just that it
+compiles.
+
+### Demo
+
+`demo_prompt12.py` — the coach called against a 0-trade account (LLM
+never invoked), 12 real round-trip trades built through
+`apply_execution()` across mixed lanes/outcomes, the coach called again
+(adequate sample, `_FakeCoachLLM` invoked through the real
+`run_agent_role()` path), portfolio return/risk/drawdown/benchmark
+metrics, all 5 strategy breakdowns (including the honest 0-sample result
+for score-band/pre-post-confirmation since this demo's manual fills
+carry no `RecommendationAttribution`), a hypothetical-fill simulation
+for a real `Recommendation`+`RecommendationLevel` set walked forward
+over real `MarketBar` history, and the morning-plan-quality sparse
+result — run twice (once before, once after the autoflush fix above),
+both runs verified against hand-computed sums of the 12 trades' P&L.
+
+### Full suite
+
+508 passed, 0 failed (435 before this revision + 73 new/extended:
+`test_performance_metrics.py` 31, `test_performance_portfolio.py` 4,
+`test_performance_strategy.py` 4, `test_recommendation_reality.py` 9,
+`test_morning_plan_quality.py` 4, `test_performance_endpoints.py` 14
+(12 pre-existing + 2 new coach tests), `test_performance_coach.py` 7).
+`mypy src/` clean across 168 source files; `ruff check` clean across
+`src/` and `tests/`. `tests/fixtures/openapi_paths_snapshot.json`
+regenerated (108 → 109 paths, the new coach endpoint).
+
+### Secrets check before commit
+
+No new secrets this revision. `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

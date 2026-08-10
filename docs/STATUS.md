@@ -68,8 +68,83 @@ invalidation (ADR-059) and HES-6 enforcement, the active position
 monitor's 9 alert types, and the active-position-cards/event-timeline/
 confirmation-checklist/alert-center read screens; demonstrated
 end-to-end with a real Alpaca-backed market-data layer already live,
-no new paid vendor contracted for reported-results data).
+no new paid vendor contracted for reported-results data), and Revision
+Prompt 12 (performance, decision quality, and recommendation-versus-
+reality analytics, shipped — a shared DB-free statistics library backing
+both this revision's live-portfolio metrics and the not-yet-built
+Revision Prompt 13 backtest engine (ADR-062), portfolio/strategy/
+recommendation-vs-reality/morning-plan-quality read services and their
+16 endpoints plus 6 required charts, and an AI coach whose sample-size
+guardrail is a code gate before any LLM call, never a prompt instruction
+(ADR-061); no new schema — every metric is derived from data that
+already existed, except `HypotheticalTradeOutcome` which is written to
+for the first time).
 **Last updated:** 2026-08-09
+
+## Revision Prompt 12 (2026-08-09) — performance, decision quality, and recommendation-versus-reality analytics
+
+**Schema**: none — every metric is derived on demand from existing
+tables (ADR-013's derived-never-stored philosophy extended to portfolio
+reporting). One exception: `HypotheticalTradeOutcome` (a schema fixture
+since Revision Prompt R3) is written to for the first time, by
+`compute_and_persist_hypothetical_outcome()`. See
+docs/DATA_DICTIONARY.md §18 / docs/ER_DIAGRAM.md §22.
+
+**Services**: `services/performance_metrics.py` (the shared DB-free
+formula library — Sharpe/Sortino/drawdown/TWR/MWR/trade-stats/beta-
+alpha/turnover/concentration, deliberately shared in advance with
+Revision Prompt 13's backtest engine, ADR-062), `services/performance_portfolio.py`
+(`get_equity_curve()`/`get_portfolio_performance()`, reconstructing
+equity on demand from `CashLedgerEntry`/`Execution`/`MarketBar`),
+`services/performance_strategy.py` (lane/pre-post-confirmation/score-
+band/sector/score-threshold-sensitivity/policy-veto breakdowns),
+`services/recommendation_reality.py` (`compute_hypothetical_outcome()` —
+long-only, next-bar, no-look-ahead simulation reusing ADR-022's retired
+backtest engine's own "assume the worse outcome under same-bar stop/
+target ambiguity" discipline), `services/morning_plan_quality.py`
+(on-time/completeness/check-pass rates, realized results by section,
+approval-to-submission conversion), `services/performance_coach.py`
+(the AI coach — see ADR-061 for its structural sample-size guardrail).
+
+**Routers**: `routers/performance.py` extended with 16 new endpoints —
+portfolio, 5 strategy breakdowns, recommendation reality, 3 morning-plan-
+quality views, the AI coach, and 6 chart endpoints. See
+docs/API_CONTRACTS.md §25.
+
+**Tests**: 9 new/extended test files (`test_performance_metrics.py` — 31
+known-vector tests; `test_performance_portfolio.py`; `test_performance_strategy.py`;
+`test_recommendation_reality.py` — 9 hypothetical-fill edge cases;
+`test_morning_plan_quality.py`; `test_performance_endpoints.py` — 14
+router smoke tests; `test_performance_coach.py` — 7 tests proving the
+LLM is structurally never called below the sample-size threshold) — the
+6 required test categories (known vectors, cash flows, sparse samples,
+open positions, benchmark calendars, hypothetical-fill edge cases) all
+covered; full suite: 508 passed.
+
+**Demo**: `demo_prompt12.py` — the AI coach called against a 0-trade
+account (LLM never invoked, no API key needed) and again after 12 real
+round-trip trades are built through `apply_execution()` (adequate
+sample, LLM invoked through the same `run_agent_role()` guardrail every
+committee role uses), portfolio return/risk/drawdown/benchmark metrics,
+strategy breakdowns (including the honest 0-sample result for
+unattributed manual fills), a hypothetical-fill simulation for an
+`IGNORED` recommendation, and the morning-plan-quality sparse result —
+all against real Postgres state.
+
+**Bug found and fixed while writing the demo**: the demo script built 12
+round-trip trades via `apply_execution()` but only flushed after
+creating each `Order`/`Execution` row, not after `apply_execution()`
+itself — `SessionLocal` is configured with `autoflush=False`
+(`db/session.py`), so the very last round trip's `Trade.realized_pnl`/
+`status=CLOSED` mutation stayed pending in the session and was invisible
+to the immediately-following `get_portfolio_performance()` read (11
+trades reported instead of 12) even though every prior round trip's
+mutation had already been flushed incidentally by the *next* round
+trip's own `Order`/`Execution` inserts. Not a bug in
+`services/performance_portfolio.py`/`performance_metrics.py` (both read
+whatever is actually flushed correctly) — fixed by adding the missing
+`db.flush()` in the demo script itself, a `SessionLocal`-autoflush
+gotcha worth remembering for any future direct-session script.
 
 ## Revision Prompt 11 (2026-08-09) — active position monitor and post-earnings confirmation engine
 

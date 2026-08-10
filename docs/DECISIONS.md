@@ -2075,3 +2075,111 @@ migration (the enum value itself is a Postgres value that cannot be
 removed once added — an accepted, already-established limitation this
 project documents every time an enum value is added, e.g. ADR-056's
 downgrade notes).
+
+## ADR-061: The AI coach's sample-size guardrail is a code gate before the LLM call, not a prompt instruction — and the `LLMProvider` dependency is resolved lazily so a missing API key never blocks the common inadequate-sample path
+
+**Context.** Revision Prompt 12 requires: "the AI coach may summarize
+behavior only when the sample is adequate and must display sample size
+and uncertainty." A prompt-only implementation (tell the model "only
+summarize if you have enough data, and say so") is exactly the kind of
+instruction a model can silently ignore or rationalize past — this
+project's own guardrail philosophy elsewhere (`services/hard_vetoes.py`,
+ADR-051's "the deterministic veto is enforced in code... never only a
+prompt instruction") already rejects that pattern for trading decisions;
+the same reasoning applies to a data-adequacy claim.
+
+A second, narrower problem surfaced while wiring the endpoint:
+`routers/committee.py`'s established pattern resolves `LLMProvider` via
+`Depends(get_llm_provider)`, which raises a `503` at dependency-resolution
+time — before the endpoint body runs — whenever `ANTHROPIC_API_KEY` is
+absent (`core/dependencies.py::get_llm_provider()`'s own documented
+"missing key becomes a clear 503" behavior). For every existing
+committee/agent endpoint this is correct, because those endpoints always
+need the LLM. `GET /api/v1/performance/coach/{account_id}` is different:
+the common case (fewer than `MIN_SAMPLE_SIZE_FOR_SUMMARY` closed trades —
+true for essentially every account in this dev environment) never needs
+an LLM at all. Using the same `Depends` pattern unchanged would have
+made the coach endpoint 503 in the one case its own guardrail is
+designed to make safe and LLM-free.
+
+**Decision.** `services/performance_coach.py::get_coach_summary()`
+computes `sample_size` from `PortfolioPerformanceResult.trade_stats.num_trades`
+(itself sourced from real closed `Trade` rows, never the model's own
+output) and compares it to `MIN_SAMPLE_SIZE_FOR_SUMMARY` (10, a
+documented placeholder — no statistically-derived minimum exists yet for
+this project's own trade population) *before* doing anything else. Below
+the threshold, the function returns immediately with `narrative: None`
+and a fixed message — `run_agent_role()` (Revision Prompt 6's shared
+LLM-call guardrail) is never invoked in that branch, so a model cannot
+be prompted into fabricating a summary from data it never received,
+because it never runs.
+
+`routers/performance.py::get_coach_summary_view()` mirrors this at the
+transport layer: it computes `is_adequate` itself first, and only calls
+`get_llm_provider()` — which can raise the `503` — when the sample is
+already known to be adequate. `llm: LLMProvider | None` is threaded
+through `get_coach_summary()` accordingly; passing `llm=None` alongside
+an adequate sample is treated as a caller bug (`ValueError`, not a
+graceful degradation), since the router itself guarantees that never
+happens.
+
+`sample_size`/`is_sample_adequate` are always present on the response,
+computed the same deterministic way regardless of which branch ran — a
+caller never has to trust a number the model claims about its own input.
+
+**Consequences.** `GET /api/v1/performance/coach/{account_id}` returns
+`200` with an honest "insufficient sample" body for any account below
+the threshold, with or without `ANTHROPIC_API_KEY` configured — verified
+in `tests/test_performance_endpoints.py::TestCoachEndpoint` against a
+`fresh_account` fixture in a test environment with no real API key. The
+adequate-sample path still gets every guardrail `run_agent_role()`
+already provides to every committee role (cost ceiling, timeout,
+provider-not-configured/exception fallback, forced structured output) —
+no parallel LLM-calling path was built for this one feature. The
+trade-off: the router now contains a small piece of the same threshold
+logic the service function also checks (`is_adequate` computed twice,
+once per layer) rather than resolving `LLMProvider` unconditionally —
+an accepted duplication in exchange for never gating the sparse-sample
+path behind infrastructure the sparse-sample path doesn't need.
+
+## ADR-062: Portfolio-statistics formulas live in one DB-free module, shared in advance with the not-yet-built Revision Prompt 13 backtest engine
+
+**Context.** Before Revision Prompt 12, no Sharpe ratio, Sortino ratio,
+profit factor, expectancy, max-drawdown, or time-/money-weighted return
+existed anywhere in this codebase, live or retired (confirmed by grep
+before writing a single line — no prior implementation to reconcile
+against). Revision Prompt 12 needs these for the live-portfolio
+dashboard now; Revision Prompt 13 (event-driven backtesting and
+walk-forward validation, the next revision this project's own roadmap
+names) will need the *identical* formulas to score simulated trade
+sequences later. Building the live version against real
+`CashLedgerEntry`/`Execution`/`Trade` rows and, separately, a backtest
+version against simulated fills would produce two implementations of
+"what is a Sharpe ratio" that could silently drift apart — one revision
+fixing a bug in its own copy without the other ever finding out.
+
+**Decision.** `services/performance_metrics.py` holds every statistical
+formula as a pure function over plain `Decimal`/`date` inputs — no ORM
+import, no `Session` parameter, no knowledge that a `Trade` or a
+`CashLedgerEntry` table exists. `services/performance_portfolio.py` and
+`services/performance_strategy.py` are the only modules that translate
+real schema rows into the plain lists/`Decimal`s this module consumes;
+Revision Prompt 13's backtest engine, whenever it is built, is expected
+to be the second (and, by design, only other) caller — translating
+simulated fills into the same plain inputs rather than reimplementing
+`sharpe_ratio()`/`max_drawdown()`/`compute_trade_stats()` against its own
+data shape. `CALCULATION_VERSION = "v1"` is exposed for whichever caller
+wants to stamp a result with the formula version that produced it, the
+same convention `services/analytics.py` already established.
+
+**Consequences.** A future change to, say, the annualization convention
+in `sharpe_ratio()` automatically applies to both the live dashboard and
+any backtest run built on top of it — there is exactly one place to fix
+a formula bug, and exactly one set of 31 known-vector tests
+(`tests/test_performance_metrics.py`) guarding it. The cost: this module
+must stay strictly DB-free forever, which constrains what it can
+express — anything that needs a database lookup (which trades belong to
+which account, what the benchmark's return was on a given date) has to
+be resolved by the caller *before* calling in, never inside. This is the
+same boundary discipline `services/analytics.py` already enforces for
+technical indicators, extended here to portfolio-level statistics.

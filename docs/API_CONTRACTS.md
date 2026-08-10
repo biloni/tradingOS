@@ -1027,3 +1027,78 @@ contribution to that existing endpoint is that
 `services/post_earnings_workflow.py` now actually calls
 `persist_post_earnings_confirmation()`, so it has real data to serve.
 **Response `404`** if no workflow run exists yet for this position.
+
+## 25. Performance, decision quality, and recommendation-versus-reality analytics (Revision Prompt 12)
+
+Extends existing `routers/performance.py` (previously the retired-era
+`performance_snapshots`/`benchmark_snapshots` read endpoints, untouched
+here) with the drill-down surfaces for every metric this revision adds.
+Every response schema mirrors its `services/performance_*.py` dataclass
+field-for-field (`from_attributes=True`) — never a second, independently
+drifting description of the same computation. Exact formulas are
+documented once, in `services/performance_metrics.py`'s own docstrings,
+not duplicated here or in a separate formulas doc.
+
+### `GET /api/v1/performance/portfolio/{account_id}?as_of=`
+
+Return/volatility/Sharpe/Sortino/drawdown-recovery/beta-alpha-vs-SPY/
+exposure-turnover-concentration/trade-stats/cash-history, all from
+`get_portfolio_performance()`. **`404`** if the account doesn't exist.
+
+### `GET /api/v1/performance/strategy/{account_id}/lane-contribution`
+### `GET /api/v1/performance/strategy/{account_id}/pre-post-confirmation`
+### `GET /api/v1/performance/strategy/{account_id}/score-band`
+### `GET /api/v1/performance/strategy/{account_id}/sector`
+### `GET /api/v1/performance/strategy/{account_id}/policy-vetoes`
+
+Five breakdowns of the account's closed `Trade` population, each a list
+of `{group_key, stats}` except `policy-vetoes` (a single aggregate). A
+group with zero trades is reported honestly with `num_trades: 0` and
+null ratios — `compute_trade_stats()`'s own contract — never a
+fabricated rate. Manual fills with no `RecommendationAttribution` row
+report under an explicit `"UNATTRIBUTED"` bucket in the
+pre-post-confirmation breakdown, never silently dropped.
+
+### `GET /api/v1/performance/recommendations/reality`
+
+Every `Recommendation` with whatever reality-tracking data exists for
+it — `disposition` is one of `FOLLOWED`/`IGNORED`/`MODIFIED`/`EXPIRED`/
+`VETOED`/`PENDING` (no outcome computed yet). `actual_pnl` is only ever
+set for `FOLLOWED`; `hypothetical_pnl_pct` only for the
+simulated-disposition set — the two are never blended into one number
+(Prompt 12's own "clear separation of actual, paper, and hypothetical
+performance").
+
+### `GET /api/v1/performance/morning-plan/quality?since=`
+### `GET /api/v1/performance/morning-plan/sections`
+### `GET /api/v1/performance/morning-plan/approval-conversion`
+
+Plan on-time/completeness/check-pass rates, realized results by
+dashboard section, and approval-to-actual-submission conversion (via
+`BrokerSubmissionAttempt.outcome == SUCCEEDED`, the real signal for "did
+this approval result in a submitted order" — not just "was it approved").
+
+### `GET /api/v1/performance/coach/{account_id}`
+
+The AI coach — "may summarize behavior only when the sample is adequate
+and must display sample size and uncertainty." `sample_size`/
+`is_sample_adequate` are always computed independently of the model,
+before any LLM call; below `MIN_SAMPLE_SIZE_FOR_SUMMARY` (10 closed
+trades) the LLM is never invoked at all, and this endpoint returns `200`
+with `narrative: null` even when `ANTHROPIC_API_KEY` is absent — see
+ADR-061. **`404`** if the account doesn't exist.
+
+### `GET /api/v1/performance/charts/equity-curve/{account_id}?days=`
+### `GET /api/v1/performance/charts/drawdown/{account_id}?days=`
+### `GET /api/v1/performance/charts/score-threshold-sensitivity/{account_id}`
+### `GET /api/v1/performance/charts/expected-vs-realized-move`
+### `GET /api/v1/performance/charts/calibration`
+### `GET /api/v1/performance/charts/morning-recommendation-funnel`
+
+Chart-ready series for Prompt 12's required chart list. `equity-curve`
+rebases the SPY benchmark series to the account's own starting equity so
+the two lines are visually comparable, never presented as the same
+dollar amount invested. `calibration` reports `sample_size: 0` (no
+`hit_rate_pct` key at all) for any `RecommendationConfidence` band with
+no closed, attributed trades yet — the live-computed equivalent of the
+still-seed-only `ConfidenceCalibrationRecord` concept.

@@ -1004,6 +1004,21 @@ by `services/order_execution.py`, never stored as its own column, and
 stays stable across every attempt for the same approval — what lets a
 real broker de-duplicate a resubmit after an ambiguous timeout.
 
+## 22. Revision Prompt 12 — performance, decision quality, and recommendation-versus-reality analytics
+
+No schema change — no new table, column, or enum value, and no table
+renamed or restructured. Every relationship this revision reads
+(`accounts` → `cash_ledger_entries`/`executions`/`trades`,
+`recommendation_attributions` → `recommendation_versions` →
+`recommendations`, `market_bars` by `instrument_id`+`timeframe`,
+`morning_plan_runs` → `morning_plan_versions`/`morning_plan_quality_checks`,
+`order_approvals` → `broker_submission_attempts`) already exists in
+§13/§14/§17/§18/§19/§20's diagrams above — nothing new to draw. The one
+behavioral change: `hypothetical_trade_outcomes` (§7's schema fixture,
+`recommendation_id FK`, previously unpopulated) is now actually written
+by `services/recommendation_reality.py` — see docs/DATA_DICTIONARY.md
+§18 and ADR-061.
+
 ## 21. Revision Prompt 11 — active position monitor and post-earnings confirmation engine
 
 Additive columns on `alerts`, plus two new tables. No table was
