@@ -8,6 +8,7 @@ from tradingos_api.models.agents import (
 )
 from tradingos_api.models.audit_event import AuditEvent
 from tradingos_api.models.backtest import BacktestRun, BacktestTrade
+from tradingos_api.models.backtest_v2 import EventBacktestRun, EventBacktestTrade
 from tradingos_api.models.enums import (
     AccountType,
     AgentRole,
@@ -28,6 +29,10 @@ from tradingos_api.models.enums import (
     EarningsRevisionDirection,
     EarningsTimingCategory,
     EnvironmentLabel,
+    EventBacktestDatasetSplit,
+    EventBacktestExitReason,
+    EventBacktestStrategyKey,
+    EventBacktestTradeLane,
     FeatureComponentStatus,
     FeeType,
     ImportRowStatus,
@@ -252,6 +257,12 @@ __all__ = [
     "EarningsRevisionDirection",
     "EarningsTimingCategory",
     "EnvironmentLabel",
+    "EventBacktestDatasetSplit",
+    "EventBacktestExitReason",
+    "EventBacktestRun",
+    "EventBacktestStrategyKey",
+    "EventBacktestTrade",
+    "EventBacktestTradeLane",
     "EventExpectedMoveSnapshot",
     "Execution",
     "ExecutionCorrection",

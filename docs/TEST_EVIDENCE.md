@@ -2735,3 +2735,112 @@ regenerated (108 → 109 paths, the new coach endpoint).
 
 No new secrets this revision. `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 13 — event-driven backtesting and walk-forward validation (2026-08-09)
+
+### The central data-availability finding, verified before any engine code was written
+
+A direct query against this dev environment's real schema, run before
+designing the backtest engine: `MarketBar` (DAILY timeframe) covers
+2026-05-01 to 2026-08-03 across 6 instruments (225 rows total);
+`EarningsEvent` covers 3 rows, dated 2026-07-29 to 2026-08-13. Prompt
+13's locked scenario asks for a 2026-02-03 to 2026-07-31 window
+producing ~25 scored trades; its validation section asks for "at least
+two years" with a train/validation/out-of-sample split. Neither is
+reachable from real data in this environment, by a wide margin —
+confirmed quantitatively, not assumed, before deciding to build
+`services/backtest_data.py`'s synthetic universe (ADR-063).
+
+### A real route-ordering bug found live-testing the endpoints, not caught by ruff/mypy
+
+`GET /api/v1/event-backtests/compare` returned `422
+{"detail":[{"type":"uuid_parsing", ..., "input":"compare"}]}` on first
+live test. Root cause: FastAPI/Starlette matches routes in registration
+order for same-depth paths, and `@router.get("/{run_id}", ...)` was
+registered before `@router.get("/compare", ...)` in the router source —
+every request to `/compare` was matched against the dynamic `/{run_id}`
+route first, with `"compare"` bound as the (invalid) `run_id` string.
+`/reports/baseline-reproduction` and `/reports/go-no-go` happened to
+work correctly despite the same ordering, only because they have two
+path segments after the prefix and `/{run_id}` only matches one — not
+by design, and not something to rely on. Fixed by moving `/compare` and
+both `/reports/*` routes ahead of `/{run_id}`/`/{run_id}/download` in
+the router file; documented in the router's own docstring on `/compare`
+so the ordering requirement doesn't silently regress.
+
+### A real missing-commit bug found in the same live-test pass
+
+Immediately after fixing the routing bug, a fresh `POST /run` → `GET
+/{run_id}` sequence against the running `TestClient` (no test fixtures,
+real independent requests) returned `404` for a run that had just been
+created with `201`. Root cause: `db/session.py::get_db()` does not
+auto-commit (confirmed by grep — every other router that writes calls
+`db.commit()` explicitly, e.g. `routers/portfolio.py` three times,
+`routers/monitoring.py` once); `trigger_backtest_run()` called
+`save_backtest_run()` (which only flushes) but never committed, so the
+write vanished when the request's session closed. Not caught by the
+pytest suite's own router tests because `tests/conftest.py`'s
+`client`/`db_session` fixtures share one connection via
+`join_transaction_mode="create_savepoint"`, which makes an in-test
+`db.commit()` a savepoint release visible to that same test's later
+requests regardless — this bug only manifests across genuinely separate
+connections, exactly the live-server case. Fixed by adding the missing
+`db.commit()`; re-verified with the exact same request sequence.
+
+### The required "no-look-ahead" test category
+
+`tests/test_backtest_engine.py::TestNoLookAhead` — three tests, each
+mutating a specific piece of "future" information and asserting the
+earlier evaluation is byte-identical: (1) mutating an event's own
+`actual_gap_pct` never changes that event's own score/expected-move/
+eligibility evaluation, (2) mutating a *later* event's `actual_gap_pct`
+never changes an *earlier* event's evaluation (`prior_gap_pcts` must
+only ever include strictly-earlier events), (3) mutating price bars
+strictly after an event's report date never changes that event's score
+(the score/expected-move/liquidity inputs are sliced through the report
+date's own close, never beyond it). All three constructed against a
+real generated universe via `dataclasses.replace()` on the frozen
+`SyntheticEarningsEvent`/`SyntheticInstrumentSeries` dataclasses, not a
+hand-rolled minimal fixture — proving the property against the actual
+data shape the engine consumes.
+
+### Golden/regression tests
+
+`tests/test_backtest_engine_golden.py` locks the exact locked-baseline-
+scenario configuration's current output: two runs of the identical
+config produce byte-identical trades and equity curves (reproducibility
+— the whole point of snapshotting `config` onto `EventBacktestRun`), a
+different seed produces a different result (proving the seed actually
+does something), and three golden figures are locked from a real run of
+this revision's code (29 trades, 8 wins/21 losses, final equity exactly
+equal to initial equity plus the sum of all realized trade P&L) — any
+future change to the engine, the synthetic generator, or any of the
+four reused live functions that silently changes this run's output will
+fail these tests immediately.
+
+### All 8 required strategy variants run end-to-end
+
+`tests/test_backtest_engine.py::TestFullRunAllStrategies` iterates every
+`EventBacktestStrategyKey` value through a real `run_backtest()` call
+and asserts structural invariants (equity curve starts at the configured
+initial equity, every trade's exit is on or after its entry, every
+trade's quantity is positive) — not full known-vector coverage per
+strategy, given all 8 build on the same allocator/exit-simulation
+mechanics already covered elsewhere, but a real end-to-end smoke check
+against the actual synthetic universe for every strategy, not a mock.
+
+### Full suite
+
+549 passed, 0 failed (508 before this revision + 41 new: `test_backtest_data.py`
+7, `test_backtest_engine.py` 14, `test_backtest_engine_golden.py` 5,
+`test_backtest_validation.py` 6, `test_event_backtests_endpoints.py` 9).
+`mypy src/` clean across 176 source files; `ruff check` clean across
+`src/` and `tests/`. `tests/fixtures/openapi_paths_snapshot.json`
+regenerated (109 → 116 paths, the 7 new event-backtest endpoints).
+Migration round-trip (`upgrade head` → `downgrade -1` → `upgrade head`)
+verified clean for `5078feb6e647_prompt13_event_backtest_engine`.
+
+### Secrets check before commit
+
+No new secrets this revision. `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

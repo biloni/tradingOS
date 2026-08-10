@@ -6,6 +6,7 @@ from tradingos_api.routers import (
     backtests,
     committee,
     earnings,
+    event_backtests,
     feature_diagnostics,
     health,
     instruments,
@@ -60,3 +61,4 @@ app.include_router(feature_diagnostics.router)
 app.include_router(committee.router)
 app.include_router(paper_auto_policy.router)
 app.include_router(monitoring.router)
+app.include_router(event_backtests.router)

@@ -1019,6 +1019,59 @@ behavioral change: `hypothetical_trade_outcomes` (§7's schema fixture,
 by `services/recommendation_reality.py` — see docs/DATA_DICTIONARY.md
 §18 and ADR-061.
 
+## 23. Revision Prompt 13 — event-driven backtesting and walk-forward validation
+
+Two new tables, additive. No existing table renamed or restructured;
+the legacy `backtest_runs`/`backtest_trades` (`strategy_version_id`-keyed)
+are untouched — see docs/DECISIONS.md ADR-063 for why this revision did
+not extend them.
+
+```mermaid
+erDiagram
+    event_backtest_runs ||--o{ event_backtest_trades : "backtest_run_id"
+    event_backtest_trades }o--|| instruments : instrument_id
+
+    event_backtest_runs {
+        uuid id PK
+        enum strategy_key "8 fixed variants"
+        enum dataset_split "FULL/TRAIN/VALIDATION/OUT_OF_SAMPLE"
+        string walk_forward_window_label "nullable"
+        date date_range_start
+        date date_range_end
+        json config "full BacktestRunConfig snapshot"
+        json results_summary "equity curve + trade stats + drawdown"
+        bool is_golden_regression
+    }
+    event_backtest_trades {
+        uuid id PK
+        uuid backtest_run_id FK
+        uuid instrument_id FK
+        enum lane "PRE_EVENT/POST_CONFIRMATION/CONTROL"
+        date event_date "nullable, NOT a FK"
+        string fiscal_period "nullable"
+        date entry_date
+        numeric entry_price
+        date exit_date
+        numeric exit_price
+        numeric quantity
+        numeric fees_usd
+        numeric pnl_usd "net of fees_usd"
+        numeric pnl_pct
+        enum exit_reason "STOP/TARGET/TIME_EXIT/END_OF_HISTORY"
+        numeric score "nullable"
+        numeric expected_move_pct "nullable"
+    }
+```
+
+**`event_date`/`fiscal_period` are plain columns, not a foreign key to
+`earnings_events`** — the synthetic multi-year event universe
+(`services/backtest_data.py`) has no corresponding real `EarningsEvent`
+rows, the same "never write simulated data into a real transactional
+table" principle ADR-024 already applies to `PaperOrder`. `instrument_id`
+IS a real FK: the synthetic price/earnings history is generated for this
+project's own already-seeded, sector-diverse `Instrument` rows, never
+invented tickers.
+
 ## 21. Revision Prompt 11 — active position monitor and post-earnings confirmation engine
 
 Additive columns on `alerts`, plus two new tables. No table was

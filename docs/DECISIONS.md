@@ -2183,3 +2183,96 @@ which account, what the benchmark's return was on a given date) has to
 be resolved by the caller *before* calling in, never inside. This is the
 same boundary discipline `services/analytics.py` already enforces for
 technical indicators, extended here to portfolio-level statistics.
+
+## ADR-063: Revision Prompt 13's backtest engine gets its own additive schema, a deterministic synthetic universe (honestly labeled), and reuses four live pure functions verbatim
+
+**Context.** Revision Prompt 13 asks for an event-driven backtester
+covering the exact live strategy versions, a locked regression scenario
+targeting ~25 trades/+3.32%/-1.67% drawdown/48% win rate/1.67 profit
+factor over 2026-02-03 to 2026-07-31, at least two years of validation
+data with a train/validation/out-of-sample split, and an explicit
+instruction: "do not force these results if the approved point-in-time
+provider differs. Explain every deviation." Three separate design
+questions had to be answered before any code was written.
+
+**Decision 1 — schema: additive new tables, not an extension of the
+legacy `BacktestRun`/`BacktestTrade`.** Those tables (Phase 8-era, ADR-043)
+carry a NOT NULL `strategy_version_id` FK to `strategy_versions` — the
+shipped MVP's *technical scoring-weight* governance concept, orthogonal
+to this revision's 8 fixed earnings-strategy variants — and their
+`BacktestTradeExitReason` vocabulary (`SIGNAL_EXIT`/`MAX_HOLDING_DAYS`)
+has no STOP/TARGET distinction. Forcing this revision's trades into that
+shape would mean either fabricating meaningless `StrategyVersion` rows
+for strategies with no scoring-weight concept (SPY buy-and-hold, EMA-
+cross) or silently blurring stop-outs and target-hits into one exit
+reason. `models/backtest_v2.py` adds `EventBacktestRun`/
+`EventBacktestTrade` instead — the same "wholesale-new-concept-when-the-
+old-shape-doesn't-fit" precedent this project already used for
+`morning_plan_runs`, `broker_submission_attempts`, and
+`post_earnings_workflow_runs`, scaled down to a single new bounded
+concept. The legacy tables are untouched and keep serving their own
+seed-fixture read screen (`routers/backtests.py`, still mounted at
+`/api/v1/backtests`).
+
+**Decision 2 — data: a deterministic synthetic universe, disclosed at
+every level rather than smoothed over.** This dev environment's real
+`MarketBar`/`EarningsEvent` coverage is ~3 months across 6 instruments
+with 3 total earnings events — confirmed by direct query before writing
+a line of engine code, and nowhere close to what the locked scenario or
+"at least two years" validation needs. `services/backtest_data.py`
+generates a seeded (default 42), reproducible 2-year/20-instrument
+universe instead — the same "real provider where available, synthetic
+fixture elsewhere, always documented" pattern this project already uses
+for evidence types with no real vendor (docs/PROVIDER_MATRIX.md),
+applied here for the first time to price/earnings *history* rather than
+a single day's snapshot. Critically, the synthetic earnings-gap
+generator injects no relationship between an event's score components
+and its subsequent price gap — so a backtest run against it exercises
+the engine's mechanics honestly (fills, sizing, caps, fees, no-look-
+ahead) without accidentally "proving" a fabricated edge. Every report
+this revision produces (`services/backtest_validation.py`'s go/no-go
+report, its own bias-and-quality-caveats list, and the API's
+`/reports/baseline-reproduction` endpoint) states this plainly rather
+than presenting synthetic-data results as if they validated the live
+strategy's real-world edge.
+
+**Decision 3 — code reuse: four pure live functions are called
+verbatim, never re-derived.** `compute_tactical_earnings_score()`
+(Revision Prompt 5), `compute_expected_move()` (Revision Prompt 5),
+`compute_tactical_position_size()` (Revision Prompt 7), and
+`compute_hypothetical_outcome()` (Revision Prompt 12) are each already
+pure, DB-free functions over plain inputs — exactly the shape a backtest
+engine needs, and exactly the "exact live strategy versions" the prompt
+asks for. `services/backtest_engine.py` translates the synthetic
+universe's bars/events into those functions' plain input shapes and
+uses their outputs unmodified; it does not re-implement scoring,
+expected-move selection, position sizing, or exit simulation a second
+time. The one deliberate exception — `evaluate_baseline_eligibility()`'s
+hardcoded `_MIN_DIRECTION_SCORE = 6` is re-expressed with a configurable
+threshold in `_passes_eligibility_gate()`, since testing score
+thresholds 4-7 is an explicit, incompatible-with-a-hardcoded-gate
+requirement of this revision — is documented in
+`services/backtest_engine.py`'s own module docstring.
+
+**Walk-forward means evaluating one fixed rule across three
+non-overlapping windows, not re-optimizing between them.**
+`services/backtest_validation.py::run_walk_forward()` runs the identical
+locked-baseline configuration against TRAIN (2024-08 to 2025-07),
+VALIDATION (2025-08 to 2026-01), and OUT_OF_SAMPLE (2026-02 to 2026-07)
+windows unchanged — there is no parameter search or re-fit step between
+windows. This validates temporal stability of a fixed rule, which is
+what "walk-forward evaluation" denotes in Prompt 13's own text; a
+re-optimizing walk-forward (the methodology walk-forward *analysis*
+usually refers to in the wider literature) is out of scope and would
+need its own design pass.
+
+**Consequences.** The go/no-go recommendation this revision's own report
+produces is, honestly, "reject pending more data" — 29 trades even over
+the widened 2-year synthetic window is below any reasonable sample size
+for a go-live decision, and the underlying data has no embedded
+predictive signal by construction. This is the correct, expected outcome
+given decisions 1-3 above, not a defect: the report's own text states
+explicitly that it validates the engine's mechanics, not the live
+strategy's real-world edge, and names re-running against real multi-year
+point-in-time data as the next required step before any paper-activation
+decision.

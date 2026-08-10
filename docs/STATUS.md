@@ -78,8 +78,90 @@ recommendation-vs-reality/morning-plan-quality read services and their
 guardrail is a code gate before any LLM call, never a prompt instruction
 (ADR-061); no new schema — every metric is derived from data that
 already existed, except `HypotheticalTradeOutcome` which is written to
-for the first time).
+for the first time), and Revision Prompt 13 (event-driven backtesting
+and walk-forward validation, shipped — an event-driven backtest engine
+reusing four already-pure live functions verbatim (tactical scoring,
+expected-move selection, position sizing, and Prompt 12's own exit-
+simulation walk, ADR-063), all 8 required strategy variants, a locked
+baseline-reproduction scenario run honestly against a deterministic
+synthetic universe with every deviation from the prompt's stated targets
+explained rather than forced, a full validation grid (score/expected-
+move/risk-budget sensitivity, lane-variant comparison, semiconductor-
+concentration subset, 3-window walk-forward), a go/no-go report, golden/
+regression tests, and 7 new API endpoints; this dev environment's real
+market/earnings history — ~3 months across 6 instruments, 3 total
+events — was nowhere near sufficient for the prompt's 2-year/~25-trade
+requirements, honestly disclosed rather than glossed over).
 **Last updated:** 2026-08-09
+
+## Revision Prompt 13 (2026-08-09) — event-driven backtesting and walk-forward validation
+
+**Schema**: 2 new tables (`event_backtest_runs`, `event_backtest_trades`),
+4 new enums — additive, no table renamed or restructured. The legacy
+`backtest_runs`/`backtest_trades` (Phase 8-era, `strategy_version_id`-keyed)
+are untouched; this revision did not extend them (ADR-063 explains why).
+See docs/DATA_DICTIONARY.md §19 / docs/ER_DIAGRAM.md §23.
+
+**The core finding, stated up front**: this dev environment's real
+`MarketBar`/`EarningsEvent` coverage (~3 months, 6 instruments, 3 total
+earnings events) is nowhere near what the locked baseline scenario
+(2026-02-03 to 2026-07-31, ~25 trades) or the "at least two years"
+validation requirement need. Rather than forcing a match against
+unreachable real-data targets, `services/backtest_data.py` generates a
+deterministic (seed=42), reproducible 2-year/20-instrument synthetic
+universe — reusing this project's own real, sector-diverse seeded
+`Instrument` rows for identity, synthetic for price/earnings history.
+The synthetic earnings-gap generator injects no relationship between an
+event's score and its subsequent gap, so backtest results validate the
+engine's mechanics honestly, never a fabricated live-strategy edge —
+every report this revision produces says so explicitly.
+
+**Services**: `services/backtest_data.py` (the synthetic universe
+generator), `services/backtest_engine.py` (`BacktestRunConfig`, the 8
+strategy dispatch functions, the chronological allocator enforcing
+position/sector/concurrency caps, `run_backtest()` — reuses
+`compute_tactical_earnings_score()`, `compute_expected_move()`,
+`compute_tactical_position_size()`, and Revision Prompt 12's
+`compute_hypothetical_outcome()` verbatim, ADR-063), `services/backtest_validation.py`
+(score/expected-move/risk-budget sweeps, lane-variant comparison,
+semiconductor-concentration subset, 3-window walk-forward with no
+re-optimization between windows, the go/no-go report),
+`services/backtest_persistence.py`.
+
+**Routers**: new `routers/event_backtests.py`, prefix
+`/api/v1/event-backtests` (distinct from the legacy `/api/v1/backtests`)
+— run/list/detail/compare/download plus two live reports
+(baseline-reproduction, go-no-go). See docs/API_CONTRACTS.md §26.
+
+**Tests**: 41 new tests — `test_backtest_data.py` (7, determinism),
+`test_backtest_engine.py` (14, eligibility-gate known vectors, the
+required no-look-ahead category — mutating an event's own or a later
+event's realized outcome never changes an earlier evaluation, exit-
+simulation wiring, allocator cap/fee enforcement, all 8 strategies run
+end-to-end), `test_backtest_engine_golden.py` (5, reproducibility across
+runs + locked figures for the current engine behavior), `test_backtest_validation.py`
+(6), `test_event_backtests_endpoints.py` (9); full suite: 549 passed.
+
+**Demo**: `demo_prompt13.py` — the locked baseline scenario compared
+against Prompt 13's own stated targets with the deviation explained, all
+8 strategies, the score-threshold sweep, 3-window walk-forward, one
+persisted run read back through the drill-down/download path, and the
+full go/no-go report (honest recommendation: reject for paper activation
+pending real multi-year data — the synthetic universe's 29 trades even
+over the widened window is below any reasonable sample size, and the
+data has no embedded predictive signal by construction).
+
+**Bug found and fixed live**: `GET /api/v1/event-backtests/compare` was
+originally registered after `GET /api/v1/event-backtests/{run_id}` —
+Starlette's route matching is order-sensitive for same-depth paths, so
+`/compare` was being swallowed as a `run_id` value (`422 uuid_parsing`
+on the literal string `"compare"`). Fixed by moving the static
+`/compare` and `/reports/*` routes ahead of the dynamic `/{run_id}`/
+`/{run_id}/download` routes in the router file. A second bug in the same
+pass: `POST /run` never called `db.commit()` (`get_db()` does not
+auto-commit, confirmed by grep of every other router), so a persisted
+run was invisible to any subsequent request outside the tests'
+savepoint-sharing fixture — fixed by adding the explicit commit.
 
 ## Revision Prompt 12 (2026-08-09) — performance, decision quality, and recommendation-versus-reality analytics
 

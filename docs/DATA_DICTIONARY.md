@@ -603,6 +603,42 @@ realized results by section, approval-to-submission conversion),
 `services/performance_coach.py` (the AI coach — see ADR-061 for the
 structural sample-size guardrail).
 
+## 19. Revision Prompt 13 — event-driven backtesting and walk-forward validation
+
+Additive: 2 new tables (`event_backtest_runs`, `event_backtest_trades`),
+4 new enums (`event_backtest_strategy_key` — the 8 fixed variants,
+`event_backtest_dataset_split` — FULL/TRAIN/VALIDATION/OUT_OF_SAMPLE,
+`event_backtest_exit_reason` — STOP/TARGET/TIME_EXIT/END_OF_HISTORY,
+`event_backtest_trade_lane` — PRE_EVENT/POST_CONFIRMATION/CONTROL). No
+existing table was renamed or restructured; the legacy `backtest_runs`/
+`backtest_trades` (Phase 8-era, `strategy_version_id`-keyed) are
+untouched and keep serving their own read-only seed-fixture screen —
+see docs/DECISIONS.md ADR-063 for why this revision did not extend them.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `event_backtest_runs` (new table) | `strategy_key` (enum), `dataset_split` (enum, default FULL), `walk_forward_window_label` (nullable), `date_range_start`/`date_range_end`, `config` (JSON — full `BacktestRunConfig` snapshot), `results_summary` (JSON — equity curve + `TradeStatsResult` + drawdown/Sharpe/Sortino/benchmark comparison), `is_golden_regression` (bool) | One row per simulation. `config` is the entire reproducibility contract (principle 8/9) — replaying the same config reproduces the same run given the same seed. |
+| `event_backtest_trades` (new table) | `backtest_run_id` FK, `instrument_id` FK (a real `Instrument` row — the synthetic universe reuses this project's own seeded, sector-diverse instruments), `lane` (enum), `event_date`/`fiscal_period` (nullable, NOT a FK — see below), `entry_date`/`entry_price`/`exit_date`/`exit_price`/`quantity`/`fees_usd`/`pnl_usd`/`pnl_pct`, `exit_reason` (enum), `score`/`expected_move_pct` (nullable) | One row per simulated trade, normalized for direct querying — the trade drill-down screen's data source. `pnl_usd` is already net of `fees_usd`. |
+
+**`event_date`/`fiscal_period` are plain columns, deliberately not a
+foreign key to `earnings_events`**: the synthetic multi-year event
+universe (`services/backtest_data.py`) does not correspond to real
+`EarningsEvent` rows — the same "never write simulated data into a real
+transactional table" principle ADR-024 already applies to `PaperOrder`,
+applied here to earnings events.
+
+**New services** (all pure/DB-light, reusing four already-pure live
+functions verbatim rather than re-deriving scoring/sizing/exit logic —
+see ADR-063): `services/backtest_data.py` (the deterministic synthetic
+universe generator, seed=42 default), `services/backtest_engine.py`
+(`BacktestRunConfig`, the 8 strategy dispatch functions, the
+chronological portfolio allocator enforcing position/sector/concurrency
+caps, `run_backtest()`), `services/backtest_validation.py` (score/
+expected-move/risk-budget sweeps, lane-variant comparison, semiconductor-
+concentration subset, 3-window walk-forward, the go/no-go report),
+`services/backtest_persistence.py` (save/list/get against the new
+tables).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

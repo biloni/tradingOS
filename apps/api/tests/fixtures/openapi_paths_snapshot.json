@@ -60,6 +60,48 @@
     ]
   ],
   [
+    "/api/v1/event-backtests",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/event-backtests/compare",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/event-backtests/reports/baseline-reproduction",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/event-backtests/reports/go-no-go",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/event-backtests/run",
+    [
+      "post"
+    ]
+  ],
+  [
+    "/api/v1/event-backtests/{run_id}",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/event-backtests/{run_id}/download",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/feature-diagnostics/components/{subject_type}/{subject_id}",
     [
       "get"

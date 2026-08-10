@@ -844,3 +844,64 @@ class PostEarningsWorkflowStatus(StrEnum):
     CONFIRMED = "CONFIRMED"
     FAILED = "FAILED"
     INVALIDATED = "INVALIDATED"
+
+
+class EventBacktestStrategyKey(StrEnum):
+    """Revision Prompt 12's own 8 required strategies — a fixed, closed
+    set (never a user-authored `StrategyVersion`-style config, which is
+    the orthogonal shipped-MVP scoring-weight-governance concept the
+    legacy `backtest_runs.strategy_version_id` FK points at). Each key
+    dispatches to one function in `services/backtest_engine.py`; adding
+    a 9th strategy means adding a 9th value here plus its function, never
+    overloading an existing key with a second meaning."""
+
+    SCORED_PRE_EARNINGS_BASELINE = "SCORED_PRE_EARNINGS_BASELINE"
+    CONSERVATIVE_SCORE_6 = "CONSERVATIVE_SCORE_6"
+    HYBRID_PRE_AND_POST = "HYBRID_PRE_AND_POST"
+    POST_CONFIRMATION_ONLY = "POST_CONFIRMATION_ONLY"
+    TRADE_EVERY_EARNINGS_CONTROL = "TRADE_EVERY_EARNINGS_CONTROL"
+    EMA_CROSS_COMPARISON = "EMA_CROSS_COMPARISON"
+    REGIME_PULLBACK_COMPARISON = "REGIME_PULLBACK_COMPARISON"
+    SPY_BUY_AND_HOLD = "SPY_BUY_AND_HOLD"
+
+
+class EventBacktestDatasetSplit(StrEnum):
+    """Which slice of the backtest universe's date range a run covers —
+    `FULL` for a single-window run (the locked baseline reproduction),
+    the other three for walk-forward evaluation's train/validate/hold-out
+    partition. Not a re-optimization scheme (no parameter search happens
+    between windows) — see docs/DECISIONS.md's Revision Prompt 13 ADR for
+    why walk-forward here means "evaluate the same fixed rule across
+    non-overlapping windows," not "re-fit and re-test.\""""
+
+    FULL = "FULL"
+    TRAIN = "TRAIN"
+    VALIDATION = "VALIDATION"
+    OUT_OF_SAMPLE = "OUT_OF_SAMPLE"
+
+
+class EventBacktestExitReason(StrEnum):
+    """Distinct from the legacy `BacktestTradeExitReason` (`SIGNAL_EXIT`/
+    `MAX_HOLDING_DAYS`/`END_OF_BACKTEST`, the shipped-MVP's simple
+    threshold-crossing rule) — this revision's strategies exit on an
+    explicit stop/target level or a fixed holding-period timer, the same
+    vocabulary `services/recommendation_reality.py`'s hypothetical-fill
+    simulation already uses (Revision Prompt 12), reused here rather than
+    invented a third time."""
+
+    STOP = "STOP"
+    TARGET = "TARGET"
+    TIME_EXIT = "TIME_EXIT"
+    END_OF_HISTORY = "END_OF_HISTORY"
+
+
+class EventBacktestTradeLane(StrEnum):
+    """`PRE_EVENT`/`POST_CONFIRMATION` mirror `LotLane`'s TACTICAL
+    two-stage entry (Revision Prompt 7's hybrid strategy); `CONTROL`
+    covers every non-earnings-driven comparison strategy (EMA-cross,
+    regime-pullback, SPY buy-and-hold) where "pre-event vs.
+    post-confirmation" has no meaning."""
+
+    PRE_EVENT = "PRE_EVENT"
+    POST_CONFIRMATION = "POST_CONFIRMATION"
+    CONTROL = "CONTROL"

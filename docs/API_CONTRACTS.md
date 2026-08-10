@@ -1102,3 +1102,72 @@ dollar amount invested. `calibration` reports `sample_size: 0` (no
 `hit_rate_pct` key at all) for any `RecommendationConfidence` band with
 no closed, attributed trades yet — the live-computed equivalent of the
 still-seed-only `ConfidenceCalibrationRecord` concept.
+
+## 26. Event-driven backtesting and walk-forward validation (Revision Prompt 13)
+
+New `routers/event_backtests.py`, prefix `/api/v1/event-backtests` —
+deliberately not `/api/v1/backtests` (area 11, the legacy read-only
+`BacktestRun`/`BacktestTrade` seed-fixture screen, untouched and left
+mounted). See docs/DECISIONS.md ADR-063 for why these are separate
+tables/routers rather than one extended, and for the synthetic-universe
+disclosure every report below carries.
+
+### `POST /api/v1/event-backtests/run`
+
+Runs and persists one backtest. The request body mirrors
+`services/backtest_engine.py::BacktestRunConfig` field-for-field —
+"reproducible run configuration": the exact body is snapshotted onto
+`EventBacktestRun.config`, so replaying it later reproduces the same
+run (given the same `seed`, which defaults to 42). Returns `201` with
+the full trade drill-down (every simulated trade) and equity curve.
+
+### `GET /api/v1/event-backtests?limit=&offset=`
+
+Paginated list of persisted runs (`schemas/common.py::Page`), newest first.
+
+### `GET /api/v1/event-backtests/{run_id}`
+
+The trade drill-down screen — full config snapshot, aggregate summary,
+equity curve, and every simulated trade for this run. **`404`** if the
+run doesn't exist.
+
+### `GET /api/v1/event-backtests/compare?run_ids=&run_ids=...`
+
+Side-by-side comparison of 2-8 persisted runs' summary metrics — the
+same `EventBacktestRun` rows the detail/download endpoints serve, never
+a separately recomputed comparison. **Registered before `/{run_id}`** in
+the router (a static path must be declared ahead of a same-depth dynamic
+path or Starlette's route matching swallows it as a `run_id` value —
+a real routing bug caught live during this revision, see
+docs/TEST_EVIDENCE.md). **`404`** if any listed run doesn't exist.
+
+### `GET /api/v1/event-backtests/{run_id}/download`
+
+Downloadable output — the run's full trade log as a CSV attachment
+(`Content-Disposition: attachment`).
+
+### `GET /api/v1/event-backtests/reports/baseline-reproduction`
+
+The locked regression scenario (2026-02-03 to 2026-07-31, score>=5,
+expected move>=4%), run live against the deterministic synthetic
+universe, reported alongside the same strategy/parameters over the full
+2-year synthetic window. `targets` echoes Prompt 13's own stated
+figures (~25 trades, +3.32%, -1.67% drawdown, 48% win rate, 1.67 profit
+factor) for direct comparison; `deviation_explanation` states plainly
+why the locked window's own trade count is too sparse to compare against
+them and why the widened window is reported alongside it. No run is
+persisted by this endpoint.
+
+### `GET /api/v1/event-backtests/reports/go-no-go`
+
+Runs the full validation grid live — all 8 strategies compared, score-
+threshold (4-7) and expected-move-threshold (3-6%) and risk-budget
+(0.25%/0.50%) sensitivity, pre-event-only/post-confirmation-only/hybrid
+lane comparison, a semiconductor-concentration subset, 3-window walk-
+forward (TRAIN/VALIDATION/OUT_OF_SAMPLE, no re-optimization between
+windows), by-year and by-sector breakdowns, a fixed list of bias/data-
+quality caveats, and a computed recommendation string. Read-only; no
+run is persisted (call `POST /run` explicitly to keep a specific result
+for drill-down). This is a heavier endpoint (many backtest runs per
+call) — acceptable for this exercise's read-only reporting screen, not
+intended for high-frequency polling.
