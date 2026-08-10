@@ -26,6 +26,10 @@ from decimal import Decimal
 from tradingos_api.providers.company_guidance_release_fixtures import (
     SYNTHETIC_GUIDANCE_RELEASES,
 )
+from tradingos_api.providers.earnings_actuals import (
+    EarningsActualRecord,
+    EarningsActualsCapabilities,
+)
 from tradingos_api.providers.earnings_calendar import (
     EarningsCalendarCapabilities,
     EarningsCalendarRecord,
@@ -214,6 +218,45 @@ class SyntheticAnalystRevisionProvider:
                 )
             )
         return records
+
+
+class SyntheticEarningsActualsProvider:
+    """Fixture reported results for AMD's Q3-2026 event — a deliberate
+    beat on both metrics (EPS 1.2200 vs. `SyntheticEarningsConsensusProvider`'s
+    consensus_eps 1.1500; revenue 8.35B vs. consensus 8.2B) so the post-
+    earnings confirmation demo has a real positive surprise to score
+    against, consistent with the AMD fixtures already shared across the
+    calendar/consensus/revision providers above."""
+
+    _FIXTURES: dict[str, dict[str, dict[str, str]]] = {
+        "AMD": {
+            "Q3-2026": {"eps": "1.2200", "revenue": "8350000000.00"},
+        },
+    }
+
+    def get_capabilities(self) -> EarningsActualsCapabilities:
+        return EarningsActualsCapabilities(
+            provider_name=_SOURCE, is_live_data=False, supports_revenue_actual=True
+        )
+
+    def get_actuals(self, ticker: str, fiscal_period: str) -> list[EarningsActualRecord]:
+        row = self._FIXTURES.get(ticker.upper(), {}).get(fiscal_period)
+        if row is None:
+            return []
+        now = datetime.now(UTC)
+        return [
+            EarningsActualRecord(
+                published_at=now,
+                observed_at=now,
+                source=_SOURCE,
+                ticker=ticker.upper(),
+                fiscal_period=fiscal_period,
+                metric=metric,
+                actual_value=value,
+                source_type="official_ir_release",
+            )
+            for metric, value in row.items()
+        ]
 
 
 def _parse_guidance_release(release_text: str) -> CompanyGuidanceRecord:

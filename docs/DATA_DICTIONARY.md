@@ -522,6 +522,44 @@ gains `client_order_id`/`take_profit_price`/`stop_loss_price` on
 `BrokerSubmissionAmbiguous` (the one exception type that means "query
 status before any retry").
 
+## 17. Revision Prompt 11 — active position monitor and post-earnings confirmation engine
+
+Additive: 4 new columns on `alerts`, 1 new table (`alert_status_events`),
+1 new table (`post_earnings_workflow_runs`), 1 new enum
+(`post_earnings_workflow_status`), 1 new enum value
+(`approval_invalidation_reason.THESIS_INVALIDATED`), 1 new `alert_type`
+enum value beyond Prompt 11's own 18 (`SYSTEM_NOTIFICATION`, for two
+call sites that predate this revision's vocabulary — see `AlertType`'s
+docstring in `models/enums.py`). No table was renamed or restructured.
+
+| Table/column | Key fields | Notes |
+|---|---|---|
+| `alerts` (4 new columns) | `alert_type` (enum, NOT NULL), `expires_at` (nullable), `dedup_key` (nullable), `evidence_type`/`evidence_id` (nullable polymorphic link) | The closed 19-value vocabulary (18 Prompt-11 types + `SYSTEM_NOTIFICATION`); `dedup_key` is unique only while `status='OPEN'` (`ix_alerts_unique_open_dedup_key`, the same partial-unique-index pattern `ImportRow` established); `evidence_type`/`evidence_id` mirror `MorningPlanInputLink`'s generic-link pattern (ADR-015). |
+| `alert_status_events` (new table) | `alert_id`, `from_status` (nullable), `to_status`, `changed_at`, `changed_by` (nullable) | Append-only audit trail for `Alert.status` transitions — one row at creation (`from_status=NULL`), one more per subsequent transition, written exclusively by `services/alerts_engine.py::transition_alert_status()`. |
+| `post_earnings_workflow_runs` (new table) | `earnings_event_id`/`instrument_id`/`account_id`, `pre_event_recommendation_id`/`post_event_recommendation_id` (both nullable FKs to `recommendations.id`), `status`, `results_ingested_at`, `confirmation_window_ends_at`, `reversal_detected`, `idempotency_key` (unique), `detail` | One row per (event, instrument, account) — mutated in place across the 10-step workflow (`TimestampMixin`, not append-only: the process's own history is reconstructable from the `Recommendation`/`Alert` rows it produces along the way). `idempotency_key` is the "duplicate release"/"worker restart" safety mechanism. |
+| `post_earnings_workflow_status` (new enum) | `WAITING_FOR_DATA`, `CONFIRMED`, `FAILED`, `INVALIDATED` | Describes the workflow's *own* progress, not the trading decision — see `services/post_earnings_workflow.py`'s module docstring for the exact semantics of each value (in particular, `CONFIRMED` does not mean "an add was confirmed," it means "the workflow ran to completion and published a real decision"). |
+| `approval_invalidation_reason` (1 new value) | `THESIS_INVALIDATED` | Not currently written by this revision's own code (the post-earnings reversal case writes a `PostEarningsWorkflowRun.status=INVALIDATED` + a `THESIS_INVALIDATED` alert, not an `ApprovalInvalidation` row — there is no pending approval to invalidate in that scenario) — added for forward compatibility with a future revision that ties a thesis invalidation directly to an in-flight approval. |
+
+**New providers**: `providers/earnings_actuals.py`
+(`EarningsActualsProvider` Protocol, mirroring
+`providers/earnings_consensus.py`'s shape) plus
+`providers/synthetic_evidence.py::SyntheticEarningsActualsProvider`
+(the 16th provider-diagnostics entry, `is_live_data=false` — no real
+vendor exists for reported-results data yet).
+
+**New services**: `services/alerts_engine.py`
+(`create_or_dedupe_alert()` — the one function every new alert-
+producing call site goes through; `transition_alert_status()`;
+`expire_stale_alerts()`), `services/post_earnings_workflow.py`
+(`run_post_earnings_workflow()` — the 10-step state machine, reusing
+Revision Prompt 5/7's scoring/gate/pipeline functions rather than
+re-implementing them), `services/position_monitor.py`
+(`evaluate_position()` — the 9 alert types this module owns; see its
+module docstring for the split against the workflow's alert types).
+`services/ingest_evidence.py` gains `ingest_earnings_actuals()`
+(idempotent by `(earnings_event_id, metric, source)`, the same pattern
+every other `ingest_*` function in that module already uses).
+
 ## Current-state derivation
 
 Every "current" figure in this system is computed, never stored as the

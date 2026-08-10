@@ -978,3 +978,52 @@ always creates the next version, never edits one in place). `POST`
 **request body**: `{"enabled"?, "eligible_strategy_families"?, "min_score"?, "max_orders_per_day"?, "max_daily_notional", "max_per_order_risk_pct", "allowed_time_windows"?, "allowed_order_types"?, "kill_switch_behavior"?, "created_by"}`
 — `enabled` defaults `false` ("disabled by default"). `GET` **response
 `404`** if never configured.
+
+## 24. Active position monitor and post-earnings confirmation (Revision Prompt 11)
+
+New `routers/monitoring.py` plus extensions to areas 9 (`routers/alerts.py`)
+and 5 (`routers/portfolio.py`'s underlying evidence, via
+`GET /api/v1/feature-diagnostics/post-earnings/{id}/latest`, area 21,
+now actually populated). No endpoint here submits or cancels an order —
+this area is read/alert-lifecycle only.
+
+### `GET /api/v1/alerts` — **extended**
+
+Response items now include `alert_type`, `expires_at`, `dedup_key`,
+`evidence_type`, `evidence_id` (Revision Prompt 11's alert taxonomy).
+Lazily calls `services/alerts_engine.py::expire_stale_alerts()` before
+every read, so an `OPEN` filter never returns a past-expiry alert.
+
+### `PATCH /api/v1/alerts/{id}` — **extended**
+
+Every transition now writes an `AlertStatusEvent` audit row via
+`services/alerts_engine.py::transition_alert_status()` (`changed_by` is
+the acting `owner_user_id`) — previously a bare status-column write.
+
+### `GET /api/v1/monitoring/positions?account_id=`
+
+The active-position-cards screen. One card per open `Position`: current
+quote, unrealized P&L, stop/target (from the position's `TACTICAL` lots'
+holding guidance), lane membership, next earnings date, and open alerts
+for the instrument. Composes existing Revision Prompt 8 services
+(`get_open_lots`, `get_tactical_holding_guidance`) with a live quote —
+no new business logic.
+
+### `GET /api/v1/monitoring/positions/{instrument_id}/timeline`
+
+The event-timeline screen. Merges `EarningsEvent`/`EarningsActual`/
+`EarningsGuidanceItem`/`Alert` rows for the instrument into one
+chronologically sorted feed, each entry tagged with a `kind`
+discriminator (`EARNINGS_EVENT`, `EARNINGS_ACTUAL`, `GUIDANCE_ISSUED`,
+or `ALERT:{alert_type}`). **Response `404`** if the instrument doesn't exist.
+
+### `GET /api/v1/monitoring/positions/{instrument_id}/confirmation-status?account_id=`
+
+The workflow half of the confirmation-checklist screen — the latest
+`PostEarningsWorkflowRun`'s own status/detail/reversal flag for this
+(instrument, account). Pair with `GET /api/v1/feature-diagnostics/post-earnings/{earnings_event_id}/latest`
+(area 21) for the gate-level component detail; this revision's own
+contribution to that existing endpoint is that
+`services/post_earnings_workflow.py` now actually calls
+`persist_post_earnings_confirmation()`, so it has real data to serve.
+**Response `404`** if no workflow run exists yet for this position.

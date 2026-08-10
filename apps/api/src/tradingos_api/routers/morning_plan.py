@@ -27,6 +27,7 @@ from tradingos_api.models.enums import (
 )
 from tradingos_api.models.enums import (
     AlertSeverity,
+    AlertType,
     DeliveryChannel,
     MorningPlanRunStatus,
     MorningPlanVersionLabel,
@@ -260,6 +261,7 @@ def generate_plan(
             Alert(
                 owner_user_id=owner_user_id,
                 instrument_id=None,
+                alert_type=AlertType.SYSTEM_NOTIFICATION,
                 severity=AlertSeverity.INFO,
                 title=f"Morning plan ready — {plan_date.isoformat()}",
                 detail=(

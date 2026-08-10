@@ -1004,6 +1004,60 @@ by `services/order_execution.py`, never stored as its own column, and
 stays stable across every attempt for the same approval — what lets a
 real broker de-duplicate a resubmit after an ambiguous timeout.
 
+## 21. Revision Prompt 11 — active position monitor and post-earnings confirmation engine
+
+Additive columns on `alerts`, plus two new tables. No table was
+renamed or restructured.
+
+```mermaid
+erDiagram
+    alerts ||--o{ alert_status_events : "alert_id"
+    post_earnings_workflow_runs }o--|| earnings_events : earnings_event_id
+    post_earnings_workflow_runs }o--|| instruments : instrument_id
+    post_earnings_workflow_runs }o--|| accounts : account_id
+    post_earnings_workflow_runs }o--o| recommendations : "pre_event_recommendation_id (nullable)"
+    post_earnings_workflow_runs }o--o| recommendations : "post_event_recommendation_id (nullable)"
+
+    alerts {
+        uuid id PK
+        enum alert_type "new, NOT NULL"
+        enum status
+        datetime expires_at "nullable, new"
+        string dedup_key "nullable, new, unique while OPEN"
+        string evidence_type "nullable, new"
+        uuid evidence_id "nullable, new"
+    }
+    alert_status_events {
+        uuid id PK
+        uuid alert_id FK
+        enum from_status "nullable"
+        enum to_status
+        datetime changed_at
+        string changed_by "nullable"
+    }
+    post_earnings_workflow_runs {
+        uuid id PK
+        uuid earnings_event_id FK
+        uuid instrument_id FK
+        uuid account_id FK
+        uuid pre_event_recommendation_id FK "nullable"
+        uuid post_event_recommendation_id FK "nullable"
+        enum status "WAITING_FOR_DATA/CONFIRMED/FAILED/INVALIDATED"
+        datetime results_ingested_at "nullable"
+        datetime confirmation_window_ends_at "nullable"
+        bool reversal_detected
+        string idempotency_key "unique"
+        text detail "nullable"
+    }
+```
+
+**Two separate recommendation identities, never one row wearing two
+hats** (ADR-046's discipline, reused): `pre_event_recommendation_id`
+and `post_event_recommendation_id` are two independently-nullable
+columns, never one column reused — the post-confirmation trade this
+workflow may produce is always a brand-new `Recommendation` row, even
+when the Tactical Trading Desk's decision is `TRADE_HOLD`.
+
 **Bracket legs reuse Phase 8's `order_legs` table unchanged** — a
 native bracket produces one `Order` with one `PRIMARY` `OrderLeg`; an
 emulated bracket produces up to three independent `Order` rows (one per

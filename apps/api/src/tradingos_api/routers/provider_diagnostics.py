@@ -38,6 +38,7 @@ from tradingos_api.providers.alpaca_evidence import (
 from tradingos_api.providers.synthetic_evidence import (
     SyntheticAnalystRevisionProvider,
     SyntheticCompanyGuidanceProvider,
+    SyntheticEarningsActualsProvider,
     SyntheticEarningsCalendarProvider,
     SyntheticEarningsConsensusProvider,
     SyntheticFundamentalsProvider,
@@ -123,6 +124,10 @@ def get_provider_status(settings: Settings = Depends(get_settings)) -> list[Prov
         _status_entry(
             "EarningsConsensusProvider",
             lambda: SyntheticEarningsConsensusProvider().get_capabilities(),
+        ),
+        _status_entry(
+            "EarningsActualsProvider",
+            lambda: SyntheticEarningsActualsProvider().get_capabilities(),
         ),
         _status_entry(
             "AnalystRevisionProvider",

@@ -424,6 +424,43 @@ class AlertSeverity(StrEnum):
     CRITICAL = "CRITICAL"
 
 
+class AlertType(StrEnum):
+    """Revision Prompt 11's closed vocabulary — "alerts must be
+    deterministic where possible, deduplicated, expiring, evidence-
+    linked, and audited." `services/alerts_engine.py::create_or_dedupe_alert()`
+    is the one function every *new* alert-producing call site
+    (`services/position_monitor.py`, `services/post_earnings_workflow.py`)
+    goes through, enforcing dedup/expiry/evidence-link/audit uniformly.
+
+    `SYSTEM_NOTIFICATION` is the one value outside Prompt 11's own
+    18-item list — two call sites predate this vocabulary entirely
+    (`routers/morning_plan.py`'s "plan ready" notification, Revision
+    Prompt 9; `services/ingest_evidence.py`'s earnings-calendar
+    correction alert, Revision Prompt 4) and have no honest fit among
+    the 18 position/earnings-specific types below; forcing either into
+    e.g. `EARNINGS_APPROACHING` would misrepresent what triggered it."""
+
+    ENTRY_ZONE_REACHED = "ENTRY_ZONE_REACHED"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    ORDER_STATUS_CHANGED = "ORDER_STATUS_CHANGED"
+    TARGET_REACHED = "TARGET_REACHED"
+    STOP_REACHED = "STOP_REACHED"
+    GAP_RISK = "GAP_RISK"
+    THESIS_INVALIDATED = "THESIS_INVALIDATED"
+    EARNINGS_APPROACHING = "EARNINGS_APPROACHING"
+    RESULTS_AVAILABLE = "RESULTS_AVAILABLE"
+    GUIDANCE_CONFLICT = "GUIDANCE_CONFLICT"
+    POST_EARNINGS_CONFIRMATION_READY = "POST_EARNINGS_CONFIRMATION_READY"
+    POST_EARNINGS_CONFIRMATION_FAILED = "POST_EARNINGS_CONFIRMATION_FAILED"
+    TAKE_PARTIAL_PROFIT_SUGGESTION = "TAKE_PARTIAL_PROFIT_SUGGESTION"
+    EXIT_SUGGESTION = "EXIT_SUGGESTION"
+    DATA_STALE = "DATA_STALE"
+    PROVIDER_OUTAGE = "PROVIDER_OUTAGE"
+    PORTFOLIO_LIMIT_BREACH = "PORTFOLIO_LIMIT_BREACH"
+    MARKET_REGIME_CHANGED = "MARKET_REGIME_CHANGED"
+    SYSTEM_NOTIFICATION = "SYSTEM_NOTIFICATION"
+
+
 ALERT_TRANSITIONS: dict[str, set[str]] = {
     "OPEN": {"ACKNOWLEDGED", "DISMISSED"},
     "ACKNOWLEDGED": {"DISMISSED"},
@@ -661,6 +698,10 @@ class ApprovalInvalidationReason(StrEnum):
     AMBIGUOUS_IDENTITY = "AMBIGUOUS_IDENTITY"
     KILL_SWITCH = "KILL_SWITCH"
     BOUND_FIELD_CHANGED = "BOUND_FIELD_CHANGED"
+    # Revision Prompt 11 — "if the initial reaction reverses, invalidate
+    # the add": a still-pending approval for a TRADE_ADD_CONFIRMED
+    # proposal whose confirming gap has since reversed intraday.
+    THESIS_INVALIDATED = "THESIS_INVALIDATED"
 
 
 class BrokerSubmissionOutcome(StrEnum):
@@ -788,3 +829,18 @@ class KillSwitchBehavior(StrEnum):
 
     HALT_NEW_ONLY = "HALT_NEW_ONLY"
     HALT_AND_CANCEL_OPEN = "HALT_AND_CANCEL_OPEN"
+
+
+class PostEarningsWorkflowStatus(StrEnum):
+    """Revision Prompt 11's POST-EARNINGS WORKFLOW state — one row per
+    (earnings_event, instrument, account) tracks this across the 10
+    steps, resumable by a restarted worker rereading the row rather than
+    losing track of where the workflow was. `WAITING_FOR_DATA` covers
+    both "official results not yet verified/ingested" and "price-
+    confirmation window not yet elapsed" — the prompt's own text asks
+    for one visible waiting state for a delayed input, not two."""
+
+    WAITING_FOR_DATA = "WAITING_FOR_DATA"
+    CONFIRMED = "CONFIRMED"
+    FAILED = "FAILED"
+    INVALIDATED = "INVALIDATED"

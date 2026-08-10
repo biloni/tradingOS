@@ -2498,3 +2498,123 @@ or logged (the `_redact_broker_payload()` redaction list on
 `BrokerSubmissionAttempt.request_snapshot`/`response_snapshot` is what
 keeps a future real submission from ever writing a credential into the
 audit trail, even by accident).
+
+## Revision Prompt 11 — active position monitor and post-earnings confirmation engine (2026-08-09)
+
+### Three real Alembic migration bugs found and fixed while writing this migration
+
+Debugged via isolated Python reproduction scripts rather than repeated
+blind retries against the full migration, after the failures directly
+contradicted a pattern that had worked in the immediately preceding
+Revision Prompt 10 migration:
+
+1. `Operations.create_table()` (Alembic) does not respect an inline
+   `sa.Enum(..., create_type=False)` column's flag for a *pre-existing*
+   enum type, even though raw SQLAlchemy Core (`MetaData.create_all()`)
+   respects it correctly — verified with a 4-script isolated comparison
+   (DDL-preview inspection, raw Core, and `Operations.create_table()`
+   side by side). Worked around by creating `alert_status_events`
+   without its two `alert_status`-typed columns, then `op.add_column()`-
+   ing them afterward (`add_column()` does respect the flag).
+2. The flip side, already known from Revision Prompt 8's migration but
+   re-triggered here: `op.add_column()` for a *brand-new* enum type
+   (`alert_type`) doesn't auto-create the type either — fixed with an
+   explicit `_alert_type_enum.create(op.get_bind(), checkfirst=True)`
+   before the `add_column()` call.
+3. Repeated failed migration attempts during the above debugging left
+   the live dev database one revision behind Revision Prompt 10's
+   already-shipped schema (a downgrade/upgrade test sequence run during
+   debugging didn't get fully re-applied) — this was the direct cause
+   of a mid-session "local app is not working" report. Fixed by
+   completing the migration, running a clean `alembic upgrade head`,
+   and verifying `alembic current` reported the correct head revision
+   before resuming feature work.
+
+Full `upgrade head` → `downgrade -1` → `upgrade head` round-trip
+verified successful after all three fixes, and re-verified again after
+later adding `AlertType.SYSTEM_NOTIFICATION` mid-revision (a fourth,
+uneventful round-trip).
+
+### A real bug found live-testing the demo against the running API, not caught by the test suite
+
+After `demo_prompt11.py` ran cleanly and committed real Postgres state,
+`curl http://localhost:8000/api/v1/alerts` 500'd with
+`LookupError: 'SYSTEM_NOTIFICATION' is not among the defined enum
+values. Enum name: alert_type.` The Postgres enum type itself had the
+value (the migration added it correctly); the long-running `uvicorn`
+dev server process had simply been started before `SYSTEM_NOTIFICATION`
+was added to `models/enums.py::AlertType` mid-session, so its in-memory
+SQLAlchemy `Enum` type object didn't know the value existed and
+rejected it on read. Not a code defect — no test in this suite would
+ever have caught it, since `pytest` imports fresh Python state every
+run — but a real operational gap worth recording: **a Postgres enum
+value added mid-session requires restarting any already-running
+application process**, the same way a schema migration does. Fixed by
+killing and restarting the `uvicorn` process; re-verified
+`GET /api/v1/alerts` afterward returns all the new alert types
+(`RESULTS_AVAILABLE`, `THESIS_INVALIDATED`, `GUIDANCE_CONFLICT`,
+`POST_EARNINGS_CONFIRMATION_FAILED`, etc.) correctly.
+
+### A second real issue: the demo script's own committed state broke unrelated tests
+
+After committing `demo_prompt11.py`'s real Postgres writes, a full
+`pytest` run (previously green) showed 3 new failures in
+`test_ingest_evidence.py`/`test_alerts_engine.py`. Root cause:
+`services/ingest_evidence.py::ingest_earnings_calendar()` looks up "the
+most recent `EarningsEvent` for this instrument" by `created_at`, and
+several existing tests rely on AMD specifically having a single,
+predictable calendar entry (the R3 seed data's own upcoming AMD event —
+`providers/synthetic_evidence.py`'s calendar/consensus/revision
+fixtures are all deliberately keyed to AMD for exactly this reason, per
+that module's own docstring). `demo_prompt11.py` created 4 new AMD
+`EarningsEvent` rows (one per scenario) to exercise the workflow against
+fresh, isolated events — the newest of these became "the most recent
+AMD event," with a different `report_date`/`timing_category` than what
+`test_ingest_evidence.py` expected, so a second calendar ingest against
+it detected a spurious "correction" and alert. Not a code defect in
+either the demo or the ingestion logic — a genuine oversight in test-
+data hygiene: **a demo script that writes new rows for a ticker other
+tests treat as a fixed fixture must clean up after itself.** Fixed by
+writing and running a one-off cleanup script that deleted every row the
+demo run created (in FK-safe order: `PostEarningsConfirmationSnapshot`/
+`FeatureComponentResult` → `EarningsActual`/`EarningsGuidanceItem`/
+`EarningsConsensusSnapshot` → `Alert`/`AlertStatusEvent` →
+`PostEarningsWorkflowRun` → `EarningsEvent` →
+`RecommendationInvalidationCondition`/`RecommendationLevel`/
+`RecommendationAttribution`/`RecommendationStatusEvent` →
+`RecommendationVersion`/`Recommendation` → the demo `Account`),
+re-verified with a full suite re-run afterward. `demo_prompt11.py`
+itself is unchanged — re-running it is safe and reproducible; only this
+session's own leftover output needed removing.
+
+### The 7 required test categories
+
+| Category | Where covered |
+|---|---|
+| Gap | `test_position_monitor.py::TestGapRisk` (gap-through-stop vs. gradual touch); `test_post_earnings_workflow.py::TestHardVeto6NegativeGap` (HES-6) |
+| Reversal | `test_post_earnings_workflow.py::TestReversalInvalidation`, `TestAlertsAreActuallyEmitted::test_reversal_emits_thesis_invalidated` |
+| Stale data | `test_position_monitor.py::TestDataStale` (missing/aged-out quote, does not block other checks) |
+| Conflicting guidance | `test_post_earnings_workflow.py::TestAlertsAreActuallyEmitted::test_beat_with_lowered_guidance_emits_guidance_conflict` |
+| Duplicate release | `test_ingest_earnings_actuals.py::TestIngestionIsIdempotentAcrossDuplicateReleases`; `test_post_earnings_workflow.py::TestIdempotentReplay::test_duplicate_release_does_not_create_a_second_run_row` |
+| Worker restart | `test_post_earnings_workflow.py::TestIdempotentReplay::test_worker_restart_on_a_terminal_run_is_a_safe_no_op` |
+| Existing bracket orders | `test_position_monitor.py::TestWorksWithExistingBracketOrders` — stop/target prices read back from a real `Order`/`OrderLeg` bracket pair, not a hand-picked constant |
+
+### Live-verified against the real Alpaca-backed market-data layer
+
+`GET /api/v1/provider-diagnostics/status` confirms all 7 Alpaca-eligible
+interfaces (quotes, bars, corporate actions, news, VIX proxy, instrument
+reference, broker capability) report `is_live_data: true` against this
+dev environment's already-configured credentials — unchanged by this
+revision, re-confirmed live during this session before starting feature
+work. The 8 evidence types with no contracted vendor (including the new
+`EarningsActualsProvider`) honestly report `synthetic_fixture`.
+
+### Full suite
+
+435 passed, 0 failed. `mypy src/` clean across 162 source files;
+`ruff check`/`ruff format --check` clean across `src/` and `tests/`.
+
+### Secrets check before commit
+
+No new secrets this revision. `.env`/`.env.local` remain absent from
+`git status --porcelain` before staging.

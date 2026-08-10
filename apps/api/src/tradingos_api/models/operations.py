@@ -23,6 +23,7 @@ from tradingos_api.models.enums import (
     AlertDeliveryStatus,
     AlertSeverity,
     AlertStatus,
+    AlertType,
     JobRunStatus,
     NotificationChannel,
     PromptTemplateStatus,
@@ -30,11 +31,36 @@ from tradingos_api.models.enums import (
 
 
 class Alert(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
+    """Revision Prompt 11 additive columns: `alert_type` (the closed
+    18-value vocabulary, `AlertType`), `expires_at` (nullable — an alert
+    with no expiry is evaluated indefinitely; most types are given one
+    by `services/alerts_engine.py` so a stale, no-longer-relevant alert
+    doesn't sit `OPEN` forever), `dedup_key` (the identity a duplicate
+    trigger is recognized against — unique only while `status=OPEN`, via
+    `ix_alerts_unique_open_dedup_key` below, the same partial-unique-index
+    pattern `ImportRow` (Revision Prompt 8) already established: an
+    already-dismissed alert's key must be free to fire again later, a
+    still-open one must not duplicate), and `evidence_type`/`evidence_id`
+    (a generic polymorphic link — same pattern as
+    `MorningPlanInputLink`, ADR-015 — since an alert's evidence can be
+    almost any table: a `RecommendationLevel`, an `EarningsEvent`, a
+    `PostEarningsConfirmationSnapshot`, a `MarketRegimeSnapshot`, etc.).
+    """
+
     __tablename__ = "alerts"
+    __table_args__ = (
+        sa.Index(
+            "ix_alerts_unique_open_dedup_key",
+            "dedup_key",
+            unique=True,
+            postgresql_where=sa.text("status = 'OPEN' AND dedup_key IS NOT NULL"),
+        ),
+    )
 
     instrument_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.Uuid(as_uuid=True), sa.ForeignKey("instruments.id"), nullable=True
     )
+    alert_type: Mapped[AlertType] = mapped_column(sa.Enum(AlertType, name="alert_type"))
     severity: Mapped[AlertSeverity] = mapped_column(sa.Enum(AlertSeverity, name="alert_severity"))
     status: Mapped[AlertStatus] = mapped_column(
         sa.Enum(AlertStatus, name="alert_status"), default=AlertStatus.OPEN
@@ -42,6 +68,31 @@ class Alert(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(sa.String(200))
     detail: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     triggered_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    dedup_key: Mapped[str | None] = mapped_column(sa.String(200), nullable=True)
+    evidence_type: Mapped[str | None] = mapped_column(sa.String(50), nullable=True)
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(sa.Uuid(as_uuid=True), nullable=True)
+
+
+class AlertStatusEvent(UUIDPkMixin, CreatedAtMixin, Base):
+    """Append-only lifecycle audit trail for `Alert.status` transitions
+    (principle 9, the same discipline `RecommendationStatusEvent`
+    already established) — "audited" from Revision Prompt 11's own
+    requirement list. Every `Alert` gets one row here at creation
+    (`from_status=NULL`, `to_status=OPEN`) and one more per subsequent
+    transition."""
+
+    __tablename__ = "alert_status_events"
+
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("alerts.id"), index=True
+    )
+    from_status: Mapped[AlertStatus | None] = mapped_column(
+        sa.Enum(AlertStatus, name="alert_status"), nullable=True
+    )
+    to_status: Mapped[AlertStatus] = mapped_column(sa.Enum(AlertStatus, name="alert_status"))
+    changed_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    changed_by: Mapped[str | None] = mapped_column(sa.String(80), nullable=True)
 
 
 class AlertDelivery(UUIDPkMixin, CreatedAtMixin, Base):
@@ -131,6 +182,7 @@ class ModelCallRecord(UUIDPkMixin, CreatedAtMixin, Base):
 __all__ = [
     "Alert",
     "AlertDelivery",
+    "AlertStatusEvent",
     "JobRun",
     "ModelCallRecord",
     "PromptTemplate",

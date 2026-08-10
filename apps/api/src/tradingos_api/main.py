@@ -12,6 +12,7 @@ from tradingos_api.routers import (
     investment,
     journal,
     market,
+    monitoring,
     morning_plan,
     order_authority,
     orders,
@@ -58,3 +59,4 @@ app.include_router(provider_diagnostics.router)
 app.include_router(feature_diagnostics.router)
 app.include_router(committee.router)
 app.include_router(paper_auto_policy.router)
+app.include_router(monitoring.router)

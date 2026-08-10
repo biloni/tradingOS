@@ -174,6 +174,24 @@
     ]
   ],
   [
+    "/api/v1/monitoring/positions",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/monitoring/positions/{instrument_id}/confirmation-status",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/monitoring/positions/{instrument_id}/timeline",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/morning-plan/cowork-brief",
     [
       "get"

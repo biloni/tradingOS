@@ -24,11 +24,13 @@ from sqlalchemy.orm import Session
 from tradingos_api.models.enums import (
     AlertSeverity,
     AlertStatus,
+    AlertType,
     CorporateActionType,
     EarningsTimingCategory,
 )
 from tradingos_api.models.market_evidence import (
     CorporateAction,
+    EarningsActual,
     EarningsConsensusSnapshot,
     EarningsEvent,
     EarningsEventCorrection,
@@ -41,6 +43,7 @@ from tradingos_api.models.market_evidence import (
     ProviderIngestionRecord,
 )
 from tradingos_api.models.operations import Alert
+from tradingos_api.providers.earnings_actuals import EarningsActualsProvider
 from tradingos_api.providers.earnings_calendar import EarningsCalendarProvider
 from tradingos_api.providers.earnings_consensus import (
     AnalystRevisionProvider,
@@ -231,6 +234,7 @@ def ingest_earnings_calendar(
         alert = Alert(
             owner_user_id=owner_user_id,
             instrument_id=instrument_id,
+            alert_type=AlertType.SYSTEM_NOTIFICATION,
             severity=AlertSeverity.WARNING,
             status=AlertStatus.OPEN,
             title=f"Earnings calendar correction for {ticker.upper()}",
@@ -318,6 +322,61 @@ def ingest_earnings_consensus(
         revision_id=rec.revision_id,
     )
     return snapshot
+
+
+def ingest_earnings_actuals(
+    db: Session,
+    provider: EarningsActualsProvider,
+    *,
+    earnings_event_id: uuid.UUID,
+    ticker: str,
+    fiscal_period: str,
+) -> list[EarningsActual]:
+    """Revision Prompt 11 step 2 ("ingest and validate official
+    results"). Idempotent by `(earnings_event_id, metric, source)` — the
+    same pattern every other `ingest_*` function in this module uses —
+    which is what makes re-running this against an already-ingested
+    release ("duplicate release", one of Prompt 11's required test
+    categories) a safe no-op rather than a second row. An empty
+    provider response (results not yet released) returns an empty list;
+    callers distinguish "no rows yet" from "ingested" by checking the
+    return value's length, which is exactly the signal
+    `services/post_earnings_workflow.py` uses to decide `WAITING_FOR_DATA`.
+    """
+    records = provider.get_actuals(ticker, fiscal_period)
+    created: list[EarningsActual] = []
+    for rec in records:
+        exists = db.scalar(
+            select(EarningsActual).where(
+                EarningsActual.earnings_event_id == earnings_event_id,
+                EarningsActual.metric == rec.metric,
+                EarningsActual.source == rec.source,
+            )
+        )
+        if exists is not None:
+            created.append(exists)
+            continue
+        reported_at = rec.published_at or rec.observed_at
+        actual = EarningsActual(
+            earnings_event_id=earnings_event_id,
+            metric=rec.metric,
+            actual_value=Decimal(rec.actual_value),
+            reported_at=reported_at,
+            usable_at=rec.observed_at,
+            source=rec.source,
+        )
+        db.add(actual)
+        db.flush()
+        _record_ingestion(
+            db,
+            subject_type="EarningsActual",
+            subject_id=actual.id,
+            source=rec.source,
+            provider_record_id=rec.provider_record_id,
+            revision_id=rec.revision_id,
+        )
+        created.append(actual)
+    return created
 
 
 def ingest_analyst_revisions(

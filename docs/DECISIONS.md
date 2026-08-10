@@ -2010,3 +2010,68 @@ this project already applies everywhere a deterministic gate exists
 (`services/hard_vetoes.py` itself, `services/baseline_eligibility.py`,
 ADR-051's deterministic veto between the CIO and the persisted
 recommendation) is extended here to the newest decision surface.
+
+## ADR-059: `PostEarningsWorkflowStatus` describes the workflow's own progress, not the trading decision it produces
+
+**Context.** Revision Prompt 11's POST-EARNINGS WORKFLOW emits one of
+five tactical actions (`TRADE_ADD_CONFIRMED`/`TRADE_HOLD`/
+`TRADE_TAKE_PARTIAL`/`TRADE_EXIT`/`NO_ACTION`) once it reaches the
+Tactical Trading Desk. It would have been tempting to name the
+workflow's own terminal status after that decision (e.g. a `CONFIRMED`
+status meaning "an add was confirmed"), but that conflates two
+different questions: "did the confirmation *process* complete" and
+"what did it decide."
+
+**Decision.** `PostEarningsWorkflowStatus.CONFIRMED` means the
+workflow ran every step through the Tactical Trading Desk and published
+a real decision — `TRADE_HOLD` after a full evaluation is exactly as
+much a `CONFIRMED` workflow as `TRADE_ADD_CONFIRMED` is. `FAILED` means
+the post-confirmation eligibility gate (`services/post_confirmation_gate.py`)
+rejected the add before any committee ran — including HES-6's absolute
+negative-gap rule. `INVALIDATED` is reserved specifically for "the
+initial reaction reversed" (`REVERSAL_FAILED_BREAKOUT` failing),
+checked independently of and before the general eligibility gate, since
+Prompt 11's own text calls this out as its own rule ("if initial
+reaction reverses invalidate the add"), not merely one more way to fail
+eligibility. The actual tactical decision always lives on the resulting
+`RecommendationVersion.lane_action` — never inferred from the workflow
+status.
+
+**Consequences.** A caller checking "did this confirmation succeed" and
+a caller checking "should I add to this position" must ask two
+different questions against two different fields
+(`PostEarningsWorkflowRun.status` vs. the linked
+`RecommendationVersion.lane_action`) — a one-field shortcut was
+rejected because it would silently break the moment a `CONFIRMED`
+workflow produced a hold. `services/alerts_engine.py` mirrors this
+split: `POST_EARNINGS_CONFIRMATION_FAILED`/`THESIS_INVALIDATED` map to
+the workflow's own two failure statuses, while
+`TAKE_PARTIAL_PROFIT_SUGGESTION`/`EXIT_SUGGESTION` map to specific
+`lane_action` values on an otherwise-`CONFIRMED` run.
+
+## ADR-060: `SYSTEM_NOTIFICATION` — a 19th `AlertType` value for two call sites that predate Prompt 11's own 18-type vocabulary
+
+**Context.** Making `Alert.alert_type` a required column exposed two
+existing call sites that construct an `Alert` directly without any
+concept of Prompt 11's closed vocabulary: `routers/morning_plan.py`'s
+"plan ready" in-app notification (Revision Prompt 9) and
+`services/ingest_evidence.py`'s earnings-calendar-correction alert
+(Revision Prompt 4). Neither is a position-monitoring or post-earnings-
+confirmation alert — forcing either into one of the 18 real types would
+have been a dishonest fit purely to satisfy a NOT NULL constraint.
+
+**Decision.** Add exactly one additional value, `SYSTEM_NOTIFICATION`,
+documented in `AlertType`'s own docstring as the one value outside
+Prompt 11's own list, reserved for these two specific, out-of-scope,
+pre-existing call sites. `services/alerts_engine.py::create_or_dedupe_alert()`
+— the one function every *new* Prompt 11 alert-producing call site goes
+through — never uses it; only the two grandfathered call sites do.
+
+**Consequences.** The vocabulary is honestly 19 values, not a clean 18,
+with the discrepancy documented at its source rather than glossed over.
+A future revision that gives either grandfathered notification its own
+proper type can retire this value's use at that call site without a
+migration (the enum value itself is a Postgres value that cannot be
+removed once added — an accepted, already-established limitation this
+project documents every time an enum value is added, e.g. ADR-056's
+downgrade notes).

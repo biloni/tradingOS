@@ -58,8 +58,78 @@ auto-policy that can never override a hard veto (ADR-058), the OA-9
 kill switch and cancel-open-orders controls, and OA-6 fail-closed
 paper-only enforcement; demonstrated end-to-end via both the real
 Alpaca paper sandbox and a deterministic synthetic broker, no live
-order submission anywhere in the codebase).
+order submission anywhere in the codebase), and Revision Prompt 11
+(active position monitor and post-earnings confirmation engine,
+shipped — earnings-actuals ingestion, the alerts engine
+(`create_or_dedupe_alert()`, deduplicated/expiring/evidence-linked/
+audited), the 10-step post-earnings confirmation workflow reusing
+Revision Prompt 5/7's scoring/gate/pipeline functions with reversal
+invalidation (ADR-059) and HES-6 enforcement, the active position
+monitor's 9 alert types, and the active-position-cards/event-timeline/
+confirmation-checklist/alert-center read screens; demonstrated
+end-to-end with a real Alpaca-backed market-data layer already live,
+no new paid vendor contracted for reported-results data).
 **Last updated:** 2026-08-09
+
+## Revision Prompt 11 (2026-08-09) — active position monitor and post-earnings confirmation engine
+
+**Schema**: `alerts.alert_type`/`expires_at`/`dedup_key`/`evidence_type`/
+`evidence_id`, new `alert_status_events` table, new
+`post_earnings_workflow_runs` table, new `PostEarningsWorkflowStatus`
+enum, `ApprovalInvalidationReason.THESIS_INVALIDATED` — see
+docs/DATA_DICTIONARY.md §17 / docs/ER_DIAGRAM.md §21. Making
+`alert_type` required exposed 2 pre-existing call sites outside
+Prompt 11's own vocabulary; resolved with a 19th value,
+`SYSTEM_NOTIFICATION` (ADR-060).
+
+**Providers**: `providers/earnings_actuals.py`
+(`EarningsActualsProvider` Protocol) + `SyntheticEarningsActualsProvider`
+(the 16th provider-diagnostics entry — no real reported-results vendor
+exists yet, docs/PROVIDER_MATRIX.md).
+
+**Services**: `services/alerts_engine.py` (`create_or_dedupe_alert()` —
+the one function every new alert-producing call site goes through;
+`transition_alert_status()`; `expire_stale_alerts()`),
+`services/post_earnings_workflow.py` (`run_post_earnings_workflow()` —
+the 10-step state machine; see ADR-059 for what its 4 statuses actually
+mean), `services/position_monitor.py` (`evaluate_position()` — the 9
+alert types this module owns, vs. the 9 the workflow/order-authority
+own). `services/ingest_evidence.py` gains `ingest_earnings_actuals()`.
+
+**Routers**: new `routers/monitoring.py`
+(`GET /monitoring/positions`, `GET /monitoring/positions/{id}/timeline`,
+`GET /monitoring/positions/{id}/confirmation-status`);
+`routers/alerts.py` extended with the new fields, lazy expiry on every
+read, and an audited `PATCH`. See docs/API_CONTRACTS.md §24.
+
+**Tests**: 60 new tests across `test_ingest_earnings_actuals.py` (7),
+`test_alerts_engine.py` (9), `test_post_earnings_workflow.py` (14),
+`test_position_monitor.py` (25, including the required-category
+additions), `test_monitoring_endpoints.py` (5) — the 7 required
+categories (gap, reversal, stale data, conflicting guidance, duplicate
+release, worker restart, existing bracket orders) all covered; full
+suite: 435 passed.
+
+**Demo**: `demo_prompt11.py` — earnings-actuals duplicate-release
+idempotency, a full eligible confirmation reaching `TRADE_ADD_CONFIRMED`
+via a real (synthetic-LLM-backed) Tactical Trading Desk call, a
+worker-restart replay, a beat-with-lowered-guidance conflict, a
+reversed-reaction invalidation, HES-6's absolute negative-gap failure,
+and the active position monitor's stale-data/stop/gap-risk/earnings
+checks — all against real Postgres state, verified live via the running
+API afterward.
+
+**Bug found and fixed while running the demo against the live API**:
+the long-running `uvicorn` dev server process predated this revision's
+`SYSTEM_NOTIFICATION` enum addition (added mid-session to
+`models/enums.py`), so its in-memory SQLAlchemy enum mapping didn't
+know the new Postgres value existed — `GET /api/v1/alerts` 500'd with
+`LookupError: 'SYSTEM_NOTIFICATION' is not among the defined enum
+values` the moment it read a row using it. Not a code bug (the fix was
+a server restart, not an edit) — recorded here because it's the same
+class of "stale long-running dev process" issue documented earlier in
+this revision's own session history, now specifically tied to a
+Postgres enum value added without a server restart.
 
 ## Revision Prompt 10 (2026-08-09) — paper broker execution, approval queue, and bracket lifecycle
 
