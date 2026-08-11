@@ -136,25 +136,43 @@ pnpm test:e2e
 | [docs/RISK_REGISTER.md](docs/RISK_REGISTER.md) | *(Refinement, planning only)* Product/technical/vendor/regulatory risks, likelihood/impact/mitigation |
 | [docs/BLOCKING_DECISIONS.md](docs/BLOCKING_DECISIONS.md) | *(Refinement, planning only)* 10 open decisions with recommended defaults — nothing here is acted on without your confirmation |
 
-## Known limitations (as of Phase 7)
+## Known limitations (as of Revision Prompt 16, paper beta)
 
 - **The refined product described in docs/PRODUCT_REQUIREMENTS.md,
   docs/ARCHITECTURE.md, docs/MVP_PLAN.md, docs/UX_MAP.md,
-  docs/THREAT_MODEL.md, and docs/RISK_REGISTER.md is a planning artifact
-  only — none of it is implemented.** The app running today is exactly the
-  Phases 1–7 feature set below this line: a 30-symbol seed watchlist, a
-  4-signal deterministic score, a single-call `/ask` tool, and no
-  committee/regime/journal/monitor/scheduler layer. Implementation doesn't
-  start until docs/BLOCKING_DECISIONS.md is confirmed and a new
-  implementation phase is explicitly requested.
+  docs/THREAT_MODEL.md, and docs/RISK_REGISTER.md was a planning artifact
+  only as of Phase 7 — it has since been built.** The 8-role investment
+  committee, regime/VIX-aware sizing, the broker-agnostic trade journal,
+  the active-position monitor, the order-authority governance chain
+  (propose → policy-evaluation → approval → submit), a real always-on
+  scheduler, and real password-gated authentication (below) all exist
+  today, each with its own test coverage — see
+  [docs/STATUS.md](docs/STATUS.md) for the current phase-by-phase
+  picture and [docs/RELEASE_GATE_PROOFS.md](docs/RELEASE_GATE_PROOFS.md)
+  for what's specifically been proven ahead of tagging this paper beta.
+  What's still genuinely not built: any **live** (real-money) broker
+  execution capability — see the next bullet — and the items below it.
+- No live-order capability exists anywhere in the codebase, by design
+  (principle 10) — this isn't a flag waiting to be flipped, it doesn't
+  exist. "Revision Prompt 17" (limited live-confirmed broker execution)
+  is deliberately not started; it requires this paper-beta release to be
+  complete, stable, and explicitly approved to begin first.
 - No SMA/indicator overlay line on the symbol-detail candlestick chart —
   the real indicators endpoint only returns a single day's snapshot, not
   a ranged series; a text readout is shown instead
   ([docs/USER_GUIDE.md](docs/USER_GUIDE.md)).
-- No live-order capability exists anywhere in the codebase, by design
-  (principle 10) — this isn't a flag waiting to be flipped, it doesn't exist.
-- No auth/multi-user support ([ADR-007](docs/DECISIONS.md)) — single-user
-  personal tool.
+- Single-user, password-gated ([ADR-066](docs/DECISIONS.md)) — real
+  login/session/step-up-reauth exist (Revision Prompt 16), but there is
+  no multi-user support and no self-service registration; the one
+  password is set via a local CLI script, by design.
+- The operator-configured baseline order-authority mode
+  (`Settings.operating_mode`) is only enforced by the frontend choosing
+  a matching value today — not yet cross-checked server-side in the
+  actual proposal-evaluation/submit endpoints (the kill switch itself
+  *is* correctly, independently enforced). Documented in detail in
+  [docs/RELEASE_GATE_PROOFS.md](docs/RELEASE_GATE_PROOFS.md) §2, with a
+  follow-up filed; practical risk is low today (single-user app, one
+  real caller).
 - Docker Compose can now run the whole stack (Postgres + API + web,
   `infra/docker-compose.yml`) but isn't the primary path on the current
   dev machine ([ADR-008](docs/DECISIONS.md)), and the Dockerfiles/compose

@@ -3108,3 +3108,119 @@ paths); `test_openapi_snapshot.py` passing confirms no further drift.
 
 No new secrets this revision. `.env`/`.env.local` remain absent from
 `git status --porcelain` before staging.
+
+## Revision Prompt 16 — paper beta security, deployment, and reliability (2026-08-11)
+
+Eighteen tasks (authentication, CSRF/headers, step-up re-auth, threat
+model, secret/dependency scanning, structured logging, health/
+readiness, job dashboard, cost-budget kill switch, idempotency fixes +
+scheduled reconciliation, a real always-on scheduler, tested backup/
+restore, Dockerfiles + docker-compose, CI, release-gate tests,
+release-gate proofs, this documentation pass, and the final gate/tag),
+each committed separately. Full detail on any individual task is in its
+own commit message; this entry is the aggregate evidence.
+
+### Idempotency + scheduled reconciliation
+
+Closed a real concurrent-replay gap `assert_transition_allowed()`
+alone didn't cover: `db.get(Order, order_id, with_for_update=True)`
+row-locks `confirm`/`cancel`/`cancel-open`, verified via
+`tests/test_idempotency_review.py` — a sequential double-confirm still
+400s exactly as before (regression proof), and the new row lock closes
+the race a second *simultaneous* request could otherwise exploit.
+`ReconciliationRun.idempotency_key` added (migration
+`ec5d9ae1a810`, verified upgrade→downgrade→upgrade); a new
+`POST /accounts/{id}/reconcile-automatic` wires the previously-unused
+`PaperBrokerProvider.get_paper_positions()` in for the first time.
+
+### Real always-on scheduler
+
+`core/scheduler.py`'s in-process APScheduler (`docs/BLOCKING_DECISIONS.md`
+#4's recorded choice, now built) ticks every 60s, calling
+`decide_schedule()`/`decide_reconciliation_schedule()` for real. Proven
+never to start under pytest (`TestClient` only runs lifespan when
+entered as a context manager; this project's `client` fixture never
+does) via `tests/test_scheduler.py` and the corrected `/ready` check
+(`not_running`, not a faked `ok`). Regenerating the OpenAPI snapshot
+during this task caught and fixed the snapshot fixture's own format
+(path/method pairs, not a flat path list) which a prior regeneration
+had silently gotten wrong — `test_openapi_snapshot.py` was actually
+failing until the format was corrected, not merely stale.
+
+### Backup/restore, tested for real
+
+`services/backup.py` wraps `pg_dump`/`pg_restore` (custom format).
+`tests/test_backup.py`'s round trip runs the real binaries against this
+dev Postgres server, scoped to a throwaway schema (never touching
+`public`'s seeded data): create a marker row, back it up, drop the
+table to simulate data loss, restore, assert the row is back. Also
+manually smoke-tested `backup_db.py` against the real dev database —
+485KB dump produced and verified.
+
+### Dockerfiles + CI — written carefully, honestly flagged as environment-unverified
+
+Neither Docker nor a GitHub remote exists on this dev machine (both
+confirmed absent from PATH / `git remote -v`). Every individual command
+each Dockerfile/CI workflow runs was verified directly in this session
+(`uv sync`-equivalent installs, `ruff`/`mypy src/`/`pytest`,
+`pnpm lint`/`typecheck`/`test`/`build`/`audit`, `pip-audit`, a real
+`pnpm build` producing `.next/standalone/server.js`) — what's
+unverified is the Dockerfile/workflow YAML executing end-to-end on real
+infrastructure. Recorded as an explicit release-gate caveat in
+`docs/OPERATIONS.md`, not silently assumed working.
+
+### Release-gate journey tests — closing a real, previously-flagged gap
+
+`tests/test_step_up_reauth.py`'s own docstring had already flagged it:
+"no factory for the full proposal->approval chain exists yet." No test
+in this ~700-test suite had ever driven
+`POST /order-proposals → /policy-evaluation → POST /order-approvals →
+/approve → /submit` over HTTP before `tests/test_release_gate_journeys.py`.
+Investigating this also found `apps/web/e2e/paper-order-flow.spec.ts`'s
+own comment was factually wrong (claimed the confirm button "submits to
+the real Alpaca paper-trading API"; it actually drives the separate,
+broker-agnostic `routers/orders.py` manual-entry flow) — fixed in both
+the spec and `docs/TEST_STRATEGY.md`.
+
+### Release-gate proofs — one real gap found, not smoothed over
+
+`docs/RELEASE_GATE_PROOFS.md` proves provenance, risk/invalidation,
+audit trail, and the morning-plan deadline against real code and 39
+individually re-run, named tests — and finds one genuine gap in the
+process: `services/order_authority.py::compute_effective_mode()`
+(docstring: "what every order-authority check must actually gate
+against") is called in exactly one place in the whole `src/` tree, a
+read-only reporting endpoint — never by the two live enforcement
+points. Confirmed concretely, not theoretically: this environment's
+effective mode is `RESEARCH_ONLY`, yet the golden-journey test
+successfully submits a real order requesting `PAPER_MANUAL_APPROVAL`.
+Filed as a follow-up rather than rushed into a live order-submission
+path this late in the pass; documented in README.md's "Known
+limitations" so the final gate decision is made knowingly.
+
+### Full suite, final state of this revision prompt
+
+Backend: **705 passed**, 0 failed (`uv run pytest -v` equivalent,
+`.venv/Scripts/python -m pytest -v`), `ruff check .` and
+`ruff format --check .` clean, `mypy src/` clean across 200 source
+files (`mypy .` — including `tests/` — has 71 pre-existing errors, all
+from minimal fake test doubles deliberately implementing only part of a
+Protocol; a real, documented, filed-not-fixed gap — see README.md's
+"Running checks" note). Frontend: 73 passed (13 files), `tsc --noEmit`
+clean, `eslint` clean, `next build` clean (23 routes) including the
+standalone-output build the Docker image depends on. OpenAPI path/
+method snapshot regenerated at 138 paths (the new
+`/api/v1/ops/scheduler` route).
+
+### Secrets check before commit
+
+`gitleaks git --log-opts="--all" --config .gitleaks.toml` (gitleaks
+8.30.1, re-run fresh for this entry, not merely cited from task:
+secret/dependency scanning): **44 commits scanned, ~4.58MB, no leaks
+found** — every commit through and including this documentation pass,
+with the already-documented allowlisted false positive
+(`docs/TEST_EVIDENCE.md`'s own `PRICE_ABOVE_EMA20` entropy match)
+unchanged. `pip-audit` and `pnpm audit` both re-verified clean after
+this revision's dependency changes (`apscheduler` added to the backend;
+`next` 16.3.0 already fixed the frontend findings from task: secret/
+dependency scanning).

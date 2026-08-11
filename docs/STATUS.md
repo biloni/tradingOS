@@ -117,8 +117,33 @@ above in a browser — three pre-existing frontend/backend contract
 mismatches fixed (`/portfolio`, `/legacy-dashboard`, `/symbols` were all
 calling nonexistent endpoints from an earlier backend generation,
 ADR-065; `/strategy-versions`'s complete absence of a backend was
-flagged, not built, as out-of-scope real UX debt).
-**Last updated:** 2026-08-10
+flagged, not built, as out-of-scope real UX debt), and Revision Prompt
+16 (paper beta security, deployment, and reliability — shipped: real
+password-gated authentication with sessions and step-up re-auth for
+sensitive actions (ADR-066), CSRF/security-header/CORS hardening, a
+documented threat model, secret/dependency scanning (gitleaks +
+pip-audit + `pnpm audit`) now wired into a new GitHub Actions CI
+pipeline alongside lint/type/test/build for both apps, structured/
+redacted logging, honest health/readiness reporting for every real
+dependency, a job dashboard, a cost-budget-triggered kill switch,
+closed idempotency gaps in order confirm/cancel/cancel-open plus a new
+broker-fetched scheduled-reconciliation capability, a real in-process
+always-on scheduler (APScheduler) that now actually calls the
+morning-plan and reconciliation decision functions on a timer instead
+of nothing calling them (still local-always-on, not deployed), tested
+`pg_dump`/`pg_restore` backup/restore tooling, Dockerfiles plus a full
+`docker-compose` stack (written carefully but not build-verified — this
+dev machine has no Docker installed), release-gate journey tests
+closing a real pre-existing gap (no test had ever driven the full
+order-authority propose→approve→submit chain over HTTP), and a
+release-gate proofs document (docs/RELEASE_GATE_PROOFS.md) that found
+and filed — rather than rush-fixed — one real gap: the
+operator-configured baseline order-authority mode isn't yet
+cross-checked server-side, only the kill switch itself is; no live
+broker execution exists anywhere, unchanged, and Revision Prompt 17
+remains explicitly gated on this release being tagged and separately
+approved to begin).
+**Last updated:** 2026-08-11
 
 ## Revision Prompt 15 (2026-08-10) — executive-quality morning dashboard UX
 
