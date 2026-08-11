@@ -21,6 +21,7 @@ from tradingos_api.core.logging import (
     reset_request_id,
     set_request_id,
 )
+from tradingos_api.core.metrics import request_metrics
 
 _REQUEST_ID_HEADER = "X-Request-ID"
 _access_logger = logging.getLogger("tradingos_api.access")
@@ -40,6 +41,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             # still reset) on an unhandled exception, not to duplicate
             # that logging.
             duration_ms = round((time.monotonic() - started) * 1000, 2)
+            request_metrics.record(status_code=500, duration_ms=duration_ms)
             _access_logger.info(
                 "request failed",
                 extra={
@@ -55,6 +57,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             reset_request_id(token)
 
         duration_ms = round((time.monotonic() - started) * 1000, 2)
+        request_metrics.record(status_code=response.status_code, duration_ms=duration_ms)
         response.headers[_REQUEST_ID_HEADER] = request_id
         _access_logger.info(
             "request handled",

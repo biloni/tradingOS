@@ -54,8 +54,27 @@ polling them has no session cookie):
     process) — `/ready` says so rather than reporting a fake "ok" for
     a process that doesn't exist.
 
-No job dashboard or metrics scraping endpoint exists yet (separate,
-already-tracked task).
+### Job dashboard + metrics (Revision Prompt 16)
+
+- **`GET /api/v1/ops/metrics`** — in-process, stdlib-only request
+  metrics (`core/metrics.py`): uptime, total requests, status-class
+  counts (2xx/4xx/5xx/...), and latency (avg/p50/p95 over the most
+  recent 2000 requests). Resets on process restart and reflects only
+  this one server process — no aggregation pipeline exists (no
+  Prometheus, no external scraper); this is a same-process, in-memory
+  summary only, exposed as JSON.
+- **`GET /api/v1/ops/job-runs`** — the job dashboard's content:
+  `MorningPlanRun` rows, most recent first, capped at 100. This is the
+  one recurring "job" concept this app actually has today (see
+  "Running the Morning Decision Plan schedule" above) — `JobRun`,
+  `CommitteeSession`, `AgentRun`, and `ReconciliationRun` all track
+  runs too, but weren't pulled into this first pass; scope this wider
+  if a future revision needs it.
+- **Frontend**: `/ops` page (`apps/web/app/ops/page.tsx`) renders both,
+  polling every 15s.
+- Both endpoints require authentication (unlike `/health`/`/ready`) —
+  this is operational data about the app's own internals, not
+  something an infra orchestrator with no credentials needs.
 
 ## Runbooks
 

@@ -367,6 +367,18 @@
     ]
   ],
   [
+    "/api/v1/ops/job-runs",
+    [
+      "get"
+    ]
+  ],
+  [
+    "/api/v1/ops/metrics",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/order-approvals",
     [
       "post"

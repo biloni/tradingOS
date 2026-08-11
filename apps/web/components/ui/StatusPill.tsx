@@ -19,6 +19,9 @@ const STATUS_TONES: Record<string, Tone> = {
   SIGNAL_EXIT: "info",
   MAX_HOLDING_DAYS: "warning",
   END_OF_BACKTEST: "neutral",
+  RUNNING: "info",
+  COMPLETED: "positive",
+  FAILED: "negative",
 };
 
 const TONE_CLASSES: Record<Tone, string> = {

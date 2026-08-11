@@ -25,6 +25,7 @@ from tradingos_api.routers import (
     market,
     monitoring,
     morning_plan,
+    ops,
     order_authority,
     orders,
     paper_auto_policy,
@@ -120,3 +121,4 @@ app.include_router(paper_auto_policy.router, dependencies=_AUTH)
 app.include_router(monitoring.router, dependencies=_AUTH)
 app.include_router(event_backtests.router, dependencies=_AUTH)
 app.include_router(governance.router, dependencies=_AUTH)
+app.include_router(ops.router, dependencies=_AUTH)

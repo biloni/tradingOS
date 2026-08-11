@@ -27,6 +27,7 @@ const SECONDARY_LINKS = [
   { href: "/ask", label: "Ask" },
   { href: "/backtests", label: "Backtests" },
   { href: "/strategy-versions", label: "Strategy" },
+  { href: "/ops", label: "Operations" },
   { href: "/settings", label: "Settings" },
   { href: "/legacy-dashboard", label: "Legacy Dashboard" },
 ];
