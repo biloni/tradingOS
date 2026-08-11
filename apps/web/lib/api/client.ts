@@ -23,6 +23,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
     cache: "no-store",
+    // Revision Prompt 16, ADR-066: the API issues an httpOnly session
+    // cookie on login. Cross-origin (localhost:3000 -> localhost:8000)
+    // fetch never sends cookies without this, even for same-origin-looking
+    // calls in dev — every request needs it, not just ones that already
+    // "know" they're authenticated.
+    credentials: "include",
   });
 
   if (!response.ok) {

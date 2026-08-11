@@ -26,12 +26,21 @@ from tradingos_api.models.enums import NotificationChannel, ProviderKind, RiskTo
 class UserProfile(UUIDPkMixin, CreatedAtMixin, Base):
     """The one user. `services/identity.py`'s `get_or_create_default_user()`
     lazily creates the single row, the same pattern the shipped MVP already
-    used for `PaperPortfolio` (ADR-013)."""
+    used for `PaperPortfolio` (ADR-013).
+
+    `password_hash` (Revision Prompt 16, ADR-066 — supersedes ADR-007's
+    "no authentication" for the paper-beta release): `scrypt$<salt_hex>$<hash_hex>`,
+    never a plaintext password or a reversible encryption. Nullable — a
+    freshly-seeded user has no password until `scripts/set_password.py`
+    (the one-time bootstrap CLI, never an HTTP endpoint) sets one;
+    `routers/auth.py::login()` rejects login with a clear message while
+    it's `None` rather than treating `None` as "no password required.\""""
 
     __tablename__ = "user_profile"
 
     display_name: Mapped[str] = mapped_column(sa.String(120))
     timezone: Mapped[str] = mapped_column(sa.String(64), default="America/New_York")
+    password_hash: Mapped[str | None] = mapped_column(sa.String(255), default=None)
 
 
 class InvestmentProfile(UUIDPkMixin, OwnedMixin, TimestampMixin, Base):
@@ -153,11 +162,44 @@ class ProviderConfig(UUIDPkMixin, TimestampMixin, Base):
     config_metadata: Mapped[dict[str, Any]] = mapped_column(PORTABLE_JSON, default=dict)
 
 
+class Session(UUIDPkMixin, CreatedAtMixin, Base):
+    """A server-side, revocable login session (Revision Prompt 16, ADR-066).
+
+    `token_hash` — SHA-256 hex of the raw session token — is the only
+    thing ever stored; the raw token itself lives only in the client's
+    httpOnly cookie and this one response, never written to a log or a
+    database column, so a database leak alone can never be replayed as a
+    live session (`core/auth.py::hash_token()`). `stepped_up_at` is
+    separate from `created_at`/`last_seen_at`: a normal session proves
+    "this browser logged in recently," but Prompt 16's step-up
+    requirement for kill switch / cancel-all / mode changes / approval
+    decisions needs "the password was re-entered recently," a strictly
+    narrower and separately-expiring fact (`core/auth.py::STEP_UP_TTL`).
+    """
+
+    __tablename__ = "sessions"
+    __table_args__ = (sa.Index("ix_sessions_token_hash", "token_hash", unique=True),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        sa.Uuid(as_uuid=True), sa.ForeignKey("user_profile.id"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(sa.String(64))
+    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now()
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), default=None)
+    stepped_up_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), default=None)
+    user_agent: Mapped[str | None] = mapped_column(sa.String(255), default=None)
+    ip_address: Mapped[str | None] = mapped_column(sa.String(64), default=None)
+
+
 __all__ = [
     "InvestmentProfile",
     "NotificationPreference",
     "ProviderConfig",
     "RiskPolicy",
+    "Session",
     "RiskPolicyVersion",
     "UserProfile",
 ]

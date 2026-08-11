@@ -2474,3 +2474,97 @@ existing trading/scoring/sizing/policy logic changed. `tests/order-approval.test
 lock in the corrected contracts; docs/UX_MAP.md's new "Known UX debt"
 section keeps the two deliberately-deferred gaps (the Approval Queue
 list page, `/strategy-versions`) visible rather than silently dropped.
+
+## ADR-066: Revision Prompt 16 replaces the single-user auth stub with real server-side sessions, enforced as a per-router FastAPI dependency (not ASGI middleware), with stdlib-only password hashing and a CLI-only credential bootstrap
+
+**Context.** Every route before this revision was reachable with no
+credential at all — acceptable for a scaffold, not for "prepare a
+reliable paper beta." Prompt 16 requires authentication, secure
+sessions, and CSRF/secret/header hardening. This ADR covers the
+authentication and session half; CSRF/headers/threat-model updates are
+tracked as separate, later tasks in the same revision.
+
+**Decision 1 — server-side revocable sessions, not JWT.** A session is a
+random opaque token; the server stores only `token_hash` (never the raw
+token) in a new `sessions` table alongside `user_id`, `expires_at`,
+`last_seen_at`, `revoked_at`, and `stepped_up_at`. This is a
+single-user, single-device app, so JWT's main selling point (stateless
+verification across many servers) buys nothing, while its main cost
+(no server-side revocation short of a blocklist) is a real loss: a
+lost/stolen cookie or a `/logout` click needs to actually kill the
+session, immediately, not merely expire it. `token_hash` being stored
+instead of the raw token means a database read (backup, leaked file)
+can't be replayed as a session on its own.
+
+**Decision 2 — a FastAPI dependency (`require_session`), not
+`BaseHTTPMiddleware`.** The first implementation used ASGI middleware
+opening its own `SessionLocal()`, which broke every test that relies on
+`app.dependency_overrides[get_db]` — that override mechanism only
+intercepts `Depends(get_db)` calls; middleware's independently-opened
+connection can't see a test's uncommitted `SAVEPOINT` writes
+(`tests/conftest.py`'s `db_session`/`create_savepoint` pattern). Rewritten
+as `core/dependencies.py::require_session(request, db=Depends(get_db))`,
+applied per-router via `app.include_router(X.router, dependencies=[Depends(require_session)])`
+in `main.py`. Established as the pattern for any future cross-cutting
+per-request check that needs to be test-transaction-aware.
+
+**Decision 3 — stdlib-only password hashing.** `hashlib.scrypt`
+(N=2^14, r=8, p=1, 16-byte salt) plus `hmac.compare_digest` for
+constant-time verification, rather than adding `passlib`/`bcrypt`/
+`argon2-cffi` as a new dependency. This is a single-password,
+single-user app — scrypt via the standard library is memory-hard enough
+for that threat model without a new supply-chain dependency.
+
+**Decision 4 — step-up is a separate, shorter-lived fact from session
+validity.** `SESSION_TTL` (12h) says "this browser logged in recently";
+`STEP_UP_TTL` (5min, tracked via `Session.stepped_up_at`) says "the
+password was just re-entered." `POST /api/v1/auth/step-up` re-verifies
+the password against the already-authenticated session and refreshes
+`stepped_up_at`. The backend plumbing ships in this task; wiring
+specific sensitive endpoints (kill switch, cancel-all, mode changes,
+approval decisions) to *require* a fresh step-up is a separate,
+already-tracked follow-up task in this revision.
+
+**Decision 5 — credential bootstrap is a CLI script, never an HTTP
+endpoint.** `python -m tradingos_api.scripts.set_password <password>`
+sets the one user's `password_hash` directly via a DB session — there is
+no `POST /auth/register` or `/auth/reset-password` route. An HTTP
+"set/reset password" endpoint reachable with no prior authentication
+would itself be the account-takeover vulnerability this feature exists
+to prevent; a local CLI invocation already implies local
+machine/code-execution trust that an HTTP endpoint can't assume.
+
+**Decision 6 — the `client` test fixture auto-authenticates.** Roughly
+600 pre-existing tests assumed an unauthenticated `TestClient` could
+call any route. Rather than touch every one of them, `tests/conftest.py`'s
+`client` fixture now sets a fixed test-only password on the seeded user
+(inside the same rolled-back transaction) and logs in via the real
+`POST /api/v1/auth/login` before yielding — `httpx`'s client-level cookie
+jar then carries the session cookie on every subsequent request the test
+makes, with zero per-test changes required. The module-level
+`login_rate_limiter` (5-attempt burst) needed a test-only `reset()`
+method so ~600 tests logging in once each didn't exhaust it after the
+fifth test.
+
+**Decision 7 — the frontend is a client-side route guard, not Next.js
+middleware.** `components/layout/AuthGate.tsx` calls
+`GET /api/v1/auth/session` (the one route exempt from the auth gate) via
+a react-query hook and redirects to `/login` when unauthenticated.
+Middleware would need the exact same round trip to the API to validate
+the opaque session token — there's no edge-side shortcut for an opaque
+token — so a client component avoids a second, redundant implementation
+of the same check for no real benefit in a single-user local app. Every
+`fetch` in `lib/api/client.ts` now sends `credentials: "include"`,
+required for the httpOnly session cookie to survive the cross-origin
+`localhost:3000` → `localhost:8000` hop in local dev.
+
+**Consequences.** Every business router in `main.py` now requires a
+valid session except `auth.router` (login must be reachable
+unauthenticated) and `health.router` (liveness/readiness must be
+checkable with no credentials). `docs/SECURITY.md` and
+`docs/THREAT_MODEL.md` still describe the old no-auth state as of this
+ADR — updating them, along with CSRF protection and secure headers, is
+explicitly the next task in this revision, not folded in here. Verified
+live in-browser end to end: unauthenticated visit → redirect to
+`/login` → login → dashboard renders real data with the session cookie
+→ `Sign out` → redirect back to `/login`.

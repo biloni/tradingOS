@@ -37,7 +37,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tradingos_api.core.dependencies import get_current_user_id
+from tradingos_api.core.auth import get_default_user_id
 from tradingos_api.models.agents import (
     AgentDefinition,
     AgentEvidenceLink,
@@ -445,7 +445,7 @@ def _create_investment_thesis(
     contract output, never invented here."""
     thesis = InvestmentThesis(
         recommendation_id=recommendation.id,
-        owner_user_id=get_current_user_id(db),
+        owner_user_id=get_default_user_id(db),
         instrument_id=bundle.instrument_id,
         status=ThesisStatus.ACTIVE,
     )

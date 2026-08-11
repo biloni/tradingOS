@@ -62,6 +62,15 @@ uv run uvicorn tradingos_api.main:app --reload
 ```
 Runs on http://localhost:8000. Check `GET /health`.
 
+Every route except `/health` and `/api/v1/auth/*` requires a logged-in
+session ([ADR-066](docs/DECISIONS.md)). Set the one app password once,
+after seeding:
+```bash
+uv run python -m tradingos_api.scripts.set_password <your-choice>
+```
+There is no self-service registration/reset endpoint by design — this
+CLI script, run with local machine access, is the only way to set it.
+
 ### 2. Web
 
 ```bash
@@ -70,7 +79,8 @@ cp .env.local.example .env.local   # defaults are fine for local dev
 pnpm install
 pnpm dev
 ```
-Runs on http://localhost:3000.
+Runs on http://localhost:3000 — redirects to `/login` until you sign in
+with the password set above.
 
 ### Running checks
 

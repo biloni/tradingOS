@@ -19,14 +19,23 @@ from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, create_engine, select, text
 from sqlalchemy.orm import Session
 
+from tradingos_api.core.auth import hash_password
 from tradingos_api.core.config import get_settings
 from tradingos_api.db.session import get_db
 from tradingos_api.main import app
 from tradingos_api.models.enums import AccountType
 from tradingos_api.models.execution import Account
+from tradingos_api.models.identity import UserProfile
+from tradingos_api.routers.auth import login_rate_limiter
+
+# Revision Prompt 16, ADR-066 — never a real credential; set once on the
+# seeded user inside each test's own rolled-back transaction. The
+# `client` fixture logs in with this automatically so none of the
+# pre-existing tests need to change just to get past the new auth gate.
+TEST_PASSWORD = "test-password-not-a-real-secret"
 
 _engine: Engine | None = None
 
@@ -54,12 +63,33 @@ def db_session() -> Iterator[Session]:
 
 @pytest.fixture
 def client(db_session: Session) -> Iterator[TestClient]:
+    """Revision Prompt 16, ADR-066: sets a test-only password on the
+    seeded user and logs in before yielding, so the returned
+    `TestClient` already carries a valid session cookie (httpx's
+    client-level cookie jar persists it across every subsequent request
+    the test makes) — no change needed in any of the ~600 tests that
+    already assumed an unauthenticated `client` could call any route."""
+
     def _override_get_db() -> Iterator[Session]:
         yield db_session
 
     app.dependency_overrides[get_db] = _override_get_db
     try:
-        yield TestClient(app)
+        user = db_session.scalar(select(UserProfile))
+        if user is not None:
+            user.password_hash = hash_password(TEST_PASSWORD)
+            db_session.flush()
+        test_client = TestClient(app)
+        if user is not None:
+            # `login_rate_limiter` is a module-level singleton shared by
+            # the whole pytest process (Revision Prompt 16) — every test
+            # logging in once would otherwise exhaust it after 5 tests.
+            login_rate_limiter.reset()
+            login_response = test_client.post(
+                "/api/v1/auth/login", json={"password": TEST_PASSWORD}
+            )
+            assert login_response.status_code == 200, login_response.text
+        yield test_client
     finally:
         app.dependency_overrides.pop(get_db, None)
 

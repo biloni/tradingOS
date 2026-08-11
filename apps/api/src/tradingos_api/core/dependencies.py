@@ -1,12 +1,12 @@
 import uuid
 from decimal import Decimal
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from tradingos_api.core.auth import SESSION_COOKIE_NAME, get_valid_session, touch_session
 from tradingos_api.core.config import get_settings
 from tradingos_api.db.session import get_db
-from tradingos_api.models.identity import UserProfile
 from tradingos_api.providers.alpaca_evidence import (
     AlpacaBrokerCapabilityProvider,
     AlpacaStockDataProvider,
@@ -89,16 +89,42 @@ def get_llm_provider() -> LLMProvider:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-def get_current_user_id(db: Session = Depends(get_db)) -> uuid.UUID:
-    """The single seeded user (ADR-007 — no auth in this system). Every
-    Phase 8 router depends on this rather than hardcoding a lookup, so a
-    real multi-user auth layer only has to replace this one function.
-    Raises 500 (not 404) if no user exists — this is a seed-data
-    precondition, not a legitimate "not found" a client could hit."""
-    user = db.query(UserProfile).first()
-    if user is None:
+def require_session(request: Request, db: Session = Depends(get_db)) -> None:
+    """Revision Prompt 16, ADR-066 — the auth gate. Applied as a
+    router-level dependency (`dependencies=[Depends(require_session)]`
+    on every `app.include_router(...)` call in `main.py` except `auth`
+    and `health`) rather than raw ASGI middleware, deliberately: a
+    dependency participates in FastAPI's normal `Depends(get_db)`
+    resolution — including `app.dependency_overrides` in tests — so a
+    session created via `POST /auth/login` inside a test is validated
+    against the *same* test-transaction connection, not a second,
+    independent one that can't see uncommitted savepoint data.
+    Sets `request.state.user_id`/`session_id`/`stepped_up_at` on
+    success; raises 401 otherwise — this is the only function in the
+    codebase that ever validates a session."""
+    raw_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    session = get_valid_session(db, raw_token=raw_token)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Session expired or invalid.")
+    touch_session(db, session)
+    db.commit()
+    request.state.user_id = session.user_id
+    request.state.session_id = session.id
+    request.state.stepped_up_at = session.stepped_up_at
+
+
+def get_current_user_id(request: Request) -> uuid.UUID:
+    """Reads the `user_id` `require_session()` already validated and set
+    on `request.state` — this function never re-validates a session
+    itself. The 500 here is a genuine "this should be structurally
+    impossible" signal (this dependency was used on a route not also
+    gated by `require_session`), never a normal 401 substitute."""
+    user_id = getattr(request.state, "user_id", None)
+    if user_id is None:
         raise HTTPException(
             status_code=500,
-            detail="No user_profile row exists — run the seed script (tradingos-seed).",
+            detail="get_current_user_id() called on a route require_session() didn't gate.",
         )
-    return user.id
+    return uuid.UUID(str(user_id))

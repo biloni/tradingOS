@@ -6,6 +6,8 @@ import { Providers } from "./providers";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { EnvironmentBanner } from "@/components/layout/EnvironmentBanner";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { AuthGate } from "@/components/layout/AuthGate";
+import { LogoutButton } from "@/components/layout/LogoutButton";
 
 // Applies the persisted (or system-default) theme class before first
 // paint — `beforeInteractive` runs ahead of hydration, so there is no
@@ -61,8 +63,9 @@ export default function RootLayout({
             <div className="flex-1">
               <EnvironmentBanner />
             </div>
-            <div className="flex shrink-0 items-center border-b border-zinc-200 bg-white px-3 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-3 dark:border-zinc-800 dark:bg-zinc-950">
               <ThemeToggle />
+              <LogoutButton />
             </div>
           </div>
           <div className="flex min-h-full flex-1">
@@ -72,7 +75,7 @@ export default function RootLayout({
               tabIndex={-1}
               className="min-w-0 flex-1 bg-zinc-50 dark:bg-black"
             >
-              {children}
+              <AuthGate>{children}</AuthGate>
             </main>
           </div>
         </Providers>

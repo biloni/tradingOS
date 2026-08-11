@@ -31,6 +31,16 @@ class TokenBucketRateLimiter:
                 return True
             return False
 
+    def reset(self) -> None:
+        """Refills to full capacity — for tests only. A production
+        caller has no legitimate reason to reset its own rate limit;
+        this exists because `login_rate_limiter` is a module-level
+        singleton shared by the whole pytest process, and the
+        `client` fixture logs in once per test (Revision Prompt 16)."""
+        with self._lock:
+            self._tokens = self._capacity
+            self._last_refill = time.monotonic()
+
 
 # 5-request burst, steady-state refill of 1 request per 12 seconds (5/min) —
 # generous for interactive single-user use, tight enough to stop a buggy
