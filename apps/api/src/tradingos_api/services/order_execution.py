@@ -750,7 +750,23 @@ def cancel_order_at_broker(db: Session, *, order: Order, broker: PaperBrokerProv
     `submit_paper_order()`/`submit_protective_leg()`, that calls a
     `PaperBrokerProvider` — the cancel-open-orders control (OA-9/SS-4)
     goes through here rather than a router calling `broker.cancel_paper_order()`
-    directly, keeping the single-entry-point property whole."""
+    directly, keeping the single-entry-point property whole.
+
+    Idempotent by design (Revision Prompt 16 idempotency review): an
+    order already in a terminal state (most commonly `CANCELED`,
+    reached via a concurrent individual cancel or a second cancel-open
+    call racing this one) is returned unchanged rather than calling the
+    broker again — `cancel_paper_order()` on an already-canceled broker
+    order can raise (`SyntheticBrokerOrderNotFound` for the synthetic
+    provider), which is exactly the "assume the caller already checked"
+    failure mode this re-check exists to remove. Callers (`routers/orders.py`)
+    only ever pass orders already filtered to `SUBMITTED`/`PARTIALLY_FILLED`,
+    but that filter is read *before* this runs — this is the same
+    "re-check right before touching the broker, don't just trust an
+    earlier read" pattern `refresh_and_recalculate()` already applies to
+    submission."""
+    if order.status not in (OrderStatus.SUBMITTED, OrderStatus.PARTIALLY_FILLED):
+        return order
     if order.broker_order_id is None:
         raise ValueError(f"order {order.id} has no broker_order_id to cancel")
     broker.cancel_paper_order(order.broker_order_id)

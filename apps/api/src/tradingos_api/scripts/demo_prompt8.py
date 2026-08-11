@@ -208,7 +208,7 @@ def main() -> None:
         combined_qty = get_combined_position_view(
             db, account_id=account.id, instrument_id=instrument.id
         ).combined_quantity
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db,
             account_id=account.id,
             as_of=datetime.now(UTC),

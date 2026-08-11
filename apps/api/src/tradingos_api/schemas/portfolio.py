@@ -177,7 +177,14 @@ class ReconciliationRunResponse(BaseModel):
     as_of: datetime
     overall_status: ReconciliationStatus
     lines: list[ReconciliationLineResponse]
+    replayed: bool = False
 
 
 class ReconciliationRequest(BaseModel):
     broker_reported_positions: dict[str, Decimal] = {}  # ticker -> quantity
+    # Revision Prompt 16 idempotency review — optional, matching this
+    # project's established client-supplied idempotency_key convention
+    # (docs/API_CONTRACTS.md). A repeated call with the same key returns
+    # the original run (`replayed=True` in the response) instead of
+    # creating a duplicate ReconciliationRun/ReconciliationLine set.
+    idempotency_key: str | None = None

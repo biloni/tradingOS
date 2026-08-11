@@ -883,7 +883,7 @@ class TestBrokerLocalReconciliationMismatch:
         # The broker reports 7 shares (e.g. a corporate action or a
         # missed fill this app never ingested) instead of the 10 we
         # think we hold.
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db_session,
             account_id=account.id,
             as_of=datetime.now(UTC),
@@ -916,7 +916,7 @@ class TestBrokerLocalReconciliationMismatch:
             quote_provider=_FixedQuote(Decimal("150.00")),
             lane=LotLane.TACTICAL,
         )
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db_session,
             account_id=account.id,
             as_of=datetime.now(UTC),

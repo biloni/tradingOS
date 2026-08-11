@@ -236,7 +236,15 @@ def propose_order(payload: OrderCreateRequest, db: Session = Depends(get_db)) ->
 
 @router.post("/{order_id}/confirm", response_model=OrderResponse)
 def confirm_order(order_id: uuid.UUID, db: Session = Depends(get_db)) -> OrderResponse:
-    order = db.get(Order, order_id)
+    # Revision Prompt 16 idempotency review: `with_for_update=True` closes
+    # the concurrent-replay gap the existing `assert_transition_allowed()`
+    # check alone doesn't cover — two simultaneous confirms could both
+    # read the same pre-transition `order.status` and both pass the
+    # check before either commits, doubly filling the order. The row
+    # lock forces a second concurrent request to wait for the first
+    # transaction to commit, so it then sees the already-updated status
+    # and correctly 400s instead of double-applying the fill.
+    order = db.get(Order, order_id, with_for_update=True)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found.")
     account = db.get(Account, order.account_id)
@@ -268,7 +276,10 @@ def confirm_order(order_id: uuid.UUID, db: Session = Depends(get_db)) -> OrderRe
 
 @router.post("/{order_id}/cancel", response_model=OrderResponse)
 def cancel_order(order_id: uuid.UUID, db: Session = Depends(get_db)) -> OrderResponse:
-    order = db.get(Order, order_id)
+    # Same row-lock reasoning as confirm_order() above — closes the
+    # concurrent-replay race, not just the sequential-replay case the
+    # transition check already handled on its own.
+    order = db.get(Order, order_id, with_for_update=True)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found.")
     try:
@@ -391,6 +402,14 @@ def cancel_open_orders(
         ).all()
         stmt = stmt.where(Order.account_id.in_(paper_account_ids))
 
+    # Revision Prompt 16 idempotency review — locks every matched order
+    # row for the duration of this transaction, closing the window
+    # where an individual cancel/confirm or a second concurrent
+    # cancel-open call could race this loop between the read here and
+    # `cancel_order_at_broker()`'s own write. `cancel_order_at_broker()`
+    # itself is also idempotent (re-checks status), so this is defense
+    # in depth, not the only guard.
+    stmt = stmt.with_for_update()
     open_orders = db.scalars(stmt).all()
     canceled_ids: list[uuid.UUID] = []
     for order in open_orders:

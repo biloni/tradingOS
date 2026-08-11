@@ -64,7 +64,7 @@ class TestBrokerAggregateReconciliation:
         instrument = _instrument(db_session)
         _buy(db_session, account_id=account.id, instrument_id=instrument.id, qty=Decimal(100))
 
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db_session,
             account_id=account.id,
             as_of=datetime.now(UTC),
@@ -77,7 +77,7 @@ class TestBrokerAggregateReconciliation:
         instrument = _instrument(db_session)
         _buy(db_session, account_id=account.id, instrument_id=instrument.id, qty=Decimal(100))
 
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db_session,
             account_id=account.id,
             as_of=datetime.now(UTC),
@@ -92,7 +92,7 @@ class TestBrokerAggregateReconciliation:
         instrument = _instrument(db_session)
         _buy(db_session, account_id=account.id, instrument_id=instrument.id, qty=Decimal(100))
 
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db_session,
             account_id=account.id,
             as_of=datetime.now(UTC),
@@ -108,10 +108,87 @@ class TestBrokerAggregateReconciliation:
         account = _account(db_session)
         instrument = _instrument(db_session)
 
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db_session,
             account_id=account.id,
             as_of=datetime.now(UTC),
             broker_reported_positions={instrument.id: Decimal(50)},
         )
         assert run.overall_status == ReconciliationStatus.DISCREPANCY
+
+
+class TestReconciliationIdempotency:
+    """Revision Prompt 16 idempotency review — reconciliation was the
+    one confirmed clean gap: every call, replay or not, created a
+    brand-new run/line set with no way to detect a duplicate."""
+
+    def test_repeated_key_returns_the_original_run_not_a_duplicate(
+        self, db_session: Session
+    ) -> None:
+        account = _account(db_session)
+        instrument = _instrument(db_session)
+        _buy(db_session, account_id=account.id, instrument_id=instrument.id, qty=Decimal(100))
+
+        first, first_replayed = run_reconciliation(
+            db_session,
+            account_id=account.id,
+            as_of=datetime.now(UTC),
+            broker_reported_positions={instrument.id: Decimal(100)},
+            idempotency_key="test-key-1",
+        )
+        second, second_replayed = run_reconciliation(
+            db_session,
+            account_id=account.id,
+            as_of=datetime.now(UTC),
+            # Deliberately different broker figure — proves the second
+            # call never re-executes, it just returns the first result.
+            broker_reported_positions={instrument.id: Decimal(999)},
+            idempotency_key="test-key-1",
+        )
+
+        assert first_replayed is False
+        assert second_replayed is True
+        assert second.id == first.id
+        assert second.overall_status == first.overall_status
+
+    def test_no_key_never_dedupes(self, db_session: Session) -> None:
+        """Un-keyed calls (the pre-existing default) are unaffected —
+        each is its own run, exactly as before this change."""
+        account = _account(db_session)
+        instrument = _instrument(db_session)
+        _buy(db_session, account_id=account.id, instrument_id=instrument.id, qty=Decimal(100))
+
+        first, _ = run_reconciliation(
+            db_session,
+            account_id=account.id,
+            as_of=datetime.now(UTC),
+            broker_reported_positions={instrument.id: Decimal(100)},
+        )
+        second, _ = run_reconciliation(
+            db_session,
+            account_id=account.id,
+            as_of=datetime.now(UTC),
+            broker_reported_positions={instrument.id: Decimal(100)},
+        )
+        assert first.id != second.id
+
+    def test_different_keys_are_independent_runs(self, db_session: Session) -> None:
+        account = _account(db_session)
+        instrument = _instrument(db_session)
+        _buy(db_session, account_id=account.id, instrument_id=instrument.id, qty=Decimal(100))
+
+        first, _ = run_reconciliation(
+            db_session,
+            account_id=account.id,
+            as_of=datetime.now(UTC),
+            broker_reported_positions={instrument.id: Decimal(100)},
+            idempotency_key="key-a",
+        )
+        second, _ = run_reconciliation(
+            db_session,
+            account_id=account.id,
+            as_of=datetime.now(UTC),
+            broker_reported_positions={instrument.id: Decimal(100)},
+            idempotency_key="key-b",
+        )
+        assert first.id != second.id

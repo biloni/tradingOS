@@ -254,7 +254,7 @@ def main() -> None:
         )
 
         print("\n=== 3. Broker/local reconciliation ===")
-        run = run_reconciliation(
+        run, _replayed = run_reconciliation(
             db,
             account_id=account.id,
             as_of=datetime.now(UTC),

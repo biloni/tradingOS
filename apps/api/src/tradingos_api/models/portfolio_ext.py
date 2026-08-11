@@ -150,6 +150,13 @@ class ReconciliationRun(UUIDPkMixin, CreatedAtMixin, Base):
     overall_status: Mapped[ReconciliationStatus] = mapped_column(
         sa.Enum(ReconciliationStatus, name="reconciliation_status")
     )
+    # Revision Prompt 16 idempotency review — client-supplied, matching
+    # this project's established `idempotency_key` convention
+    # (docs/API_CONTRACTS.md): a repeated request with the same key
+    # returns the original run rather than creating a duplicate. NULL
+    # for callers that don't supply one (unique constraints treat
+    # multiple NULLs as distinct, so this never blocks un-keyed calls).
+    idempotency_key: Mapped[str | None] = mapped_column(sa.String(120), unique=True, nullable=True)
 
 
 class ReconciliationLine(UUIDPkMixin, CreatedAtMixin, Base):

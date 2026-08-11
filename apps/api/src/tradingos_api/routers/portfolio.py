@@ -17,9 +17,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tradingos_api.core.dependencies import get_current_user_id
+from tradingos_api.core.dependencies import get_broker_provider, get_current_user_id
 from tradingos_api.db.session import get_db
-from tradingos_api.models.enums import OrderStatus, OrderType
+from tradingos_api.models.enums import AccountType, OrderStatus, OrderType
 from tradingos_api.models.execution import (
     Account,
     CashLedgerEntry,
@@ -30,6 +30,7 @@ from tradingos_api.models.execution import (
 )
 from tradingos_api.models.portfolio_ext import ReconciliationLine, ReconciliationRun
 from tradingos_api.models.security_master import Instrument
+from tradingos_api.providers.broker import PaperBrokerProvider
 from tradingos_api.schemas.instruments import InstrumentResponse
 from tradingos_api.schemas.portfolio import (
     AccountDetailResponse,
@@ -58,7 +59,7 @@ from tradingos_api.services.holding_guidance import (
 )
 from tradingos_api.services.lane_attribution import get_combined_position_view
 from tradingos_api.services.portfolio_accounting import apply_execution, get_open_lots
-from tradingos_api.services.reconciliation import run_reconciliation
+from tradingos_api.services.reconciliation import reconcile_from_broker, run_reconciliation
 
 router = APIRouter(prefix="/api/v1/portfolio", tags=["portfolio"])
 
@@ -256,7 +257,9 @@ async def import_csv(
     )
 
 
-def _reconciliation_run_response(db: Session, run: ReconciliationRun) -> ReconciliationRunResponse:
+def _reconciliation_run_response(
+    db: Session, run: ReconciliationRun, *, replayed: bool = False
+) -> ReconciliationRunResponse:
     lines = db.scalars(
         select(ReconciliationLine).where(ReconciliationLine.reconciliation_run_id == run.id)
     ).all()
@@ -274,7 +277,11 @@ def _reconciliation_run_response(db: Session, run: ReconciliationRun) -> Reconci
             )
         )
     return ReconciliationRunResponse(
-        id=run.id, as_of=run.as_of, overall_status=run.overall_status, lines=line_responses
+        id=run.id,
+        as_of=run.as_of,
+        overall_status=run.overall_status,
+        lines=line_responses,
+        replayed=replayed,
     )
 
 
@@ -293,14 +300,58 @@ def reconcile_account(
             raise HTTPException(status_code=422, detail=f"Unknown ticker: {ticker}")
         broker_positions[instrument.id] = quantity
 
-    run = run_reconciliation(
+    run, replayed = run_reconciliation(
         db,
         account_id=account_id,
         as_of=datetime.now(UTC),
         broker_reported_positions=broker_positions,
+        idempotency_key=payload.idempotency_key,
     )
     db.commit()
-    return _reconciliation_run_response(db, run)
+    return _reconciliation_run_response(db, run, replayed=replayed)
+
+
+@router.post("/accounts/{account_id}/reconcile-automatic", response_model=ReconciliationRunResponse)
+def reconcile_account_automatic(
+    account_id: uuid.UUID,
+    idempotency_key: str | None = None,
+    db: Session = Depends(get_db),
+    broker: PaperBrokerProvider = Depends(get_broker_provider),
+) -> ReconciliationRunResponse:
+    """Revision Prompt 16 idempotency review — "scheduled reconciliation."
+    No always-on scheduler exists in this deployment yet
+    (`services/reconciliation_scheduler.py::decide_reconciliation_schedule()`
+    is the same pure-decision-function pattern `morning_plan_scheduler.py`
+    already established, ready for whatever eventually calls it on a
+    real timer — see task: real always-on scheduler/worker process).
+    What this endpoint closes today: reconciliation no longer *requires*
+    a human to manually type broker-reported quantities — it calls
+    `broker.get_paper_positions()` directly. Only meaningful for a
+    `PAPER_ALPACA` account (a `MANUAL` account has no broker feed to
+    fetch, same as the existing manual-entry endpoint's `MANUAL`
+    handling)."""
+    account = db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    if account.account_type != AccountType.PAPER_ALPACA:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Automatic reconciliation needs a broker feed — only PAPER_ALPACA accounts "
+                "have one. Use POST .../reconcile with a manually-supplied broker report "
+                "for a MANUAL account."
+            ),
+        )
+
+    run, replayed = reconcile_from_broker(
+        db,
+        account_id=account_id,
+        broker=broker,
+        as_of=datetime.now(UTC),
+        idempotency_key=idempotency_key,
+    )
+    db.commit()
+    return _reconciliation_run_response(db, run, replayed=replayed)
 
 
 @router.get(

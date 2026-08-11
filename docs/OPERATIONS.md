@@ -110,6 +110,52 @@ polling them has no session cookie):
   required) as any other kill-switch deactivation — no separate
   "clear the budget trip" action exists or is needed.
 
+### Idempotency gaps + scheduled reconciliation (Revision Prompt 16)
+
+A review found `confirm`/`cancel`/`cancel-open`/`reconcile` all had a
+real gap the pre-existing state-machine checks alone didn't cover —
+none of it was "silently corrupts data on a normal retry," but each had
+a real, closable weakness:
+
+- **`POST /orders/{id}/confirm` and `.../cancel`** — the existing
+  `assert_transition_allowed()` check already 400s a *sequential*
+  replay cleanly. The real gap was concurrent: two simultaneous
+  requests could both read the same pre-transition status and both
+  pass the check before either committed. Fixed with
+  `db.get(Order, order_id, with_for_update=True)` — a `SELECT ... FOR
+  UPDATE` row lock, so a second concurrent request blocks until the
+  first transaction commits, then correctly sees the updated status.
+- **`POST /orders/cancel-open`** — `services/order_execution.py::cancel_order_at_broker()`
+  had no status guard at all, and could call
+  `broker.cancel_paper_order()` on an already-canceled order (raising
+  on the synthetic provider). Now idempotent: returns the order
+  unchanged if it isn't `SUBMITTED`/`PARTIALLY_FILLED`. The router's
+  own order-selection query also gained `with_for_update()`, closing
+  the same concurrent-race window as confirm/cancel.
+- **`POST /portfolio/accounts/{id}/reconcile`** — the one confirmed
+  clean gap: no idempotency key, no dedup, every call (replay or not)
+  created a new `ReconciliationRun`/`ReconciliationLine` set. Fixed
+  with an optional client-supplied `idempotency_key` (matching this
+  project's established convention, `docs/API_CONTRACTS.md`) — a
+  repeated key returns the original run (`replayed: true` in the
+  response) instead of a duplicate.
+- **`POST /portfolio/accounts/{id}/reconcile-automatic`** (new) —
+  reconciliation was "only manually triggered" in a second sense too:
+  the only path required a human to type broker-reported quantities
+  into the request body. This endpoint calls
+  `PaperBrokerProvider.get_paper_positions()` directly instead (only
+  meaningful for a `PAPER_ALPACA` account — `MANUAL` accounts have no
+  broker feed, same 422 as the existing manual-entry endpoint).
+- **`services/reconciliation_scheduler.py::decide_reconciliation_schedule()`**
+  — the same pure-decision-function pattern
+  `morning_plan_scheduler.py::decide_schedule()` already established:
+  "should this account reconcile now" based on time since its last run
+  (default cadence 24h). Not on a timer yet — nothing in this
+  deployment calls it on an interval (task: real always-on
+  scheduler/worker process, below); it exists so that worker has
+  something ready to call the moment it exists, rather than inventing
+  scheduling logic from scratch then.
+
 ## Runbooks
 
 None yet (nothing is running in a way that needs one). The one operational
