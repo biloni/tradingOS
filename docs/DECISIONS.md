@@ -2568,3 +2568,90 @@ explicitly the next task in this revision, not folded in here. Verified
 live in-browser end to end: unauthenticated visit → redirect to
 `/login` → login → dashboard renders real data with the session cookie
 → `Sign out` → redirect back to `/login`.
+
+## ADR-067: Revision Prompt 16's CSRF protection is a stateless double-submit cookie, not a server-stored token; secure headers are ASGI middleware; CORS is env-driven
+
+**Context.** ADR-066 shipped real sessions but explicitly deferred CSRF
+protection and secure response headers as separate work. Prompt 16 lists
+both by name ("CSRF protection... secure headers"), and cookie-based
+session auth is exactly the pattern CSRF targets: a browser
+auto-attaches the httpOnly session cookie to *any* request to this
+origin, including one a malicious page tricks the user's browser into
+firing.
+
+**Decision 1 — double-submit cookie, no server-side CSRF token
+storage.** Login sets a second cookie, `tradingos_csrf`, deliberately
+NOT httpOnly. The frontend reads it (`document.cookie`) and echoes it
+as an `X-CSRF-Token` header on every mutating request
+(`apps/web/lib/api/client.ts`); the server checks header-equals-cookie
+(`core/auth.py::verify_csrf_token()`, `hmac.compare_digest`) with no
+database lookup at all. This works specifically because Same-Origin
+Policy stops a cross-origin attacker page from reading this app's
+cookies to forge the header, even though the browser still attaches the
+httpOnly session cookie automatically to a forged request — the
+mismatch is what gets caught. No new column, no new table: CSRF
+validity is a pure function of two cookies, deliberately simpler than
+tying the token to the session server-side, since this is a
+single-user app where the added complexity of a stored, per-session
+CSRF secret buys nothing a stateless check doesn't already provide.
+
+**Decision 2 — CSRF is enforced in two places, not one, because two
+different routes bypass `require_session()`.** Every router gated by
+`dependencies=[Depends(require_session)]` gets the check for free (added
+inside `require_session()` itself, after session validation, before
+`touch_session()`). But `/auth/logout` and `/auth/step-up` are POST
+endpoints that were *never* gated by `require_session()` (ADR-066: they
+validate the session cookie manually, so a client with an
+expired-but-not-yet-cleared cookie can still reach `/logout`) — so they
+call `verify_csrf_token()` directly. `/auth/login` is the one
+intentional exception: no session/CSRF cookie pair exists yet at that
+point, so there's nothing to double-submit.
+
+**Decision 3 — the `client` test fixture carries the CSRF header as a
+default header, mirroring ADR-066's auto-login trick.** `httpx.TestClient`
+has no browser-like "read a cookie, echo it as a header" behavior, so
+`tests/conftest.py`'s `client` fixture reads the CSRF cookie right after
+login and sets it once as a default header on the client instance —
+every one of the ~600 pre-existing tests that make POST/PATCH/DELETE
+calls keeps working unchanged. A dedicated `tests/test_auth_endpoints.py`
+(new, 16 tests) exercises the negative paths nothing else does: missing
+header, tampered header, and the login/logout/step-up/session endpoints
+themselves — a real gap ADR-066 left open (it shipped without direct
+tests for its own auth endpoints, relying entirely on the fixture
+exercising the happy path implicitly).
+
+**Decision 4 — secure headers are ASGI middleware, not a dependency
+(unlike auth).** `core/security_headers.py::SecurityHeadersMiddleware`
+is pure response post-processing (`X-Content-Type-Options`,
+`X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`,
+`Content-Security-Policy`, conditionally `Strict-Transport-Security`) —
+it never touches the DB or a session, so none of ADR-066's
+dependency-vs-middleware test-transaction concerns apply here.
+Registered as the *first* `add_middleware()` call so it becomes the
+outermost layer (Starlette wraps in reverse-add order) and therefore
+still fires on responses CORS itself rejects. CSP exempts only
+`/docs`/`/redoc`/`/openapi.json` (FastAPI's own routes, already a
+documented auth-gate exception per `main.py`) since Swagger UI needs
+CDN-hosted inline scripts/styles a strict CSP would break.
+
+**Decision 5 — CORS origins move from a hardcoded list to
+`Settings.cors_allowed_origins`.** A comma-separated env var
+(`cors_allowed_origins_list` property splits it) so a real deployment
+points this at its real frontend origin via env var alone — no code
+change, consistent with every other environment-dependent value in this
+codebase (`SESSION_COOKIE`'s `secure` flag, `ANTHROPIC_API_KEY`).
+`allow_headers` also narrowed from `"*"` to an explicit list
+(`Content-Type`, `X-CSRF-Token`) — grepped confirmed the frontend sends
+no other custom header anywhere.
+
+**Consequences.** Verified live in-browser: `document.cookie` confirms
+`tradingos_csrf` is JS-readable while `tradingos_session` is not; a
+manual `fetch()` PATCH to `/settings/risk-policy` with the correct
+`X-CSRF-Token` header returns 200, the identical request without the
+header returns 403 — both captured via the browser's own network
+panel, not just the backend test suite. Full backend suite: 611 passed
+(595 + 16 new). `docs/SECURITY.md`'s "Authn/authz" section is updated in
+place to describe the real implementation instead of ADR-007's
+now-superseded "no authentication in the MVP." The deeper threat-model
+narrative (account takeover, session compromise, approval replay) is
+still the next task in this revision, not folded in here.

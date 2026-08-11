@@ -17,6 +17,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
@@ -25,6 +26,19 @@ from tradingos_api.models.identity import UserProfile
 
 SESSION_COOKIE_NAME = "tradingos_session"
 SESSION_TTL = timedelta(hours=12)
+
+# Double-submit CSRF cookie (Revision Prompt 16, ADR-066 follow-up). This
+# cookie is deliberately NOT httpOnly — the frontend must be able to read
+# it and echo it back as a header, which is the entire point of the
+# pattern: SOP means a cross-origin attacker page can't read *this*
+# origin's cookie value to forge the header, even though the browser
+# would still auto-attach the (httpOnly) session cookie to a forged
+# cross-origin request. Stateless by design (no server-side storage,
+# nothing to look up) — the check is just "does the header equal the
+# cookie", which is exactly what defeats a same-origin-blind forger.
+CSRF_COOKIE_NAME = "tradingos_csrf"
+CSRF_HEADER_NAME = "X-CSRF-Token"
+_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # Step-up auth (task: kill switch / cancel-all / mode changes / approval
 # decisions) requires the password to have been re-entered within this
@@ -67,6 +81,26 @@ def verify_password(password: str, stored: str) -> bool:
         password.encode("utf-8"), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P
     )
     return hmac.compare_digest(derived, expected)
+
+
+def generate_csrf_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def verify_csrf_token(request: Request) -> None:
+    """Enforced on every state-changing request to an authenticated route
+    (called from `core/dependencies.py::require_session()`) and, since
+    `/auth/logout` and `/auth/step-up` aren't gated by `require_session`
+    (a valid session cookie alone isn't required to attempt those), from
+    those two handlers directly. GET/HEAD/OPTIONS are exempt — CSRF
+    protects state changes, not reads. Login is never subject to this
+    check: no session/CSRF cookie pair exists yet at that point."""
+    if request.method in _CSRF_SAFE_METHODS:
+        return
+    header_value = request.headers.get(CSRF_HEADER_NAME)
+    cookie_value = request.cookies.get(CSRF_COOKIE_NAME)
+    if not header_value or not cookie_value or not hmac.compare_digest(header_value, cookie_value):
+        raise HTTPException(status_code=403, detail="Missing or invalid CSRF token.")
 
 
 def _hash_token(raw_token: str) -> str:

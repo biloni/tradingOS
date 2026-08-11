@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, select, text
 from sqlalchemy.orm import Session
 
-from tradingos_api.core.auth import hash_password
+from tradingos_api.core.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, hash_password
 from tradingos_api.core.config import get_settings
 from tradingos_api.db.session import get_db
 from tradingos_api.main import app
@@ -89,6 +89,16 @@ def client(db_session: Session) -> Iterator[TestClient]:
                 "/api/v1/auth/login", json={"password": TEST_PASSWORD}
             )
             assert login_response.status_code == 200, login_response.text
+            # Revision Prompt 16 CSRF follow-up: a real browser reads the
+            # non-httpOnly CSRF cookie and echoes it as a header on every
+            # mutating request (lib/api/client.ts) — httpx's TestClient
+            # has no such automatic behavior, so it's set once here as a
+            # default header, exactly like the auto-login above, so none
+            # of the ~600 pre-existing POST/PATCH/DELETE tests need to
+            # change just to get past the new CSRF gate.
+            csrf_token = test_client.cookies.get(CSRF_COOKIE_NAME)
+            assert csrf_token, "login did not set the CSRF cookie"
+            test_client.headers[CSRF_HEADER_NAME] = csrf_token
         yield test_client
     finally:
         app.dependency_overrides.pop(get_db, None)

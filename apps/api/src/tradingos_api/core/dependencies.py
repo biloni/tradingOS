@@ -4,7 +4,12 @@ from decimal import Decimal
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from tradingos_api.core.auth import SESSION_COOKIE_NAME, get_valid_session, touch_session
+from tradingos_api.core.auth import (
+    SESSION_COOKIE_NAME,
+    get_valid_session,
+    touch_session,
+    verify_csrf_token,
+)
 from tradingos_api.core.config import get_settings
 from tradingos_api.db.session import get_db
 from tradingos_api.providers.alpaca_evidence import (
@@ -108,6 +113,7 @@ def require_session(request: Request, db: Session = Depends(get_db)) -> None:
     session = get_valid_session(db, raw_token=raw_token)
     if session is None:
         raise HTTPException(status_code=401, detail="Session expired or invalid.")
+    verify_csrf_token(request)
     touch_session(db, session)
     db.commit()
     request.state.user_id = session.user_id

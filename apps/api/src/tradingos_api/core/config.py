@@ -26,6 +26,16 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://tradingos_app:@localhost:5432/tradingos"
 
+    # Revision Prompt 16 — comma-separated allow-list, so a real
+    # deployment (task: Dockerfiles + deployment docs) can point this at
+    # its real frontend origin via env var alone, no code change. Local
+    # dev's own frontend origin is the only default.
+    cors_allowed_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
     alpaca_api_key_id: str | None = None
     alpaca_api_secret_key: str | None = None
     alpaca_base_url: str = "https://paper-api.alpaca.markets"

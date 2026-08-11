@@ -18,10 +18,36 @@ export class ApiError extends Error {
   }
 }
 
+const CSRF_COOKIE_NAME = "tradingos_csrf";
+const CSRF_HEADER_NAME = "X-CSRF-Token";
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+// Double-submit CSRF cookie (Revision Prompt 16, ADR-066 follow-up): the
+// login response sets this cookie non-httpOnly specifically so this
+// read is possible. There is no other reader of this cookie anywhere in
+// the app — do not repurpose it for anything else.
+function readCsrfCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(
+    new RegExp(`(?:^|; )${CSRF_COOKIE_NAME}=([^;]*)`)
+  );
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (MUTATING_METHODS.has(method)) {
+    const csrfToken = readCsrfCookie();
+    if (csrfToken) headers[CSRF_HEADER_NAME] = csrfToken;
+  }
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers,
     cache: "no-store",
     // Revision Prompt 16, ADR-066: the API issues an httpOnly session
     // cookie on login. Cross-origin (localhost:3000 -> localhost:8000)

@@ -1,7 +1,9 @@
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from tradingos_api.core.config import get_settings
 from tradingos_api.core.dependencies import require_session
+from tradingos_api.core.security_headers import SecurityHeadersMiddleware
 from tradingos_api.routers import (
     alerts,
     auth,
@@ -33,12 +35,17 @@ from tradingos_api.routers import (
 
 app = FastAPI(title="TradingOS API", version="0.1.0")
 
+# Registered first so it's the outermost layer (Starlette wraps
+# middleware in reverse-add order) — security headers must land on
+# every response, including ones CORS itself rejects.
+app.add_middleware(SecurityHeadersMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=get_settings().cors_allowed_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
 # Revision Prompt 16, ADR-066 — "validate every boundary." Every router

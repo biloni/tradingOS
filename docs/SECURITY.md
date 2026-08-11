@@ -37,10 +37,42 @@
 
 ## Authn/authz
 
-- Single-user system, no authentication in the MVP (ADR-007). If this app
-  were ever exposed beyond the current user's own machine, authentication
-  would need to be added before that happens — tracked as a known limitation
-  in README.md, not silently deferred.
+- **Implemented, Revision Prompt 16 (ADR-066).** Single-user password
+  login (`hashlib.scrypt`, stdlib-only) issues a server-side, revocable
+  session (opaque token, `token_hash` stored — never the raw token).
+  Every business router requires a valid session
+  (`core/dependencies.py::require_session()`); only `/health` and
+  `/api/v1/auth/login`/`session` are reachable unauthenticated. Step-up
+  re-authentication (`POST /auth/step-up`, 5-minute `STEP_UP_TTL`) exists
+  for kill switch / cancel-all / mode changes / approval decisions —
+  wiring those specific endpoints to *require* it is a separate,
+  already-tracked follow-up task.
+- **CSRF protection — implemented, Revision Prompt 16.** Double-submit
+  cookie: login sets a second, non-httpOnly `tradingos_csrf` cookie; the
+  frontend echoes its value as an `X-CSRF-Token` header on every
+  mutating request (`apps/web/lib/api/client.ts`); the server rejects
+  any POST/PUT/PATCH/DELETE where the header is missing or doesn't match
+  the cookie (`core/auth.py::verify_csrf_token()`). GET/HEAD/OPTIONS are
+  exempt.
+- **Secure response headers — implemented, Revision Prompt 16.**
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: same-origin`, a restrictive `Permissions-Policy`,
+  and a `Content-Security-Policy` (exempting only `/docs`/`/redoc`/
+  `/openapi.json`, which need CDN-hosted Swagger UI assets) on every
+  response (`core/security_headers.py`). `Strict-Transport-Security` is
+  added once `environment != "local"` (sending it over plain local HTTP
+  would be a lie the browser can't act on).
+- **CORS — hardened, Revision Prompt 16.** Allow-list is env-driven
+  (`Settings.cors_allowed_origins`, comma-separated), `allow_credentials
+  =True` with the specific origin(s) echoed back (never `*`), and
+  `allow_headers` is an explicit list (`Content-Type`, `X-CSRF-Token`)
+  rather than `*`.
+- If this app were ever exposed beyond the current user's own machine on
+  a network route reachable by anyone but the operator, that would still
+  require its own review (rate limiting beyond login, a real TLS
+  termination point, `/docs` exposure) before that happens — tracked as
+  a known limitation in README.md, not silently assumed already covered
+  by the above.
 
 ## LLM-specific guardrails (detailed in docs/MODEL_GOVERNANCE.md)
 

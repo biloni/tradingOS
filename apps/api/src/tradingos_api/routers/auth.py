@@ -2,9 +2,12 @@
 (Revision Prompt 16, ADR-066). `POST /login` and `GET /session` are the
 only two routes in this entire API never gated by
 `core/dependencies.py::require_session()` (`main.py` omits it from this
-router's `include_router()` call) — every other route, including
-`/logout` and `/step-up`, requires an already-valid session cookie,
-enforced by that dependency before this router's own code ever runs.
+router's `include_router()` call) — `/logout` and `/step-up` are *also*
+excluded from that dependency (a client with an expired-but-not-yet-
+cleared session cookie must still be able to reach `/logout`), so both
+validate the session cookie manually below and separately call
+`verify_csrf_token()` themselves, since they're state-changing but never
+pass through `require_session()`.
 """
 
 from __future__ import annotations
@@ -14,13 +17,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
 
 from tradingos_api.core.auth import (
+    CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
     SESSION_TTL,
     create_session,
+    generate_csrf_token,
     get_valid_session,
     is_stepped_up,
     mark_stepped_up,
     revoke_session,
+    verify_csrf_token,
     verify_password,
 )
 from tradingos_api.core.config import get_settings
@@ -38,17 +44,35 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 login_rate_limiter = TokenBucketRateLimiter(capacity=5, refill_per_second=1 / 60)
 
 
-def _set_session_cookie(response: Response, raw_token: str) -> None:
+def _set_auth_cookies(response: Response, *, raw_token: str, csrf_token: str) -> None:
     settings = get_settings()
+    secure = settings.environment != "local"
     response.set_cookie(
         SESSION_COOKIE_NAME,
         raw_token,
         httponly=True,
         samesite="lax",
-        secure=settings.environment != "local",
+        secure=secure,
         max_age=int(SESSION_TTL.total_seconds()),
         path="/",
     )
+    # Deliberately NOT httpOnly — the frontend reads this and echoes it
+    # back as the `X-CSRF-Token` header (double-submit pattern, see
+    # `core/auth.py::verify_csrf_token`'s docstring for why that's safe).
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        csrf_token,
+        httponly=False,
+        samesite="lax",
+        secure=secure,
+        max_age=int(SESSION_TTL.total_seconds()),
+        path="/",
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(CSRF_COOKIE_NAME, path="/")
 
 
 @router.post("/login", response_model=SessionStatusResponse)
@@ -82,7 +106,7 @@ def login(
         ip_address=request.client.host if request.client else None,
     )
     db.commit()
-    _set_session_cookie(response, created.raw_token)
+    _set_auth_cookies(response, raw_token=created.raw_token, csrf_token=generate_csrf_token())
     return SessionStatusResponse(
         authenticated=True, stepped_up=False, expires_at=created.expires_at.isoformat()
     )
@@ -92,13 +116,14 @@ def login(
 def logout(
     request: Request, response: Response, db: DbSession = Depends(get_db)
 ) -> SessionStatusResponse:
+    verify_csrf_token(request)
     raw_token = request.cookies.get(SESSION_COOKIE_NAME)
     if raw_token:
         session = get_valid_session(db, raw_token=raw_token)
         if session is not None:
             revoke_session(db, session)
             db.commit()
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    _clear_auth_cookies(response)
     return SessionStatusResponse(authenticated=False)
 
 
@@ -125,13 +150,15 @@ def step_up(
     payload: StepUpRequest, request: Request, db: DbSession = Depends(get_db)
 ) -> SessionStatusResponse:
     """Re-verifies the password against the already-authenticated
-    session (`require_session()` guarantees a valid session exists by
-    the time this handler runs) — the step-up requirement for kill
-    switch / cancel-all / mode changes / approval decisions."""
+    session — the step-up requirement for kill switch / cancel-all /
+    mode changes / approval decisions. Not gated by `require_session()`
+    (see module docstring), so both the session and the CSRF token are
+    validated here directly."""
     raw_token = request.cookies.get(SESSION_COOKIE_NAME)
     session = get_valid_session(db, raw_token=raw_token) if raw_token else None
     if session is None:
         raise HTTPException(status_code=401, detail="Not authenticated.")
+    verify_csrf_token(request)
 
     user = db.get(UserProfile, session.user_id)
     if (
