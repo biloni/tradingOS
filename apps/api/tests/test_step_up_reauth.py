@@ -28,7 +28,7 @@ from tradingos_api.db.session import get_db
 from tradingos_api.main import app
 from tradingos_api.models.execution import Account
 from tradingos_api.models.identity import UserProfile
-from tradingos_api.routers.auth import login_rate_limiter
+from tradingos_api.routers.auth import login_rate_limiter, step_up_rate_limiter
 
 TEST_PASSWORD = "step-up-test-password-not-real"
 
@@ -40,6 +40,7 @@ def raw_client(db_session: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_db] = _override_get_db
     login_rate_limiter.reset()
+    step_up_rate_limiter.reset()
     try:
         yield TestClient(app)
     finally:

@@ -20,7 +20,7 @@ from tradingos_api.core.auth import hash_password as _hash_password
 from tradingos_api.db.session import get_db
 from tradingos_api.main import app
 from tradingos_api.models.identity import UserProfile
-from tradingos_api.routers.auth import login_rate_limiter
+from tradingos_api.routers.auth import login_rate_limiter, step_up_rate_limiter
 
 TEST_PASSWORD = "another-test-password-not-real"
 
@@ -35,6 +35,7 @@ def raw_client(db_session: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_db] = _override_get_db
     login_rate_limiter.reset()
+    step_up_rate_limiter.reset()
     try:
         yield TestClient(app)
     finally:
@@ -216,6 +217,29 @@ class TestStepUp:
     def test_requires_an_existing_session(self, raw_client: TestClient) -> None:
         response = raw_client.post("/api/v1/auth/step-up", json={"password": TEST_PASSWORD})
         assert response.status_code == 401
+
+    def test_rate_limited_after_repeated_attempts(
+        self, raw_client: TestClient, db_session: Session
+    ) -> None:
+        """ADR-069 threat-model fix: `/step-up` re-checks the same
+        password as `/login` and must be throttled the same way — an
+        attacker holding a stolen session+CSRF cookie pair could
+        otherwise brute-force the password here with no limit at all."""
+        _set_password(db_session)
+        raw_client.post("/api/v1/auth/login", json={"password": TEST_PASSWORD})
+        csrf_token = raw_client.cookies.get(CSRF_COOKIE_NAME)
+        for _ in range(5):
+            raw_client.post(
+                "/api/v1/auth/step-up",
+                json={"password": "wrong"},
+                headers={CSRF_HEADER_NAME: csrf_token or ""},
+            )
+        response = raw_client.post(
+            "/api/v1/auth/step-up",
+            json={"password": "wrong"},
+            headers={CSRF_HEADER_NAME: csrf_token or ""},
+        )
+        assert response.status_code == 429
 
 
 class TestSecurityHeaders:

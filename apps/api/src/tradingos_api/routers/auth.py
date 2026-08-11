@@ -43,6 +43,16 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 # `core/rate_limit.py::ask_rate_limiter`).
 login_rate_limiter = TokenBucketRateLimiter(capacity=5, refill_per_second=1 / 60)
 
+# Revision Prompt 16 threat-model review (ADR-069): `/step-up` re-checks
+# the same password as `/login` but was never rate-limited — an attacker
+# holding a stolen (or CSRF'd, before ADR-067) session+CSRF cookie pair
+# could otherwise brute-force the password here with no throttle at all,
+# since `require_session`'s auth gate doesn't apply to this route (see
+# module docstring). Same bucket shape as `login_rate_limiter`, kept as
+# a separate instance so a login lockout and a step-up lockout don't
+# share (or fight over) the same budget.
+step_up_rate_limiter = TokenBucketRateLimiter(capacity=5, refill_per_second=1 / 60)
+
 
 def _set_auth_cookies(response: Response, *, raw_token: str, csrf_token: str) -> None:
     settings = get_settings()
@@ -159,6 +169,11 @@ def step_up(
     if session is None:
         raise HTTPException(status_code=401, detail="Not authenticated.")
     verify_csrf_token(request)
+
+    if not step_up_rate_limiter.try_acquire():
+        raise HTTPException(
+            status_code=429, detail="Too many step-up attempts — wait a moment and try again."
+        )
 
     user = db.get(UserProfile, session.user_id)
     if (
