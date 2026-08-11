@@ -165,6 +165,48 @@ of everything above:
   captured "this is what was approved" snapshot distinct from the order
   itself.
 
+## Structured logging + log redaction (Revision Prompt 16, ADR-071)
+
+- **Structured JSON logs, stdlib-only** (`core/logging.py`) — every log
+  line is a JSON object (`timestamp`, `level`, `logger`, `message`,
+  `request_id`, plus any caller-supplied `extra` fields), no new
+  dependency (same reasoning as `core/auth.py`'s stdlib-scrypt choice).
+- **Per-request correlation ID** (`core/request_id_middleware.py`) —
+  every request gets a UUID, echoed back as `X-Request-ID` and attached
+  to every log line emitted while handling it (via a `contextvars`-based
+  lookup the formatter reads at format time, not manual threading
+  through every call site). Emits one structured access-log line per
+  request (method, path, status, duration, user ID if authenticated).
+- **Redaction, two layers, applied on every handler:**
+  1. *Known-value scrub* — the Anthropic/Alpaca keys and the DB
+     password (parsed from `database_url`) are read fresh from
+     `Settings` on every log record and blanked out of the final
+     message text wherever they appear verbatim, regardless of which
+     field or code path put them there (catches an accidental
+     `f"...{settings.anthropic_api_key}..."`, not just a
+     suspiciously-named field).
+  2. *Field-name scrub* — any `extra={...}` key named `password`,
+     `token`, `api_key`, `secret`, etc. is redacted regardless of its
+     value, as a fallback for a secret this process doesn't already
+     hold the literal value of (e.g. a session/CSRF token a future call
+     site might carelessly log).
+- **Global unhandled-exception handler** (`main.py`) — `HTTPException`/
+  `RequestValidationError` are still handled by FastAPI's own defaults
+  (this only catches what nothing more specific claims first); logs the
+  real exception with full context server-side, returns a generic
+  `{"detail": "Internal server error."}` to the client always — an
+  exception's traceback/repr could contain anything, so it is never
+  echoed back.
+- **Security-event logging** (`routers/auth.py`) — login
+  success/failure/rate-limited, logout, and step-up success/failure/
+  rate-limited each emit a structured log line (`tradingos_api.security`
+  logger) with user/session ID and IP where applicable, redacted like
+  everything else.
+- Not yet wired: a job dashboard/metrics view over these logs, and a
+  log *aggregation/retention* story beyond stdout — both tracked as
+  separate, already-listed follow-up tasks (job dashboard + metrics;
+  deployment docs), not silently assumed solved here.
+
 ## Secret scanning + dependency scanning (Revision Prompt 16, ADR-070)
 
 - **`.gitignore` gap fixed.** The old `.env` / `.env.local` /

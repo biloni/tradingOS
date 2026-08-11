@@ -1,8 +1,13 @@
-from fastapi import Depends, FastAPI
+import logging
+
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from tradingos_api.core.config import get_settings
 from tradingos_api.core.dependencies import require_session
+from tradingos_api.core.logging import configure_logging
+from tradingos_api.core.request_id_middleware import RequestIdMiddleware
 from tradingos_api.core.security_headers import SecurityHeadersMiddleware
 from tradingos_api.routers import (
     alerts,
@@ -33,11 +38,37 @@ from tradingos_api.routers import (
     watchlists,
 )
 
+configure_logging()
+_logger = logging.getLogger("tradingos_api")
+
 app = FastAPI(title="TradingOS API", version="0.1.0")
 
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Revision Prompt 16 — every route that raises `HTTPException` (the
+    overwhelming majority of expected error cases in this app) is
+    handled by FastAPI's own default handler and never reaches this
+    one; Starlette resolves exception handlers by the most specific
+    matching type, so registering `Exception` here only catches what
+    nothing more specific already claimed. Logs the real exception with
+    full context server-side (through the redacting formatter — see
+    `core/logging.py`) while the client only ever sees a generic
+    message: an unhandled exception's `repr()`/traceback could contain
+    anything (a raw SQL error with row data, an object repr with a
+    field that happens to be sensitive), so it is never echoed back."""
+    _logger.exception(
+        "unhandled exception",
+        exc_info=exc,
+        extra={"http_method": request.method, "path": request.url.path},
+    )
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})
+
+
 # Registered first so it's the outermost layer (Starlette wraps
-# middleware in reverse-add order) — security headers must land on
-# every response, including ones CORS itself rejects.
+# middleware in reverse-add order) — every request, including ones
+# CORS itself rejects, gets a request ID and an access-log line.
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 app.add_middleware(

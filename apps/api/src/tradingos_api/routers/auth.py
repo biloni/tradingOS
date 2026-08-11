@@ -12,6 +12,8 @@ pass through `require_session()`.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session as DbSession
@@ -36,6 +38,7 @@ from tradingos_api.models.identity import UserProfile
 from tradingos_api.schemas.auth import LoginRequest, SessionStatusResponse, StepUpRequest
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+_logger = logging.getLogger("tradingos_api.security")
 
 # 5-attempt burst, 1/min steady-state refill — slows a brute-force
 # guess loop against the single password to a crawl without needing
@@ -92,13 +95,18 @@ def login(
     response: Response,
     db: DbSession = Depends(get_db),
 ) -> SessionStatusResponse:
+    client_ip = request.client.host if request.client else None
     if not login_rate_limiter.try_acquire():
+        _logger.warning("login rate limited", extra={"ip_address": client_ip})
         raise HTTPException(
             status_code=429, detail="Too many login attempts — wait a moment and try again."
         )
 
     user = db.scalar(select(UserProfile))
     if user is None or user.password_hash is None:
+        _logger.warning(
+            "login attempted with no password configured", extra={"ip_address": client_ip}
+        )
         raise HTTPException(
             status_code=401,
             detail=(
@@ -107,16 +115,28 @@ def login(
             ),
         )
     if not verify_password(payload.password, user.password_hash):
+        _logger.warning(
+            "login failed: incorrect password",
+            extra={"user_id": str(user.id), "ip_address": client_ip},
+        )
         raise HTTPException(status_code=401, detail="Incorrect password.")
 
     created = create_session(
         db,
         user_id=user.id,
         user_agent=request.headers.get("user-agent"),
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_ip,
     )
     db.commit()
     _set_auth_cookies(response, raw_token=created.raw_token, csrf_token=generate_csrf_token())
+    _logger.info(
+        "login succeeded",
+        extra={
+            "user_id": str(user.id),
+            "session_id": str(created.session_id),
+            "ip_address": client_ip,
+        },
+    )
     return SessionStatusResponse(
         authenticated=True, stepped_up=False, expires_at=created.expires_at.isoformat()
     )
@@ -133,6 +153,10 @@ def logout(
         if session is not None:
             revoke_session(db, session)
             db.commit()
+            _logger.info(
+                "logout: session revoked",
+                extra={"user_id": str(session.user_id), "session_id": str(session.id)},
+            )
     _clear_auth_cookies(response)
     return SessionStatusResponse(authenticated=False)
 
@@ -171,6 +195,7 @@ def step_up(
     verify_csrf_token(request)
 
     if not step_up_rate_limiter.try_acquire():
+        _logger.warning("step-up rate limited", extra={"user_id": str(session.user_id)})
         raise HTTPException(
             status_code=429, detail="Too many step-up attempts — wait a moment and try again."
         )
@@ -181,10 +206,14 @@ def step_up(
         or user.password_hash is None
         or not verify_password(payload.password, user.password_hash)
     ):
+        _logger.warning(
+            "step-up failed: incorrect password", extra={"user_id": str(session.user_id)}
+        )
         raise HTTPException(status_code=401, detail="Incorrect password.")
 
     mark_stepped_up(db, session)
     db.commit()
+    _logger.info("step-up succeeded", extra={"user_id": str(session.user_id)})
     return SessionStatusResponse(
         authenticated=True, stepped_up=True, expires_at=session.expires_at.isoformat()
     )
