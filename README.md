@@ -126,6 +126,7 @@ pnpm test:e2e
 | [docs/TEST_STRATEGY.md](docs/TEST_STRATEGY.md) | Test pyramid, fixtures-not-live-APIs policy |
 | [docs/TEST_EVIDENCE.md](docs/TEST_EVIDENCE.md) | Exact commands run + results, per phase |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Local dev ops, runbooks |
+| [docs/RELEASE_GATE_PROOFS.md](docs/RELEASE_GATE_PROOFS.md) | Provenance, risk/invalidation, audit trail, and morning-plan deadline proven against real code and tests, ahead of tagging paper beta |
 | [docs/MODEL_GOVERNANCE.md](docs/MODEL_GOVERNANCE.md) | LLM guardrails, confidence calibration policy, strategy-change approval gate |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | How to use the app (grows each phase) |
 | [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) | Pinned versions, verified against live registries |
