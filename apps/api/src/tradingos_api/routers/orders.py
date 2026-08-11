@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tradingos_api.core.dependencies import get_broker_provider
+from tradingos_api.core.dependencies import get_broker_provider, require_step_up
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import (
     ORDER_TRANSITIONS,
@@ -365,10 +365,14 @@ def cancel_open_orders(
     payload: CancelOpenOrdersRequest,
     db: Session = Depends(get_db),
     broker: PaperBrokerProvider = Depends(get_broker_provider),
+    _step_up: None = Depends(require_step_up),
 ) -> CancelOpenOrdersResponse:
     """OA-9/SS-4's second, independent control — "a separate action that
     cancels every open order still at the broker, independent of the
-    kill switch." Scoped to `payload.account_id` (or every `PAPER_ALPACA`
+    kill switch." Requires step-up (Revision Prompt 16): cancel-all can
+    remove protective stop/target legs, not just entries, so it can
+    increase realized risk even though it reads as "just cancelling."
+    Scoped to `payload.account_id` (or every `PAPER_ALPACA`
     account if omitted) and only orders that actually reached a broker
     (`broker_order_id IS NOT NULL`) — a `MANUAL` account's orders have no
     broker leg to cancel there. Every cancellation still goes through

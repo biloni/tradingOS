@@ -173,10 +173,18 @@ def mark_stepped_up(db: DbSession, session: SessionModel) -> None:
     db.flush()
 
 
-def is_stepped_up(session: SessionModel) -> bool:
-    if session.stepped_up_at is None:
+def is_step_up_fresh(stepped_up_at: datetime | None) -> bool:
+    """The raw-timestamp form — used by `core/dependencies.py::require_step_up()`,
+    which only has `request.state.stepped_up_at` (a plain timestamp
+    copied off the session row by `require_session()`), not a full
+    `Session` ORM instance to pass to `is_stepped_up()` below."""
+    if stepped_up_at is None:
         return False
-    return datetime.now(UTC) - session.stepped_up_at <= STEP_UP_TTL
+    return datetime.now(UTC) - stepped_up_at <= STEP_UP_TTL
+
+
+def is_stepped_up(session: SessionModel) -> bool:
+    return is_step_up_fresh(session.stepped_up_at)
 
 
 def get_user(db: DbSession, user_id: uuid.UUID) -> UserProfile | None:

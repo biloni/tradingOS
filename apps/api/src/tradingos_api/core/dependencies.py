@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from tradingos_api.core.auth import (
     SESSION_COOKIE_NAME,
     get_valid_session,
+    is_step_up_fresh,
     touch_session,
     verify_csrf_token,
 )
@@ -119,6 +120,34 @@ def require_session(request: Request, db: Session = Depends(get_db)) -> None:
     request.state.user_id = session.user_id
     request.state.session_id = session.id
     request.state.stepped_up_at = session.stepped_up_at
+
+
+def require_step_up(request: Request, _session_ok: None = Depends(require_session)) -> None:
+    """Revision Prompt 16 — "protect mode changes, approvals, kill
+    switch, and cancel-all actions with step-up authentication where
+    practical." Applied per-endpoint (`Depends(require_step_up)` in the
+    function signature, not a router-level `dependencies=`) only on the
+    specific risk-*increasing* actions: kill-switch deactivate (turning
+    protection back off), cancel-open-orders (can remove protective
+    stop/target legs, not just entries), and order-approval approve/submit
+    (the two steps that actually authorize and place an order).
+    Deliberately NOT on kill-switch *activate* (the emergency brake must
+    stay one click, no password prompt) or reject/expire/invalidate
+    (those only ever reduce risk). Explicitly depends on
+    `require_session` so it always runs after it regardless of
+    per-route vs. router-level dependency ordering — FastAPI caches the
+    result, so `require_session` still only executes once per request.
+    Raises 403 (not 401): the session itself is valid, only the *recent
+    password confirmation* is missing or stale."""
+    stepped_up_at = getattr(request.state, "stepped_up_at", None)
+    if not is_step_up_fresh(stepped_up_at):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This action requires a fresh step-up confirmation "
+                "(POST /api/v1/auth/step-up) within the last 5 minutes."
+            ),
+        )
 
 
 def get_current_user_id(request: Request) -> uuid.UUID:

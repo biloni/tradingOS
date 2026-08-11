@@ -68,6 +68,23 @@ function mockFetch({
       const path = url.replace(/^https?:\/\/[^/]+/, "");
       const method = init?.method ?? "GET";
 
+      if (path === "/api/v1/auth/session" && method === "GET") {
+        // Revision Prompt 16: the approve/submit actions are gated by
+        // <StepUpGate>, which reads this. Already-stepped-up here
+        // because this file tests the approval flow itself, not the
+        // step-up prompt (that's components/ui/StepUpGate's own
+        // concern, exercised separately).
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              authenticated: true,
+              stepped_up: true,
+              expires_at: "2026-08-10T22:00:00-07:00",
+            }),
+        });
+      }
       if (path === "/api/v1/order-approvals/approval-1" && method === "GET") {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(current) });
       }
@@ -170,7 +187,9 @@ describe("OrderApprovalPage — final immutable summary and deliberate confirmat
     const user = userEvent.setup();
     renderWithQueryClient();
 
-    await waitFor(() => expect(screen.getByText("PENDING")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Approve this order" })).toBeInTheDocument(),
+    );
     await user.click(screen.getByRole("button", { name: "Approve this order" }));
 
     // First click reveals the gate, not the mutation.
@@ -187,7 +206,9 @@ describe("OrderApprovalPage — final immutable summary and deliberate confirmat
     const user = userEvent.setup();
     renderWithQueryClient();
 
-    await waitFor(() => expect(screen.getByText("PENDING")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Approve this order" })).toBeInTheDocument(),
+    );
     await user.click(screen.getByRole("button", { name: "Approve this order" }));
     await user.click(screen.getByRole("button", { name: "Yes, approve exactly as shown above" }));
 

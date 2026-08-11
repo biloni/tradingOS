@@ -2655,3 +2655,88 @@ place to describe the real implementation instead of ADR-007's
 now-superseded "no authentication in the MVP." The deeper threat-model
 narrative (account takeover, session compromise, approval replay) is
 still the next task in this revision, not folded in here.
+
+## ADR-068: Revision Prompt 16's step-up re-authentication is wired to specific risk-*increasing* actions only, chosen by direction of effect rather than by endpoint name
+
+**Context.** Prompt 16: "protect mode changes, approvals, kill switch,
+and cancel-all actions with step-up authentication where practical."
+ADR-066 already built the plumbing (`Session.stepped_up_at`,
+`STEP_UP_TTL` = 5min, `POST /auth/step-up`) but wired nothing to it. This
+task decides *which* endpoints actually require a fresh password
+re-entry — a real judgment call the prompt's own phrase "where
+practical" leaves to the implementer, not something obvious from the
+endpoint names alone.
+
+**Decision 1 — gate by risk direction, not by category membership.**
+Every candidate endpoint was evaluated individually rather than blanket-
+gating "the kill switch router" or "the approvals router":
+- `kill-switch/activate` — **exempt.** It's the emergency brake; adding
+  a password prompt to the one action that's supposed to stop things
+  fast would be actively harmful.
+- `kill-switch/deactivate` — **gated.** Re-enables order submission —
+  the risk-*increasing* direction.
+- `orders/cancel-open` — **gated**, even though "cancelling orders"
+  reads as risk-reducing at a glance: an open order can be a protective
+  stop or target leg, not just a new entry, so cancelling it can
+  actually remove downside protection. This is exactly why Prompt 16
+  names cancel-all explicitly rather than leaving it to be inferred.
+- `order-approvals/{id}/approve` and `.../submit` — **gated** (the
+  decision that authorizes, and the only HTTP route that reaches a
+  broker, respectively).
+- `order-approvals/{id}/reject`, `/expire`, `/invalidate` — **exempt.**
+  All three only ever move an approval to a terminal, non-executing
+  state; none of them can increase risk, so gating them would only add
+  friction to the "stop, something's wrong" path.
+- Operating-mode change — **no endpoint exists to gate.** Confirmed by
+  grep: `GET /settings/operating-mode` is read-only; there is no
+  POST/PATCH anywhere. Nothing to wire until that endpoint is built.
+
+**Decision 2 — `require_step_up` explicitly depends on `require_session`,
+not just on ordering.** `core/dependencies.py::require_step_up(request,
+_session_ok=Depends(require_session))` declares the dependency directly
+rather than relying on router-level `dependencies=` always resolving
+first. FastAPI caches dependency results per request, so
+`require_session` still only runs once even though it's both a
+router-level dependency (via `_AUTH`) and a direct dependency of
+`require_step_up` on the same request — this makes the ordering
+structurally guaranteed instead of an implicit assumption about
+FastAPI's resolution order.
+
+**Decision 3 — 403, not 401, for a missing/stale step-up.** The session
+itself is valid (that's what `require_session` already confirmed); what's
+missing is the *recent password re-confirmation*, a materially different
+fact from "not authenticated at all." Distinguishing the two matters for
+the frontend: a 401 means "go to `/login`," a 403 from `require_step_up`
+means "show the step-up prompt, the session is fine."
+
+**Decision 4 — `is_step_up_fresh(timestamp)` is a new raw-timestamp
+sibling of ADR-066's `is_stepped_up(session)`**, not a replacement.
+`require_step_up` only has `request.state.stepped_up_at` (a plain
+`datetime | None` copied off the session row by `require_session`), not
+a full `Session` ORM instance — extracting the shared freshness check
+avoids either duplicating the `STEP_UP_TTL` comparison or forcing an
+extra DB round-trip just to get an object `is_stepped_up()` could accept.
+
+**Decision 5 — frontend `<StepUpGate>` is UX, not the security
+boundary.** A small component (`components/ui/StepUpGate.tsx`) checks
+`useSession().data.stepped_up` and renders a password re-entry form in
+place of its children when stale/absent; wired around the Approve and
+Submit actions on `app/approvals/[id]/page.tsx` (the only two sensitive
+actions with any UI at all — kill-switch and cancel-all have no frontend
+control yet, per `app/orders/page.tsx`'s own scaffold notice, so nothing
+to wire there). The backend enforces this independently and would 403
+regardless of whether the frontend gate exists; the component exists
+purely so the user gets a usable prompt instead of a silent failure.
+
+**Consequences.** Verified live in-browser via the browser's own network
+calls (no UI exists yet for kill-switch, so this was the only way to
+exercise it end-to-end): `activate` → 201, `deactivate` without step-up
+→ 403, `POST /auth/step-up` → 200, `deactivate` with step-up → 200. New
+backend tests (`tests/test_step_up_reauth.py`, 12 tests) cover both the
+gated and the explicitly-exempt endpoints — the exempt ones are asserted
+just as deliberately as the gated ones, so a future change that
+accidentally starts gating `reject`/`expire`/`activate` fails loudly.
+Full backend suite: 623 passed (611 + 12 new). Frontend: 68 passed (64 +
+4 new for `<StepUpGate>` itself), plus `tests/order-approval.test.tsx`
+updated to mock an already-stepped-up session (that file tests the
+approval flow, not the step-up prompt).

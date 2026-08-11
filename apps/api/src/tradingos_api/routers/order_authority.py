@@ -28,6 +28,7 @@ from tradingos_api.core.dependencies import (
     get_broker_provider,
     get_current_user_id,
     get_market_quote_provider,
+    require_step_up,
 )
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import (
@@ -392,12 +393,15 @@ def approve_order_approval(
     approval_id: uuid.UUID,
     payload: OrderApprovalDecisionRequest,
     db: Session = Depends(get_db),
+    _step_up: None = Depends(require_step_up),
 ) -> OrderApprovalResponse:
     """`assert_can_transition_to_approved()` (services/order_authority.py)
     is the combined guard: a legal-transition check plus a wall-clock
     expiry check, so an approval whose `expires_at` has already passed
     can never reach `APPROVED` even if nothing has marked it `EXPIRED`
-    yet (R3's required test)."""
+    yet (R3's required test). Requires step-up (Revision Prompt 16) —
+    this is the decision that actually authorizes an order; reject/
+    expire/invalidate below don't, since they only ever reduce risk."""
     approval = db.get(OrderApproval, approval_id)
     if approval is None:
         raise HTTPException(status_code=404, detail="Order approval not found.")
@@ -553,8 +557,14 @@ def submit_order_approval(
     broker: PaperBrokerProvider = Depends(get_broker_provider),
     capabilities: BrokerCapabilities = Depends(get_broker_capabilities),
     quote_provider: MarketQuoteProvider = Depends(get_market_quote_provider),
+    _step_up: None = Depends(require_step_up),
 ) -> OrderSubmitResponse:
     """ORDER FLOW step 7 — the only HTTP route that reaches a broker.
+    Requires step-up (Revision Prompt 16) — the single most sensitive
+    endpoint in this codebase, PAPER_AUTO_POLICY mode included: auto-
+    policy only pre-authorizes the *decision* (skips the manual
+    `/approve` step for eligible orders), it does not remove the human
+    at the keyboard who still triggers this HTTP call every time.
     Never live: `services/order_execution.py::submit_paper_order()`
     hardcodes `is_live=False`, and `assert_broker_boundary_is_paper()`
     independently fails closed on the account type, environment label,

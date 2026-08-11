@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tradingos_api.core.config import get_settings
-from tradingos_api.core.dependencies import get_current_user_id
+from tradingos_api.core.dependencies import get_current_user_id, require_step_up
 from tradingos_api.db.session import get_db
 from tradingos_api.models.enums import ProviderKind
 from tradingos_api.models.identity import (
@@ -120,7 +120,13 @@ def activate_kill_switch_endpoint(
 
 
 @router.post("/kill-switch/deactivate", response_model=KillSwitchStatusResponse)
-def deactivate_kill_switch_endpoint(db: Session = Depends(get_db)) -> KillSwitchStatusResponse:
+def deactivate_kill_switch_endpoint(
+    db: Session = Depends(get_db), _step_up: None = Depends(require_step_up)
+) -> KillSwitchStatusResponse:
+    """Deactivating re-enables order submission — the risk-*increasing*
+    direction — so this requires step-up (Revision Prompt 16), unlike
+    `activate_kill_switch_endpoint` above, which must stay a single
+    click with no password prompt (it's the emergency brake)."""
     latest = db.scalar(
         select(ExecutionKillSwitchEvent).order_by(ExecutionKillSwitchEvent.activated_at.desc())
     )

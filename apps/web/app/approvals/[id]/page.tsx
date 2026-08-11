@@ -9,6 +9,7 @@ import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { ConfirmButton } from "@/components/ui/ConfirmButton";
 import { PageState } from "@/components/ui/PageState";
+import { StepUpGate } from "@/components/ui/StepUpGate";
 import { useOperatingMode } from "@/lib/hooks/useOperatingMode";
 import {
   useApproveOrderApproval,
@@ -109,12 +110,14 @@ export default function OrderApprovalPage() {
             error={approve.error}
             messages={{ 400: "This approval can no longer be approved (likely expired)." }}
           />
-          <ConfirmButton
-            label="Approve this order"
-            confirmLabel="Yes, approve exactly as shown above"
-            disabled={approve.isPending}
-            onConfirm={() => approve.mutate({ id, approvedBy: "user" })}
-          />
+          <StepUpGate reason="approving an order authorizes it">
+            <ConfirmButton
+              label="Approve this order"
+              confirmLabel="Yes, approve exactly as shown above"
+              disabled={approve.isPending}
+              onConfirm={() => approve.mutate({ id, approvedBy: "user" })}
+            />
+          </StepUpGate>
         </Card>
       )}
 
@@ -181,30 +184,33 @@ export default function OrderApprovalPage() {
                     endpoint: {PAPER_BROKER_ENDPOINT}
                   </p>
                   <ErrorBanner error={submit.error} />
-                  <ConfirmButton
-                    label="Submit to broker"
-                    confirmLabel="Yes, submit exactly as shown above"
-                    disabled={submit.isPending}
-                    onConfirm={() =>
-                      submit.mutate({
-                        id,
-                        input: {
-                          requestedMode:
-                            (operatingMode?.mode as "PAPER_MANUAL_APPROVAL" | "PAPER_AUTO_POLICY") ??
-                            "PAPER_MANUAL_APPROVAL",
-                          lane: "TACTICAL",
-                          sourceRecommendationVersionId: bf.recommendation_version_id,
-                          emulationAcknowledged,
-                          confirmation: {
-                            confirmedAt: new Date().toISOString(),
-                            accountId: bf.account_id,
-                            environment: operatingMode?.environment_label ?? "PAPER",
-                            brokerEndpoint: PAPER_BROKER_ENDPOINT,
+                  <StepUpGate reason="submitting to the broker is the final, hardest-to-reverse step">
+                    <ConfirmButton
+                      label="Submit to broker"
+                      confirmLabel="Yes, submit exactly as shown above"
+                      disabled={submit.isPending}
+                      onConfirm={() =>
+                        submit.mutate({
+                          id,
+                          input: {
+                            requestedMode:
+                              (operatingMode?.mode as
+                                | "PAPER_MANUAL_APPROVAL"
+                                | "PAPER_AUTO_POLICY") ?? "PAPER_MANUAL_APPROVAL",
+                            lane: "TACTICAL",
+                            sourceRecommendationVersionId: bf.recommendation_version_id,
+                            emulationAcknowledged,
+                            confirmation: {
+                              confirmedAt: new Date().toISOString(),
+                              accountId: bf.account_id,
+                              environment: operatingMode?.environment_label ?? "PAPER",
+                              brokerEndpoint: PAPER_BROKER_ENDPOINT,
+                            },
                           },
-                        },
-                      })
-                    }
-                  />
+                        })
+                      }
+                    />
+                  </StepUpGate>
                 </div>
               )}
             </>
