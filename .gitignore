@@ -35,6 +35,11 @@ playwright/.cache/
 # uv
 uv.lock.tmp
 
+# Database backups (Revision Prompt 16, task: backup/restore tooling) —
+# local operational data, may contain real seeded/paper-trading data,
+# never committed.
+apps/api/backups/
+
 # OS
 .DS_Store
 Thumbs.db

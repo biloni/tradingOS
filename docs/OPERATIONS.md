@@ -14,9 +14,54 @@ See README.md for the full quickstart. Summary:
 **Not yet decided.** No hosting target, CI pipeline, or deployment process
 exists as of Phase 1 — this is a personal local-dev project at this stage.
 When a deployment phase is scoped, this section will cover: hosting choice,
-environment variable management in that host, database backup/restore,
-and how the Alpaca paper-account credentials and Anthropic key are provisioned
-there without ever appearing in a repo or CI log.
+environment variable management in that host, and how the Alpaca
+paper-account credentials and Anthropic key are provisioned there without
+ever appearing in a repo or CI log. Database backup/restore *tooling*
+already exists (below) — what's not yet decided is *where a deployed
+copy of that tooling runs on a schedule*.
+
+### Database backup/restore (Revision Prompt 16, task: backup/restore tooling)
+
+`services/backup.py` wraps `pg_dump`/`pg_restore` (custom format,
+`-Fc`) — this project doesn't reimplement dump/restore logic itself,
+the same call `docs/BLOCKING_DECISIONS.md` #4 made for the scheduler
+(use the battle-tested external tool, don't hand-roll it).
+
+- **Back up:** `python -m tradingos_api.scripts.backup_db [output-path]`
+  — defaults to `apps/api/backups/tradingos_<UTC timestamp>.dump` (that
+  directory is gitignored; a backup is local operational data, never
+  committed).
+- **Restore:** `python -m tradingos_api.scripts.restore_db <backup-path> [--yes]`
+  — **destructive**: `pg_restore --clean --if-exists --no-owner` drops
+  and recreates every object the backup contains, overwriting whatever
+  currently exists. Prompts for a typed `yes` confirmation naming the
+  exact target database unless `--yes` is passed (for scripted use).
+- **Binary discovery**: `find_pg_binary()` checks `PATH` first, then —
+  since this dev machine's native Postgres install doesn't put
+  `pg_dump`/`pg_restore` on `PATH` — `C:\Program Files\PostgreSQL\<version>\bin\`
+  on Windows. Raises a clear error (never a bare `FileNotFoundError`
+  from deep inside `subprocess`) if neither location has the tool.
+- **Restores into the existing database, never creates a new one** —
+  `tradingos_app` has no `CREATEDB` privilege (`tests/test_migrations.py`'s
+  own docstring already established this for the migration-isolation
+  tests); `--clean --if-exists` is what makes restoring into a
+  non-empty target safe without needing to drop/recreate the database
+  itself.
+- **Tested for real**: `tests/test_backup.py`'s round trip
+  (`TestBackupRestoreRoundTrip`) runs actual `pg_dump`/`pg_restore`
+  subprocesses against this dev Postgres server, scoped to a throwaway
+  schema (mirrors `test_migrations.py`'s isolated-schema pattern) —
+  create a marker row, back it up, drop the table (simulated data
+  loss), restore, assert the row is back. Skipped (not failed) if
+  `pg_dump`/`pg_restore` aren't discoverable on the machine running the
+  suite — the database being reachable isn't the same as the client
+  tools being installed.
+- **What this doesn't cover yet**: a *schedule* (there's no cron/task
+  triggering `backup_db.py` automatically — it's a tool, not a job) and
+  off-machine storage (backups currently land in `apps/api/backups/` on
+  the same disk as the database itself, so they don't protect against
+  disk/machine loss). Both are real deployment-phase concerns, not
+  local-dev ones — same "not yet decided" as the rest of this section.
 
 ## Monitoring / alerting
 
