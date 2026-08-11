@@ -76,6 +76,7 @@ from tradingos_api.schemas.agent_contract import (
 )
 from tradingos_api.services.agent_runner import AgentRunOutcome, run_agent_role
 from tradingos_api.services.committee_roles import ROLES_BY_LANE, RoleConfig
+from tradingos_api.services.cost_budget import check_and_enforce_cost_budget
 
 CALCULATION_VERSION = "v1"
 
@@ -144,6 +145,7 @@ class CommitteeRunResult:
     recommendation: Recommendation | None = None
     recommendation_version: RecommendationVersion | None = None
     veto_override_applied: bool = False
+    cost_budget_tripped: bool = False
 
 
 def _get_or_create_agent_version(db: Session, role: RoleConfig) -> AgentVersion:
@@ -541,6 +543,16 @@ def run_committee(
             cio_outcome = outcome
         elif outcome.status == "SUCCEEDED" and isinstance(outcome.output, AgentContractOutput):
             analyst_summaries.append(_analyst_summary_text(role, outcome.output))
+
+    # Revision Prompt 16 — "cost budgets and kill switches." Checked
+    # once per committee run (not per role): cheap, and this app has no
+    # background worker to poll it on a timer instead (task: real
+    # always-on scheduler/worker process). A trip here still lets this
+    # run finish and persist normally — it only prevents the *next*
+    # committee run and order-authority action, matching the kill
+    # switch's existing "stop what's next, don't corrupt what's
+    # in-flight" behavior elsewhere.
+    result.cost_budget_tripped = check_and_enforce_cost_budget(db)
 
     if (
         cio_outcome is not None

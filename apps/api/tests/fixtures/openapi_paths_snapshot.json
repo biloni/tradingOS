@@ -367,6 +367,12 @@
     ]
   ],
   [
+    "/api/v1/ops/cost-budget",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/ops/job-runs",
     [
       "get"

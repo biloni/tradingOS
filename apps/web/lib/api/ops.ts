@@ -34,3 +34,20 @@ export function getMetrics(): Promise<Metrics> {
 export function listJobRuns(limit = 20): Promise<JobRun[]> {
   return apiGet<JobRun[]>(`/api/v1/ops/job-runs?limit=${limit}`);
 }
+
+/**
+ * `_usd` fields are ADR-031 decimal-as-string, same as every other
+ * money field in this app — convert with `Number(...)` only at the
+ * point of display.
+ */
+export type CostBudgetStatus = {
+  daily_spend_usd: string;
+  daily_budget_usd: string;
+  budget_remaining_usd: string;
+  kill_switch_active: boolean;
+  as_of: string;
+};
+
+export function getCostBudgetStatus(): Promise<CostBudgetStatus> {
+  return apiGet<CostBudgetStatus>("/api/v1/ops/cost-budget");
+}

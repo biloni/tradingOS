@@ -6,7 +6,7 @@ import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { PageState } from "@/components/ui/PageState";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@/components/ui/Table";
-import { useJobRuns, useMetrics } from "@/lib/hooks/useOps";
+import { useCostBudgetStatus, useJobRuns, useMetrics } from "@/lib/hooks/useOps";
 
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
@@ -30,13 +30,47 @@ function formatDuration(seconds: number | null): string {
 export default function OpsPage() {
   const metrics = useMetrics();
   const jobRuns = useJobRuns(20);
+  const costBudget = useCostBudgetStatus();
 
   return (
     <div className="flex flex-col gap-6 p-8">
       <PageHeader
         title="Operations"
-        description="Process metrics and the morning-plan job dashboard — this process's own request volume/latency, and the run history of the one recurring job this app has today."
+        description="Process metrics, the LLM cost budget, and the morning-plan job dashboard — this process's own request volume/latency, cumulative daily spend, and the run history of the one recurring job this app has today."
       />
+
+      <Card>
+        <h2 className="mb-3 text-lg font-medium text-black dark:text-zinc-50">
+          LLM cost budget (today, UTC)
+        </h2>
+        {costBudget.isLoading && <PageState variant="loading" />}
+        {costBudget.isError && <ErrorBanner error={costBudget.error} />}
+        {costBudget.data && (
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <StatTile label="Spent" value={`$${costBudget.data.daily_spend_usd}`} />
+              <StatTile label="Budget" value={`$${costBudget.data.daily_budget_usd}`} />
+              <StatTile
+                label="Remaining"
+                value={`$${costBudget.data.budget_remaining_usd}`}
+              />
+            </div>
+            {costBudget.data.kill_switch_active && (
+              <p
+                role="alert"
+                className="mt-3 rounded-md bg-red-100 px-3 py-2 text-sm font-medium text-red-800 dark:bg-red-950 dark:text-red-300"
+              >
+                Kill switch is active — check whether it was tripped by this budget.
+              </p>
+            )}
+            <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+              Enforced automatically once per committee run — crossing the budget activates the
+              kill switch (single click to deactivate at{" "}
+              <code>POST /api/v1/settings/kill-switch/deactivate</code>, step-up required).
+            </p>
+          </>
+        )}
+      </Card>
 
       <Card>
         <h2 className="mb-3 text-lg font-medium text-black dark:text-zinc-50">

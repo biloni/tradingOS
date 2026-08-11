@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +42,15 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
 
     anthropic_api_key: str | None = None
+
+    # Revision Prompt 16 — "cost budgets and kill switches." No fixed
+    # figure is specified anywhere in this project's docs (PROVIDER_MATRIX.md
+    # gives *monthly* planning estimates: Normal ~$8-17, Heavy ~$45-100);
+    # $5/day (~$150/month) is a deliberately generous daily backstop —
+    # well above the "Heavy" monthly tier if hit every day — chosen to
+    # catch a genuine runaway loop, not to nag on ordinary heavy usage.
+    # Override via env for a tighter personal limit.
+    daily_llm_cost_budget_usd: Decimal = Decimal("5.00")
 
 
 @lru_cache

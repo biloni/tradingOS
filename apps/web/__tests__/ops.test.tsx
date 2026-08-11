@@ -40,7 +40,18 @@ const JOB_RUNS = [
   },
 ];
 
-function mockFetch({ jobRuns = JOB_RUNS }: { jobRuns?: typeof JOB_RUNS } = {}) {
+const COST_BUDGET = {
+  daily_spend_usd: "1.50",
+  daily_budget_usd: "5.00",
+  budget_remaining_usd: "3.50",
+  kill_switch_active: false,
+  as_of: "2026-08-11T12:00:00Z",
+};
+
+function mockFetch({
+  jobRuns = JOB_RUNS,
+  costBudget = COST_BUDGET,
+}: { jobRuns?: typeof JOB_RUNS; costBudget?: typeof COST_BUDGET } = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((url: string) => {
@@ -50,6 +61,13 @@ function mockFetch({ jobRuns = JOB_RUNS }: { jobRuns?: typeof JOB_RUNS } = {}) {
       }
       if (path.startsWith("/api/v1/ops/job-runs")) {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(jobRuns) });
+      }
+      if (path === "/api/v1/ops/cost-budget") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(costBudget),
+        });
       }
       return Promise.reject(new Error(`No mock handler for GET ${path}`));
     }),
@@ -82,6 +100,22 @@ describe("OpsPage", () => {
     renderWithQueryClient(<OpsPage />);
     await waitFor(() =>
       expect(screen.getByText("No job runs recorded yet")).toBeInTheDocument(),
+    );
+  });
+
+  it("renders the cost budget panel", async () => {
+    renderWithQueryClient(<OpsPage />);
+    await waitFor(() => expect(screen.getByText("$1.50")).toBeInTheDocument());
+    expect(screen.getByText("$5.00")).toBeInTheDocument();
+    expect(screen.getByText("$3.50")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("warns when the cost budget has tripped the kill switch", async () => {
+    mockFetch({ costBudget: { ...COST_BUDGET, kill_switch_active: true } });
+    renderWithQueryClient(<OpsPage />);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Kill switch is active"),
     );
   });
 });

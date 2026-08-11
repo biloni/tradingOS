@@ -7,14 +7,25 @@ needs to poll.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tradingos_api.core.config import get_settings
 from tradingos_api.core.metrics import request_metrics
 from tradingos_api.db.session import get_db
 from tradingos_api.models.morning_plan import MorningPlanRun
-from tradingos_api.schemas.ops import JobRunSummary, LatencyStatsResponse, MetricsResponse
+from tradingos_api.schemas.ops import (
+    CostBudgetStatusResponse,
+    JobRunSummary,
+    LatencyStatsResponse,
+    MetricsResponse,
+)
+from tradingos_api.services.cost_budget import get_todays_llm_spend_usd
+from tradingos_api.services.order_authority import is_kill_switch_active
 
 router = APIRouter(prefix="/api/v1/ops", tags=["ops"])
 
@@ -54,6 +65,24 @@ def list_job_runs(db: Session = Depends(get_db), limit: int = 20) -> list[JobRun
         )
         for run in runs
     ]
+
+
+@router.get("/cost-budget", response_model=CostBudgetStatusResponse)
+def get_cost_budget_status(db: Session = Depends(get_db)) -> CostBudgetStatusResponse:
+    """Read-only status — the actual enforcement runs inline in
+    `services/committee_orchestrator.py::run_committee()`
+    (`services/cost_budget.py::check_and_enforce_cost_budget`), not
+    here. This endpoint never activates or deactivates anything."""
+    now = datetime.now(UTC)
+    budget = get_settings().daily_llm_cost_budget_usd
+    spend = get_todays_llm_spend_usd(db, now=now)
+    return CostBudgetStatusResponse(
+        daily_spend_usd=spend,
+        daily_budget_usd=budget,
+        budget_remaining_usd=max(budget - spend, Decimal("0")),
+        kill_switch_active=is_kill_switch_active(db),
+        as_of=now,
+    )
 
 
 __all__ = ["router"]

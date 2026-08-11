@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getMetrics, listJobRuns } from "@/lib/api/ops";
+import { getCostBudgetStatus, getMetrics, listJobRuns } from "@/lib/api/ops";
 
 /**
  * Revision Prompt 16 — the job dashboard / metrics page polls both on
@@ -19,6 +19,14 @@ export function useJobRuns(limit = 20) {
   return useQuery({
     queryKey: ["ops", "job-runs", limit],
     queryFn: () => listJobRuns(limit),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useCostBudgetStatus() {
+  return useQuery({
+    queryKey: ["ops", "cost-budget"],
+    queryFn: getCostBudgetStatus,
     refetchInterval: 15_000,
   });
 }

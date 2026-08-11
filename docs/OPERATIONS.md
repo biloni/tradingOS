@@ -76,6 +76,40 @@ polling them has no session cookie):
   this is operational data about the app's own internals, not
   something an infra orchestrator with no credentials needs.
 
+### Cost-budget-triggered kill switch (Revision Prompt 16)
+
+- **`Settings.daily_llm_cost_budget_usd`** (default `$5.00`) — no fixed
+  figure is specified anywhere in this project's docs
+  (`docs/PROVIDER_MATRIX.md` gives *monthly* planning estimates, Normal
+  ~$8-17, Heavy ~$45-100); $5/day (~$150/month) is a deliberately
+  generous daily backstop chosen to catch a genuine runaway loop, not
+  to nag on ordinary heavy usage. Override via env for a tighter
+  personal limit.
+- **Enforcement** (`services/cost_budget.py::check_and_enforce_cost_budget`)
+  runs inline, once per committee run
+  (`services/committee_orchestrator.py::run_committee()`) — this app
+  has no background worker process yet (see "real always-on
+  scheduler/worker process" below), so a synchronous check at the one
+  place LLM cost actually accrues is the only enforcement point that
+  runs today. Sums `ModelCallRecord.cost_usd` since UTC midnight; if
+  that meets or exceeds the budget and the kill switch isn't already
+  active, activates it with `activated_by="system:cost-budget"` and a
+  reason naming the exact spend/budget figures. Never re-activates or
+  overwrites an already-active switch (including a human's own
+  activation) — a no-op if one is already tripped.
+- The triggering run itself still completes and persists normally — a
+  trip only prevents the *next* committee run (which checks
+  `is_kill_switch_active()` before anything else) and any order-
+  authority action, matching the kill switch's existing "stop what's
+  next, don't corrupt what's in-flight" behavior elsewhere.
+- **`GET /api/v1/ops/cost-budget`** — read-only status (today's spend,
+  the configured budget, remaining headroom, whether the kill switch
+  is active). Rendered on the `/ops` page. Deactivating a
+  budget-tripped kill switch uses the same existing
+  `POST /api/v1/settings/kill-switch/deactivate` endpoint (step-up
+  required) as any other kill-switch deactivation — no separate
+  "clear the budget trip" action exists or is needed.
+
 ## Runbooks
 
 None yet (nothing is running in a way that needs one). The one operational

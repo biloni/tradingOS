@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from pydantic import BaseModel
 
@@ -39,4 +40,15 @@ class JobRunSummary(BaseModel):
     error_detail: str | None
 
 
-__all__ = ["JobRunSummary", "LatencyStatsResponse", "MetricsResponse"]
+class CostBudgetStatusResponse(BaseModel):
+    """`daily_spend_usd`/`daily_budget_usd` serialize as strings
+    (ADR-031: money fields never serialize as native JSON numbers)."""
+
+    daily_spend_usd: Decimal
+    daily_budget_usd: Decimal
+    budget_remaining_usd: Decimal
+    kill_switch_active: bool
+    as_of: datetime
+
+
+__all__ = ["CostBudgetStatusResponse", "JobRunSummary", "LatencyStatsResponse", "MetricsResponse"]
