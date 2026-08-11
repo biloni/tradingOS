@@ -23,6 +23,40 @@ there without ever appearing in a repo or CI log.
 Not applicable yet — no deployed instance to monitor. Will be scoped
 alongside the deployment decision above.
 
+### Health and readiness (Revision Prompt 16)
+
+Two endpoints, both reachable without authentication (an orchestrator
+polling them has no session cookie):
+
+- **`GET /health`** — pure liveness. Always `{"status": "ok", ...}` if
+  the process can respond at all; deliberately checks nothing else, so
+  a degraded dependency never causes an orchestrator to restart a
+  perfectly healthy process.
+- **`GET /ready`** — real dependency status
+  (`routers/health.py::get_readiness`). Returns HTTP 200 with
+  `"ready": true` only when the database is reachable (the one *hard*
+  dependency — nothing in this app works without it); returns 503 with
+  `"ready": false` otherwise. The response body's `checks` object
+  always reports every dependency honestly:
+  - `database` — `ok` / `error` (a real `SELECT 1`, not a ping to a
+    cached connection pool state)
+  - `market_data_provider` / `broker_provider` — `configured` /
+    `not_configured` (same underlying Alpaca-credential check as
+    `GET /api/v1/settings/providers`'s `has_credential_configured`) —
+    absence never blocks readiness (principle 5: this app degrades to
+    synthetic providers gracefully)
+  - `llm_provider` — `configured` / `not_configured` (Anthropic key) —
+    same non-blocking treatment
+  - `scheduler` / `worker` — always `not_implemented` today. Neither a
+    real timer-driven scheduler nor a background worker process exists
+    in this deployment yet (see "Running the Morning Decision Plan
+    schedule" below and task: real always-on scheduler/worker
+    process) — `/ready` says so rather than reporting a fake "ok" for
+    a process that doesn't exist.
+
+No job dashboard or metrics scraping endpoint exists yet (separate,
+already-tracked task).
+
 ## Runbooks
 
 None yet (nothing is running in a way that needs one). The one operational

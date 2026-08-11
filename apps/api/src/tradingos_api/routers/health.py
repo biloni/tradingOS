@@ -1,7 +1,20 @@
+"""Liveness (`/health`) and readiness (`/ready`) — Revision Prompt 16.
+Both are deliberately exempt from `require_session` (see `main.py`):
+an infra orchestrator polling liveness/readiness has no credentials and
+shouldn't need any.
+"""
+
+from __future__ import annotations
+
 from datetime import UTC, datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from tradingos_api.core.config import get_settings
+from tradingos_api.db.session import get_db
 
 router = APIRouter()
 
@@ -13,4 +26,86 @@ class HealthResponse(BaseModel):
 
 @router.get("/health", response_model=HealthResponse)
 def get_health() -> HealthResponse:
+    """Pure liveness — no dependency checks, deliberately. A container
+    orchestrator's liveness probe should only ever fail (and restart
+    the process) when the process itself is wedged, not because a
+    downstream dependency (DB, Alpaca, Anthropic) is degraded — that's
+    what `/ready` is for."""
     return HealthResponse(status="ok", time_utc=datetime.now(UTC).isoformat())
+
+
+class DependencyCheck(BaseModel):
+    status: str
+    detail: str | None = None
+
+
+class ReadinessResponse(BaseModel):
+    ready: bool
+    time_utc: str
+    checks: dict[str, DependencyCheck]
+
+
+@router.get("/ready", response_model=ReadinessResponse)
+def get_readiness(response: Response, db: Session = Depends(get_db)) -> ReadinessResponse:
+    """Reports the real state of every dependency this app has —
+    honestly, not optimistically. `database` is the only *hard*
+    dependency (its failure sets `ready=False` and a 503 status): the
+    app cannot serve a single real request without it. The provider/
+    LLM checks are informational, not blocking — this app is built to
+    degrade gracefully without Alpaca/Anthropic credentials (principle
+    5; `core/dependencies.py`'s provider fallbacks), so their absence
+    is a real, reportable fact but not an outage. `scheduler`/`worker`
+    are reported as `not_implemented` rather than faked as healthy:
+    `services/morning_plan_scheduler.py::decide_schedule()` is a pure
+    function with no timer, and no background worker process exists in
+    this deployment yet (both tracked as a separate, already-listed
+    task) — a readiness check that claimed otherwise would be lying to
+    whatever's polling it.
+    """
+    settings = get_settings()
+    checks: dict[str, DependencyCheck] = {}
+
+    try:
+        db.execute(text("SELECT 1"))
+        checks["database"] = DependencyCheck(status="ok")
+    except Exception as exc:  # noqa: BLE001 - readiness must report, never crash, the caller's failure
+        checks["database"] = DependencyCheck(status="error", detail=str(exc))
+
+    # Same fields/semantics as `routers/settings.py::list_provider_status`'s
+    # `has_credential_configured` — deliberately not a second vocabulary
+    # for the same underlying fact.
+    alpaca_configured = bool(settings.alpaca_api_key_id and settings.alpaca_api_secret_key)
+    checks["market_data_provider"] = DependencyCheck(
+        status="configured" if alpaca_configured else "not_configured",
+        detail=None if alpaca_configured else "falls back to SyntheticMarketQuoteProvider",
+    )
+    checks["broker_provider"] = DependencyCheck(
+        status="configured" if alpaca_configured else "not_configured",
+        detail=None if alpaca_configured else "falls back to SyntheticPaperBrokerProvider",
+    )
+
+    anthropic_configured = bool(settings.anthropic_api_key)
+    checks["llm_provider"] = DependencyCheck(
+        status="configured" if anthropic_configured else "not_configured",
+        detail=(
+            None
+            if anthropic_configured
+            else "NL-query/agent features return a clear 503, not a crash"
+        ),
+    )
+
+    checks["scheduler"] = DependencyCheck(
+        status="not_implemented",
+        detail=(
+            "decide_schedule() is a pure function with no timer "
+            "(task: real always-on scheduler/worker process)"
+        ),
+    )
+    checks["worker"] = DependencyCheck(
+        status="not_implemented",
+        detail="no background worker process exists in this deployment yet",
+    )
+
+    ready = checks["database"].status == "ok"
+    response.status_code = 200 if ready else 503
+    return ReadinessResponse(ready=ready, time_utc=datetime.now(UTC).isoformat(), checks=checks)
