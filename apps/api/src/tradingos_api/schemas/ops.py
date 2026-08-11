@@ -40,6 +40,20 @@ class JobRunSummary(BaseModel):
     error_detail: str | None
 
 
+class SchedulerStatusResponse(BaseModel):
+    """`core/scheduler.py`'s in-process APScheduler status (Revision
+    Prompt 16, task: real always-on scheduler/worker process).
+    `running=False` is the honest state whenever `SCHEDULER_ENABLED=false`
+    or the process's ASGI lifespan hasn't started it — never faked as
+    healthy."""
+
+    running: bool
+    tick_interval_seconds: int
+    tick_count: int
+    last_tick_at: datetime | None
+    last_tick_error: str | None
+
+
 class CostBudgetStatusResponse(BaseModel):
     """`daily_spend_usd`/`daily_budget_usd` serialize as strings
     (ADR-031: money fields never serialize as native JSON numbers)."""
@@ -51,4 +65,10 @@ class CostBudgetStatusResponse(BaseModel):
     as_of: datetime
 
 
-__all__ = ["CostBudgetStatusResponse", "JobRunSummary", "LatencyStatsResponse", "MetricsResponse"]
+__all__ = [
+    "CostBudgetStatusResponse",
+    "JobRunSummary",
+    "LatencyStatsResponse",
+    "MetricsResponse",
+    "SchedulerStatusResponse",
+]

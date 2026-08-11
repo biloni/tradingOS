@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getCostBudgetStatus, getMetrics, listJobRuns } from "@/lib/api/ops";
+import { getCostBudgetStatus, getMetrics, getSchedulerStatus, listJobRuns } from "@/lib/api/ops";
 
 /**
  * Revision Prompt 16 — the job dashboard / metrics page polls both on
@@ -27,6 +27,14 @@ export function useCostBudgetStatus() {
   return useQuery({
     queryKey: ["ops", "cost-budget"],
     queryFn: getCostBudgetStatus,
+    refetchInterval: 15_000,
+  });
+}
+
+export function useSchedulerStatus() {
+  return useQuery({
+    queryKey: ["ops", "scheduler"],
+    queryFn: getSchedulerStatus,
     refetchInterval: 15_000,
   });
 }

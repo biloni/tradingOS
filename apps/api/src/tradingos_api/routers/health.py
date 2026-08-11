@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from tradingos_api.core.config import get_settings
+from tradingos_api.core.scheduler import get_scheduler_status
 from tradingos_api.db.session import get_db
 
 router = APIRouter()
@@ -55,12 +56,13 @@ def get_readiness(response: Response, db: Session = Depends(get_db)) -> Readines
     degrade gracefully without Alpaca/Anthropic credentials (principle
     5; `core/dependencies.py`'s provider fallbacks), so their absence
     is a real, reportable fact but not an outage. `scheduler`/`worker`
-    are reported as `not_implemented` rather than faked as healthy:
-    `services/morning_plan_scheduler.py::decide_schedule()` is a pure
-    function with no timer, and no background worker process exists in
-    this deployment yet (both tracked as a separate, already-listed
-    task) — a readiness check that claimed otherwise would be lying to
-    whatever's polling it.
+    report the real state of `core/scheduler.py`'s in-process
+    APScheduler (task: real always-on scheduler/worker process) —
+    `not_running` (not faked as healthy) whenever `SCHEDULER_ENABLED=false`
+    or the app's lifespan hasn't started it yet (e.g. this process was
+    imported without ever running its ASGI lifespan, as in some test
+    setups), never silently reported as `ok` just because the process
+    itself is up.
     """
     settings = get_settings()
     checks: dict[str, DependencyCheck] = {}
@@ -94,16 +96,30 @@ def get_readiness(response: Response, db: Session = Depends(get_db)) -> Readines
         ),
     )
 
+    scheduler_status = get_scheduler_status()
     checks["scheduler"] = DependencyCheck(
-        status="not_implemented",
+        status="ok" if scheduler_status.running else "not_running",
         detail=(
-            "decide_schedule() is a pure function with no timer "
-            "(task: real always-on scheduler/worker process)"
+            f"in-process APScheduler polling decide_schedule()/"
+            f"decide_reconciliation_schedule() every "
+            f"{scheduler_status.tick_interval_seconds}s ({scheduler_status.tick_count} "
+            f"tick(s) so far)"
+            if scheduler_status.running
+            else "SCHEDULER_ENABLED=false, or this process's lifespan hasn't started it"
         ),
     )
     checks["worker"] = DependencyCheck(
-        status="not_implemented",
-        detail="no background worker process exists in this deployment yet",
+        status="ok" if scheduler_status.running else "not_running",
+        detail=(
+            f"last tick at {scheduler_status.last_tick_at.isoformat()}"
+            + (
+                f"; last tick had errors: {scheduler_status.last_tick_error}"
+                if scheduler_status.last_tick_error
+                else ""
+            )
+            if scheduler_status.last_tick_at
+            else "no tick has run yet"
+        ),
     )
 
     ready = checks["database"].status == "ok"

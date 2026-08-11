@@ -51,3 +51,19 @@ export type CostBudgetStatus = {
 export function getCostBudgetStatus(): Promise<CostBudgetStatus> {
   return apiGet<CostBudgetStatus>("/api/v1/ops/cost-budget");
 }
+
+/**
+ * Revision Prompt 16, task: real always-on scheduler/worker process —
+ * `core/scheduler.py`'s in-process APScheduler status.
+ */
+export type SchedulerStatus = {
+  running: boolean;
+  tick_interval_seconds: number;
+  tick_count: number;
+  last_tick_at: string | null;
+  last_tick_error: string | null;
+};
+
+export function getSchedulerStatus(): Promise<SchedulerStatus> {
+  return apiGet<SchedulerStatus>("/api/v1/ops/scheduler");
+}

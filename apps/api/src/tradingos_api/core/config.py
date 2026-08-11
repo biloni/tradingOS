@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     # Override via env for a tighter personal limit.
     daily_llm_cost_budget_usd: Decimal = Decimal("5.00")
 
+    # Revision Prompt 16, task: real always-on scheduler/worker process.
+    # An in-process APScheduler instance (`core/scheduler.py`) starts
+    # with the FastAPI app and polls `decide_schedule()`/
+    # `decide_reconciliation_schedule()` every minute. Defaults on for
+    # any real run of this process; set `SCHEDULER_ENABLED=false` to
+    # run the API without it (e.g. a one-off script, or a demo that
+    # drives its own fake clock and would otherwise race the real one).
+    # Never auto-starts under pytest regardless of this flag — FastAPI's
+    # `TestClient` only triggers lifespan startup/shutdown when entered
+    # as a context manager (`with TestClient(app) as c:`), and this
+    # project's `client` fixture (tests/conftest.py) deliberately never
+    # does that.
+    scheduler_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

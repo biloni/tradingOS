@@ -385,6 +385,12 @@
     ]
   ],
   [
+    "/api/v1/ops/scheduler",
+    [
+      "get"
+    ]
+  ],
+  [
     "/api/v1/order-approvals",
     [
       "post"

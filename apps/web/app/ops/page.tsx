@@ -6,7 +6,7 @@ import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { PageState } from "@/components/ui/PageState";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@/components/ui/Table";
-import { useCostBudgetStatus, useJobRuns, useMetrics } from "@/lib/hooks/useOps";
+import { useCostBudgetStatus, useJobRuns, useMetrics, useSchedulerStatus } from "@/lib/hooks/useOps";
 
 function StatTile({ label, value }: { label: string; value: string }) {
   return (
@@ -31,6 +31,7 @@ export default function OpsPage() {
   const metrics = useMetrics();
   const jobRuns = useJobRuns(20);
   const costBudget = useCostBudgetStatus();
+  const scheduler = useSchedulerStatus();
 
   return (
     <div className="flex flex-col gap-6 p-8">
@@ -108,10 +109,34 @@ export default function OpsPage() {
           Morning plan job runs
         </h2>
         <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
-          No always-on scheduler is deployed yet — these are the runs of{" "}
-          <code>decide_schedule()</code> triggered manually or by a local polling loop, most
-          recent first.
+          {scheduler.data?.running ? (
+            <>
+              In-process scheduler running, polling every{" "}
+              {scheduler.data.tick_interval_seconds}s ({scheduler.data.tick_count} tick
+              {scheduler.data.tick_count === 1 ? "" : "s"} so far
+              {scheduler.data.last_tick_at
+                ? `, last at ${new Date(scheduler.data.last_tick_at).toLocaleString()}`
+                : ""}
+              ). Still local mode — it only fires while this process is running; see{" "}
+              <code>LOCAL_MODE_WARNING</code>.
+            </>
+          ) : (
+            <>
+              No in-process scheduler is currently running — <code>SCHEDULER_ENABLED=false</code>,
+              or this process hasn&apos;t started it. Runs below are from manual triggers, a
+              prior scheduler run, or a local polling script.
+            </>
+          )}{" "}
+          Most recent first.
         </p>
+        {scheduler.data?.last_tick_error && (
+          <p
+            role="alert"
+            className="mb-3 rounded-md bg-red-100 px-3 py-2 text-xs font-medium text-red-800 dark:bg-red-950 dark:text-red-300"
+          >
+            Last tick had errors: {scheduler.data.last_tick_error}
+          </p>
+        )}
         {jobRuns.isLoading && <PageState variant="loading" />}
         {jobRuns.isError && <ErrorBanner error={jobRuns.error} />}
         {jobRuns.data && jobRuns.data.length === 0 && (

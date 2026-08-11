@@ -22,6 +22,11 @@ dependencies = [
     # for any Form/UploadFile parameter, even though nothing here
     # imports it directly.
     "python-multipart==0.0.32",
+    # Revision Prompt 16, task: real always-on scheduler/worker process.
+    # `docs/BLOCKING_DECISIONS.md` #4's recorded choice: an in-process
+    # scheduler inside this same FastAPI process, not Celery/Redis/a
+    # separate deployable.
+    "apscheduler==3.11.3",
 ]
 
 [project.scripts]
@@ -79,6 +84,12 @@ extend-immutable-calls = [
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Ships no py.typed marker / stub package (Revision Prompt 16, task:
+# real always-on scheduler/worker process, core/scheduler.py).
+module = "apscheduler.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

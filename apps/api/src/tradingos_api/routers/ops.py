@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from tradingos_api.core.config import get_settings
 from tradingos_api.core.metrics import request_metrics
+from tradingos_api.core.scheduler import get_scheduler_status
 from tradingos_api.db.session import get_db
 from tradingos_api.models.morning_plan import MorningPlanRun
 from tradingos_api.schemas.ops import (
@@ -23,6 +24,7 @@ from tradingos_api.schemas.ops import (
     JobRunSummary,
     LatencyStatsResponse,
     MetricsResponse,
+    SchedulerStatusResponse,
 )
 from tradingos_api.services.cost_budget import get_todays_llm_spend_usd
 from tradingos_api.services.order_authority import is_kill_switch_active
@@ -65,6 +67,22 @@ def list_job_runs(db: Session = Depends(get_db), limit: int = 20) -> list[JobRun
         )
         for run in runs
     ]
+
+
+@router.get("/scheduler", response_model=SchedulerStatusResponse)
+def get_scheduler_status_route() -> SchedulerStatusResponse:
+    """Read-only status for `core/scheduler.py`'s in-process APScheduler
+    (Revision Prompt 16, task: real always-on scheduler/worker
+    process) — what the job dashboard shows instead of the old "no
+    always-on scheduler is deployed yet" copy."""
+    status = get_scheduler_status()
+    return SchedulerStatusResponse(
+        running=status.running,
+        tick_interval_seconds=status.tick_interval_seconds,
+        tick_count=status.tick_count,
+        last_tick_at=status.last_tick_at,
+        last_tick_error=status.last_tick_error,
+    )
 
 
 @router.get("/cost-budget", response_model=CostBudgetStatusResponse)

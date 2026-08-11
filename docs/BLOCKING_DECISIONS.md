@@ -81,6 +81,14 @@ ADR-021's identical reasoning for the rate limiter). Revisit only if a job
 needs to survive an API-process restart mid-run, which none of the three
 jobs above do (each is idempotent and re-runnable).
 
+**Built (Revision Prompt 16, task: real always-on scheduler/worker
+process).** `core/scheduler.py` implements exactly this recommendation —
+`apscheduler`'s `BackgroundScheduler`, started/stopped from `main.py`'s
+`lifespan`, ticking every 60s and calling `decide_schedule()`/
+`decide_reconciliation_schedule()` (`services/scheduler_jobs.py`'s
+per-subject glue). See `docs/OPERATIONS.md`'s "Real always-on
+scheduler/worker process" section for the operational detail.
+
 ## 5. Manual trade journal vs. the existing Alpaca-paper portfolio
 
 The refinement wants trades "manually placed at any broker" tracked, plus

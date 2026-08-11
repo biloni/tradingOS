@@ -123,15 +123,17 @@ class TestReadiness:
         finally:
             get_settings.cache_clear()
 
-    def test_scheduler_and_worker_are_reported_as_not_implemented(self) -> None:
-        """No real always-on scheduler or background worker process
-        exists in this deployment yet (separate, already-tracked task)
-        — `/ready` must say so honestly, never claim health for a
-        process that doesn't exist."""
+    def test_scheduler_and_worker_report_not_running_under_the_test_process(self) -> None:
+        """`core/scheduler.py`'s in-process APScheduler only starts from
+        the app's lifespan (`main.py`), which `TestClient(app)` never
+        triggers unless entered as a context manager — this project's
+        `client` fixture deliberately never does that (see
+        `core/scheduler.py`'s own docstring), so under pytest the
+        honest status is `not_running`, not a faked `ok`."""
         response = client.get("/ready")
         body = response.json()
-        assert body["checks"]["scheduler"]["status"] == "not_implemented"
-        assert body["checks"]["worker"]["status"] == "not_implemented"
+        assert body["checks"]["scheduler"]["status"] == "not_running"
+        assert body["checks"]["worker"]["status"] == "not_running"
 
     def test_ready_is_reachable_without_authentication(self) -> None:
         """An infra orchestrator's readiness probe has no session

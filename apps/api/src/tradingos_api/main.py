@@ -1,4 +1,6 @@
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +10,7 @@ from tradingos_api.core.config import get_settings
 from tradingos_api.core.dependencies import require_session
 from tradingos_api.core.logging import configure_logging
 from tradingos_api.core.request_id_middleware import RequestIdMiddleware
+from tradingos_api.core.scheduler import start_scheduler, stop_scheduler
 from tradingos_api.core.security_headers import SecurityHeadersMiddleware
 from tradingos_api.routers import (
     alerts,
@@ -42,7 +45,24 @@ from tradingos_api.routers import (
 configure_logging()
 _logger = logging.getLogger("tradingos_api")
 
-app = FastAPI(title="TradingOS API", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Revision Prompt 16, task: real always-on scheduler/worker
+    process. Starlette's `TestClient` only runs lifespan startup/shutdown
+    when entered as a context manager (`with TestClient(app) as c:`);
+    this project's `tests/conftest.py::client` fixture deliberately
+    never does that, so the scheduler never starts under pytest — see
+    `core/scheduler.py`'s own docstring for the full reasoning."""
+    if get_settings().scheduler_enabled:
+        start_scheduler()
+    try:
+        yield
+    finally:
+        stop_scheduler()
+
+
+app = FastAPI(title="TradingOS API", version="0.1.0", lifespan=_lifespan)
 
 
 @app.exception_handler(Exception)

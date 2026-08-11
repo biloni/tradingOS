@@ -195,7 +195,10 @@ math rather than a second stop/target implementation.
 Premarket, intraday, EOD jobs (BLOCKING_DECISIONS.md #4). Owns: "when do
 the above contexts actually run, unattended." In-process scheduler calling
 existing service functions — not a distinct deployable, not a distinct
-trust boundary.
+trust boundary. Built in Revision Prompt 16 (`core/scheduler.py`,
+`services/scheduler_jobs.py`) for the two jobs that exist today (morning
+plan generation, reconciliation) — see docs/OPERATIONS.md's "Real
+always-on scheduler/worker process."
 
 ### 10. Performance & Learning (existing, extended)
 Existing: `StrategyVersion` governance loop, `BacktestRun`

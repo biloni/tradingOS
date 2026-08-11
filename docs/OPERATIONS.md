@@ -47,12 +47,11 @@ polling them has no session cookie):
     synthetic providers gracefully)
   - `llm_provider` — `configured` / `not_configured` (Anthropic key) —
     same non-blocking treatment
-  - `scheduler` / `worker` — always `not_implemented` today. Neither a
-    real timer-driven scheduler nor a background worker process exists
-    in this deployment yet (see "Running the Morning Decision Plan
-    schedule" below and task: real always-on scheduler/worker
-    process) — `/ready` says so rather than reporting a fake "ok" for
-    a process that doesn't exist.
+  - `scheduler` / `worker` — `ok` when `core/scheduler.py`'s in-process
+    APScheduler is running (this process's lifespan started it and
+    `SCHEDULER_ENABLED` isn't `false`), `not_running` otherwise — never
+    faked as healthy just because the API process itself is up. See
+    "Real always-on scheduler/worker process" below.
 
 ### Job dashboard + metrics (Revision Prompt 16)
 
@@ -87,11 +86,11 @@ polling them has no session cookie):
   personal limit.
 - **Enforcement** (`services/cost_budget.py::check_and_enforce_cost_budget`)
   runs inline, once per committee run
-  (`services/committee_orchestrator.py::run_committee()`) — this app
-  has no background worker process yet (see "real always-on
-  scheduler/worker process" below), so a synchronous check at the one
-  place LLM cost actually accrues is the only enforcement point that
-  runs today. Sums `ModelCallRecord.cost_usd` since UTC midnight; if
+  (`services/committee_orchestrator.py::run_committee()`) — a
+  synchronous check at the one place LLM cost actually accrues,
+  unchanged by the in-process scheduler below (that worker doesn't run
+  committee sessions, so it has no cost to check). Sums
+  `ModelCallRecord.cost_usd` since UTC midnight; if
   that meets or exceeds the budget and the kill switch isn't already
   active, activates it with `activated_by="system:cost-budget"` and a
   reason naming the exact spend/budget figures. Never re-activates or
@@ -156,6 +155,46 @@ a real, closable weakness:
   something ready to call the moment it exists, rather than inventing
   scheduling logic from scratch then.
 
+### Real always-on scheduler/worker process (Revision Prompt 16)
+
+`docs/BLOCKING_DECISIONS.md` #4's recorded choice, now built:
+`core/scheduler.py` runs an in-process APScheduler (`BackgroundScheduler`)
+inside this same FastAPI process — no Redis, no Celery, no separate
+deployable. `main.py`'s `lifespan` context manager starts it on app
+startup and stops it on shutdown; `Settings.scheduler_enabled` (default
+`True`, env var `SCHEDULER_ENABLED`) can turn it off entirely.
+
+- **What it does, every 60 seconds** (`core/scheduler.py::tick()`):
+  for every `UserProfile`, calls
+  `services/scheduler_jobs.py::run_due_morning_plan_for_user()`
+  (`decide_schedule()` + the same generation/notification logic
+  `POST /morning-plan/generate` uses, `triggered_by="scheduler"`); for
+  every `PAPER_ALPACA` account, calls
+  `run_due_reconciliation_for_account()` (`decide_reconciliation_schedule()`
+  + `reconcile_from_broker()`). Each subject's job runs in its own
+  try/except — one user's or one account's failure is logged and
+  rolled back, never blocks the rest of the tick.
+- **Status**: `GET /api/v1/ops/scheduler` (also rendered on `/ops`) and
+  `/ready`'s `scheduler`/`worker` checks both read
+  `core/scheduler.py::get_scheduler_status()` — `running`,
+  `tick_interval_seconds`, `tick_count`, `last_tick_at`,
+  `last_tick_error`.
+- **Still local mode, not "deployed."** This satisfies "an always-on
+  process exists and polls the decision functions" for as long as this
+  process is running — it does not change the fact that a laptop
+  asleep, or the process not started, still means nothing fires.
+  `morning_plan_scheduler.LOCAL_MODE_WARNING` is unchanged and still
+  accurate. A real deployment (task: Dockerfiles + deployment docs) —
+  not this module — is what makes "always-on" actually true.
+- **Why tests never start it**: FastAPI's `TestClient` only runs
+  lifespan startup/shutdown when entered as a context manager
+  (`with TestClient(app) as c:`); `tests/conftest.py::client` never
+  does that, so the scheduler stays `not_running` under the whole test
+  suite, and its per-subject job functions are tested directly against
+  the transactional `db_session` fixture instead of the real
+  `tick()`/`SessionLocal()` (`tests/test_scheduler.py`'s own docstring
+  explains why `tick()` itself is never called in a test).
+
 ## Runbooks
 
 None yet (nothing is running in a way that needs one). The one operational
@@ -178,23 +217,29 @@ procedure worth recording now, since it came up during Phase 1 setup:
 ### Running the Morning Decision Plan schedule (Revision Prompt 9)
 
 `services/morning_plan_scheduler.py::decide_schedule()` is a pure
-decision function — it does not run on a timer by itself. Something
-external has to call it repeatedly and act on `should_run=True` by
-calling `POST /api/v1/morning-plan/generate`. As of this revision, no
-such polling process is deployed; this is the runbook for both modes.
+decision function — it does not run on a timer by itself.
+`core/scheduler.py`'s in-process APScheduler (see "Real always-on
+scheduler/worker process" above) is what calls it every 60 seconds and
+acts on `should_run=True` today; this is the runbook for both that
+process and manual/ad-hoc generation.
 
-**Local mode (this project's current state).** There is no background
-worker process yet. To generate a plan locally:
+**Local mode (this project's current state).** An in-process worker
+exists (`core/scheduler.py`) and runs whenever the API process is
+running, but it's still *local*: it only fires while this laptop is
+awake and the process hasn't been stopped.
 
 - **Manual, right now:** `POST /api/v1/morning-plan/generate` directly
   with `"version_label": "AD_HOC"` (or omit it — that's the default).
   Rejects with 422 and a reason if today (or the given `plan_date`) is
   not a trading day.
-- **Scheduled, while this machine is on:** run a small loop (not yet
-  shipped as a script) that calls `decide_schedule(db, now_utc=...)`
-  every minute or so and `POST`s `/generate` with the returned
-  `version_label`/`idempotency_key` whenever `should_run=True`. This
-  only fires while that loop's process is actually running.
+- **Scheduled, while this machine is on:** happens automatically —
+  `core/scheduler.py::tick()` calls `decide_schedule()` every 60
+  seconds for every user and runs generation itself
+  (`services/scheduler_jobs.py::run_due_morning_plan_for_user()`,
+  `triggered_by="scheduler"`) whenever `should_run=True`. No separate
+  script or manual polling loop is needed anymore. Set
+  `SCHEDULER_ENABLED=false` to disable it (e.g. running the API for a
+  one-off script that shouldn't race the real scheduler).
 - **`services/morning_plan_scheduler.py::LOCAL_MODE_WARNING` is the
   literal, user-facing text this project shows wherever local-mode
   scheduling is configured** — restated here verbatim so this runbook
@@ -203,18 +248,20 @@ worker process yet. To generate a plan locally:
   process is running. If this machine sleeps, shuts down, or the
   process is not running at 5:45am/6:10am local time, no plan will be
   generated for that trading day. Deploy an always-on worker for
-  unattended scheduling."*
+  unattended scheduling."* That warning is still accurate even with
+  `core/scheduler.py` running — "in-process" is not "always-on";
+  "always-on" needs a real deployment.
 
-**Deployed mode (not yet built).** A real deployment needs one
-always-on worker process — a scheduled cloud job or a long-running
-service, not this laptop — polling `decide_schedule()` and calling
-`/generate` the same way. Nothing about the scheduler or orchestrator
-contract changes between local and deployed mode; only *what calls
-them, and how reliably it stays running* differs. Scoping and standing
-up that worker is not yet done (tracked the same way the "Production
-deployment" section above tracks the rest of the hosting decision).
+**Deployed mode (not yet built).** A real deployment needs this same
+process — or an equivalent one — actually staying up on a host that
+doesn't sleep, not this laptop. Nothing about the scheduler or
+orchestrator contract changes between local and deployed mode; only
+*how reliably the process stays running* differs. Standing up that
+deployment is not yet done (tracked the same way the "Production
+deployment" section above tracks the rest of the hosting decision;
+task: Dockerfiles + deployment docs).
 
-**Demonstrating the whole flow without any of this wired up yet:**
+**Demonstrating the whole flow without the in-process worker involved:**
 `python -m tradingos_api.scripts.demo_prompt9` drives
 `decide_schedule()` with a controllable clock across a synthetic
 trading day — including a simulated worker crash mid-`FINAL`-run and a

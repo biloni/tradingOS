@@ -35,6 +35,22 @@ def _make_run(
     return run
 
 
+class TestSchedulerStatus:
+    def test_reports_not_running_under_the_test_process(self, client: TestClient) -> None:
+        """Mirrors `test_health.py`'s readiness assertion — the app's
+        lifespan (where `core/scheduler.py::start_scheduler()` is
+        called) never runs under `TestClient(app)` unless entered as a
+        context manager, which this project's `client` fixture
+        deliberately never does."""
+        response = client.get("/api/v1/ops/scheduler")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["running"] is False
+        assert body["tick_interval_seconds"] == 60
+        assert body["tick_count"] == 0
+        assert body["last_tick_at"] is None
+
+
 class TestMetrics:
     def test_metrics_endpoint_returns_expected_shape(self, client: TestClient) -> None:
         response = client.get("/api/v1/ops/metrics")
