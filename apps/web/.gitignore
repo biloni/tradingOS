@@ -30,10 +30,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (placeholders like .env*.example are intentionally NOT ignored)
-.env
-.env.local
-.env.*.local
+# env files — `.env*` catches every variant (not just the `.local`
+# suffix the old three-line version anticipated); the two `!` lines
+# re-allow the committed placeholder file (Revision Prompt 16 secret-
+# scanning review, ADR-070; mirrors the root .gitignore fix).
+.env*
+!.env.example
+!.env.*.example
 
 # vercel
 .vercel

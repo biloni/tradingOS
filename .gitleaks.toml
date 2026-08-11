@@ -1,0 +1,21 @@
+# gitleaks config (Revision Prompt 16, ADR-070). Extends the built-in
+# default ruleset (https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml)
+# rather than replacing it — no rule is loosened, only specific known
+# false positives are allowlisted below, each with a documented reason,
+# so a real future leak is never silently masked by this file.
+#
+# Run locally: gitleaks git --log-opts="--all" -v
+# Run in CI: gitleaks git --log-opts="--all" --exit-code 1 (task: CI pipeline)
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret false positives, reviewed 2026-08-11"
+paths = [
+  # Synthetic backtest/strategy-engine evidence output. Component names
+  # like "PRICE_ABOVE_EMA20" occasionally trip the generic-api-key
+  # entropy heuristic — this file only ever contains generated test
+  # output, never a credential of any kind.
+  '''docs/TEST_EVIDENCE\.md''',
+]

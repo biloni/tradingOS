@@ -108,8 +108,10 @@ Reviewed `apps/web` end-to-end before the Phase 7 checkpoint:
   external API call exists anywhere in the frontend.
 
 **Conclusion:** Phase 7 does not change this document's threat model —
-still a single-user local tool, no auth, no new secret ever touches the
-browser.
+still a single-user local tool, no new secret ever touches the browser.
+(Historical note: at the time this was written, "no auth" was still
+accurate — see the Authn/authz section above for Revision Prompt 16's
+later change.)
 
 ## v2 Decision and Execution Amendment (2026-08-05) — order authority and Cowork boundary
 
@@ -162,6 +164,43 @@ of everything above:
   re-executes against the order row as currently stored, with no
   captured "this is what was approved" snapshot distinct from the order
   itself.
+
+## Secret scanning + dependency scanning (Revision Prompt 16, ADR-070)
+
+- **`.gitignore` gap fixed.** The old `.env` / `.env.local` /
+  `.env.*.local` trio (root and `apps/web/.gitignore`) only matched
+  `.local`-suffixed env files — a real, non-`.local` deployment file
+  (`.env.production`, `.env.staging`, ...) would not have matched any of
+  the three and could have been committed by an unwitting `git add -A`.
+  Both files now use `.env*` with `!.env.example`/`!.env.*.example`
+  negations to re-allow the committed placeholders. Verified: creating
+  `apps/api/.env.production` and `apps/web/.env.production` now shows as
+  ignored (`git check-ignore -v`), and the three tracked `.example`
+  placeholders remain trackable.
+- **Secret scanning — gitleaks, run against full history.** `gitleaks
+  git --log-opts="--all" --config .gitleaks.toml` over all 32 commits:
+  **no leaks found.** One false positive (a strategy-component name,
+  `PRICE_ABOVE_EMA20`, in a generated test-evidence doc, tripped the
+  generic-api-key entropy heuristic) is allowlisted by path in
+  `.gitleaks.toml` with a documented reason — no rule was loosened, only
+  that one known-safe match. Not yet wired into CI (task: CI pipeline);
+  run it locally before any push until then.
+- **Dependency scanning — backend (`pip-audit`, added to the `dev`
+  dependency group in `pyproject.toml`, `uv.lock` regenerated).**
+  `uv run pip-audit`: **no known vulnerabilities.**
+- **Dependency scanning — frontend (`pnpm audit`).** Found 6
+  vulnerabilities (2 moderate, 4 high), all transitive through build
+  tooling (`next`'s bundled `sharp`/`postcss`, and a second `postcss`
+  copy pulled in by `@tailwindcss/postcss`/`vite`/`vitest`) — none in
+  code that runs in the browser or handles user input. Fixed by
+  upgrading `next` 16.2.12 → 16.3.0 (resolves 5 of 6) and pinning the
+  remaining transitive `nanoid` to `>=3.3.17` via a `pnpm-workspace.yaml`
+  `overrides` entry (the `<3.3.17` copy came from the dev-only
+  tailwindcss/vite/vitest toolchain, not from `next` itself). Re-run
+  after both fixes: **no known vulnerabilities.** Verified the app still
+  builds, type-checks, lints, and passes its full test suite after both
+  changes (`next build`, `tsc --noEmit`, `eslint`, `vitest run` — all
+  clean).
 
 ## Local dev environment note
 

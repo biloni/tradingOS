@@ -1,3 +1,10 @@
 allowBuilds:
   sharp: true
   unrs-resolver: true
+
+# Revision Prompt 16 dependency-scanning review, ADR-070: pins the
+# transitive `nanoid` pulled in by tailwindcss/vite/vitest's own postcss
+# copy to a patched version (GHSA-2v37-7h3g-55p8 — next's own postcss
+# already resolves a patched nanoid; this is the dev-tooling copy only).
+overrides:
+  nanoid: ">=3.3.17"

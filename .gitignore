@@ -1,7 +1,13 @@
-# Env files (never commit real secrets)
-.env
-.env.local
-.env.*.local
+# Env files (never commit real secrets). `.env*` catches every variant,
+# including ones no one anticipated by name yet (.env.production,
+# .env.staging, ...) — the old .env/.env.local/.env.*.local trio left
+# exactly that gap: a real deployment env file that isn't a `.local`
+# suffix would not have matched any of the three (Revision Prompt 16
+# secret-scanning review, ADR-070). The two `!` lines re-allow the
+# committed placeholder files.
+.env*
+!.env.example
+!.env.*.example
 
 # Python
 __pycache__/
