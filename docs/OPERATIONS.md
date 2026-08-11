@@ -5,20 +5,69 @@
 See README.md for the full quickstart. Summary:
 
 1. PostgreSQL 16 running (native install on this dev machine — ADR-008 — or
-   `docker compose -f infra/docker-compose.yml up -d` on another machine).
+   `docker compose -f infra/docker-compose.yml up -d postgres` on another
+   machine).
 2. `apps/api`: `uv sync`, then `uv run uvicorn tradingos_api.main:app --reload`.
 3. `apps/web`: `pnpm install`, then `pnpm dev`.
 
+Or run the whole stack (postgres + api + web) in containers instead —
+see "Containers" under "Production deployment" below.
+
 ## Production deployment
 
-**Not yet decided.** No hosting target, CI pipeline, or deployment process
-exists as of Phase 1 — this is a personal local-dev project at this stage.
-When a deployment phase is scoped, this section will cover: hosting choice,
+### Containers (Revision Prompt 16, task: Dockerfiles + docker-compose + deployment docs)
+
+`apps/api/Dockerfile` and `apps/web/Dockerfile` (both multi-stage —
+`uv sync --frozen` / `pnpm build` with Next's `output: "standalone"`)
+plus `infra/docker-compose.yml`, extended from its earlier
+Postgres-only form to a full stack: `postgres` → `migrate` (one-shot,
+`alembic upgrade head`, exits 0) → `api` (waits for `migrate` to
+complete, has a `/health`-based `HEALTHCHECK`) → `web` (waits for
+`api` to be healthy).
+
+**Run it:**
+```bash
+cp infra/.env.example infra/.env   # fill in POSTGRES_PASSWORD at minimum
+docker compose -f infra/docker-compose.yml --env-file infra/.env up --build
+```
+Web on http://localhost:3000, API on http://localhost:8000, same as
+native local dev. `SCHEDULER_ENABLED` isn't set explicitly, so the
+`api` container's in-process scheduler (`core/scheduler.py`, task: real
+always-on scheduler/worker process) runs by default — an `api`
+container that's up *is* the always-on worker, no separate service
+needed (still local/single-host, not a managed cloud deployment — see
+that task's own "still local mode" caveat).
+
+**The one real gotcha**: `NEXT_PUBLIC_API_URL` is a Next.js build-time
+value, inlined into the client JS bundle by `next build` — it has to be
+an origin a real browser can reach (the `api` service's *published*
+port, `http://localhost:8000` by default), never the internal Docker
+network hostname (`http://api:8000`, which only resolves *between*
+containers, not from a host browser). Changing it means rebuilding the
+`web` image (`docker compose build web`), not just restarting the
+container. `infra/docker-compose.yml`'s `web.build.args` and
+`infra/.env.example` both call this out.
+
+**Honesty check**: these Dockerfiles/compose file were written
+carefully against documented multi-stage-build/Next-standalone/uv
+patterns, but **not build-verified on this dev machine** — Docker
+Desktop/the `docker` CLI isn't installed here (confirmed: `docker
+--version` fails in both Git Bash and PowerShell). Before relying on
+this for anything real, run `docker compose -f infra/docker-compose.yml
+config` (validates syntax) and a full `up --build` on a machine that
+has Docker, and fix whatever that surfaces — tracked as a release-gate
+item (task: final gate check, below), not assumed done here.
+
+### What's still not decided
+
+No hosting target, CI pipeline, or actual deployed instance exists —
+this is still a personal local-dev/local-Docker project. When a real
+deployment is scoped, this section grows to cover: hosting choice,
 environment variable management in that host, and how the Alpaca
-paper-account credentials and Anthropic key are provisioned there without
-ever appearing in a repo or CI log. Database backup/restore *tooling*
-already exists (below) — what's not yet decided is *where a deployed
-copy of that tooling runs on a schedule*.
+paper-account credentials and Anthropic key are provisioned there
+without ever appearing in a repo or CI log. Database backup/restore
+*tooling* already exists (below) — what's not yet decided is *where a
+deployed copy of that tooling runs on a schedule*.
 
 ### Database backup/restore (Revision Prompt 16, task: backup/restore tooling)
 

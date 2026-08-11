@@ -49,8 +49,15 @@ Exact pinned versions: [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md).
     CREATE DATABASE tradingos OWNER tradingos_app;
     ```
   - **Docker (documented alternative, other machines/CI):**
-    `docker compose -f infra/docker-compose.yml up -d` (reads
+    `docker compose -f infra/docker-compose.yml up -d postgres` (reads
     `POSTGRES_PASSWORD` from your shell env)
+
+Or skip all three prerequisites and run the whole stack in containers —
+`docker compose -f infra/docker-compose.yml --env-file infra/.env up --build`
+(copy `infra/.env.example` to `infra/.env` first) brings up Postgres,
+runs migrations, then starts both the API and web app. See
+[docs/OPERATIONS.md](docs/OPERATIONS.md#containers-revision-prompt-16-task-dockerfiles--docker-compose--deployment-docs)
+for the full details, including one build-time-vs-runtime env var gotcha.
 
 ### 1. API
 
@@ -141,8 +148,11 @@ pnpm test:e2e
   (principle 10) — this isn't a flag waiting to be flipped, it doesn't exist.
 - No auth/multi-user support ([ADR-007](docs/DECISIONS.md)) — single-user
   personal tool.
-- Docker Compose path for Postgres is documented but not the primary path on
-  the current dev machine ([ADR-008](docs/DECISIONS.md)).
+- Docker Compose can now run the whole stack (Postgres + API + web,
+  `infra/docker-compose.yml`) but isn't the primary path on the current
+  dev machine ([ADR-008](docs/DECISIONS.md)), and the Dockerfiles/compose
+  file haven't been build-verified here — this machine doesn't have
+  Docker installed (see docs/OPERATIONS.md's "Containers" section).
 - No historical-outcome-based confidence calibration yet — still needs a
   real sample of completed trades post-activation before any confidence
   number is framed as a probability

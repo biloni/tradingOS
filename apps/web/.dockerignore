@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+dist/
+coverage/
+.turbo/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+.env*
+!.env.local.example
+.git/
