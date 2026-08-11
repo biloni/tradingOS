@@ -13,6 +13,28 @@ See README.md for the full quickstart. Summary:
 Or run the whole stack (postgres + api + web) in containers instead —
 see "Containers" under "Production deployment" below.
 
+## CI (Revision Prompt 16, task: CI pipeline)
+
+`.github/workflows/ci.yml`, three independent jobs on every push/PR:
+
+- **backend** — a real `postgres:16` service container, `uv sync --locked`,
+  `alembic upgrade head`, `tradingos-seed`, then `ruff check`/
+  `ruff format --check`/`mypy src/`/`pytest -v`/`pip-audit`. Same
+  commands as README.md's "Running checks" (the `mypy src/` scoping fix
+  above applies here too, not just locally).
+- **frontend** — `pnpm install --frozen-lockfile`, `lint`/`typecheck`/
+  `test`/`build`/`audit`.
+- **secrets** — `gitleaks` over full git history (`--log-opts="--all"`,
+  matching the local command docs/SECURITY.md documents), pinned binary
+  version, uses `.gitleaks.toml`'s existing allowlist.
+
+**Honesty check** (same caveat as the Dockerfiles above): this repo has
+no GitHub remote configured yet, so this workflow has never actually
+run on GitHub's infrastructure — every individual command it invokes
+has been run and verified locally, but the workflow YAML itself is
+unverified end-to-end. Verify on a real push before treating a green
+check as meaningful.
+
 ## Production deployment
 
 ### Containers (Revision Prompt 16, task: Dockerfiles + docker-compose + deployment docs)

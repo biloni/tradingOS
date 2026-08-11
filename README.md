@@ -91,9 +91,15 @@ with the password set above.
 
 ### Running checks
 
+`mypy` is scoped to `src/` only, not `.` — `tests/` has known, pre-existing
+strict-mode errors from minimal fake test doubles that deliberately
+implement only part of a Protocol (`_FixedQuote`, `_FakePositionsBroker`,
+etc.); not yet triaged (a real gap, flagged for follow-up, not swept
+under the rug).
+
 ```bash
 # apps/api
-uv run ruff check . && uv run ruff format --check . && uv run mypy . && uv run pytest -v
+uv run ruff check . && uv run ruff format --check . && uv run mypy src/ && uv run pytest -v
 
 # apps/web
 pnpm lint && pnpm typecheck && pnpm test

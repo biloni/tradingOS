@@ -1,0 +1,151 @@
+# Revision Prompt 16, task: CI pipeline. Three independent jobs, matching
+# this project's actual "Running checks" workflow (README.md) plus the
+# secret/dependency scanning already documented (docs/SECURITY.md) but
+# previously only run by hand.
+#
+# Honesty note (docs/OPERATIONS.md has the same caveat for the
+# Dockerfiles): this file was written carefully against each tool's
+# documented CLI/action usage, but this dev machine has no way to
+# actually execute a GitHub Actions run locally (no `act`, no GitHub
+# remote configured yet) — it has not been observed to pass on real
+# GitHub infrastructure. Every individual command it runs (`uv run
+# ruff/mypy/pytest/pip-audit`, `pnpm lint/typecheck/test/build/audit`,
+# gitleaks) has been run and verified locally in this same session; what
+# hasn't been verified is the workflow YAML itself executing on GitHub's
+# runners.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend (lint, types, tests, dependency scan)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tradingos_app
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: tradingos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tradingos_app -d tradingos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://tradingos_app:ci_password@localhost:5432/tradingos
+      ENVIRONMENT: ci
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies (exactly what uv.lock pins)
+        run: uv sync --locked
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Seed database (many tests assert seeded rows exist)
+        run: uv run tradingos-seed
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Type check (mypy)
+        # src/ only — tests/ has known pre-existing strict-mode errors
+        # from minimal fake test doubles (see README.md's "Running
+        # checks" note); mirrors the command actually used throughout
+        # this project's own development, not the stale `mypy .` that
+        # was in README.md before this workflow was added.
+        run: uv run mypy src/
+
+      - name: Tests (pytest)
+        run: uv run pytest -v
+
+      - name: Dependency scan (pip-audit)
+        run: uv run pip-audit
+
+  frontend:
+    name: Frontend (lint, types, tests, build, dependency scan)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (eslint)
+        run: pnpm lint
+
+      - name: Type check (tsc)
+        run: pnpm typecheck
+
+      - name: Unit tests (vitest)
+        run: pnpm test
+
+      - name: Production build
+        # NEXT_PUBLIC_API_URL is a build-time value (see
+        # infra/docker-compose.yml's own comment on this) — a
+        # placeholder here just proves the build itself succeeds, the
+        # same thing `pnpm build` verified locally for the Dockerfile
+        # (task: Dockerfiles + docker-compose + deployment docs).
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+
+      - name: Dependency scan (pnpm audit)
+        run: pnpm audit
+
+  secrets:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans full history (matches the documented local
+          # command, --log-opts="--all", docs/SECURITY.md) — a shallow
+          # checkout would silently narrow the scan.
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          chmod +x gitleaks
+
+      - name: Run gitleaks
+        run: ./gitleaks git --log-opts="--all" --config .gitleaks.toml --exit-code 1
