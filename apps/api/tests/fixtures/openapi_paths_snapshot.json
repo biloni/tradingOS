@@ -90,6 +90,12 @@
     ]
   ],
   [
+    "/api/v1/earnings-research",
+    [
+      "post"
+    ]
+  ],
+  [
     "/api/v1/event-backtests",
     [
       "get"

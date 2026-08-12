@@ -19,6 +19,7 @@ from tradingos_api.routers import (
     backtests,
     committee,
     earnings,
+    earnings_research,
     event_backtests,
     feature_diagnostics,
     governance,
@@ -139,6 +140,7 @@ app.include_router(provider_diagnostics.router, dependencies=_AUTH)
 app.include_router(feature_diagnostics.router, dependencies=_AUTH)
 app.include_router(committee.router, dependencies=_AUTH)
 app.include_router(ask.router, dependencies=_AUTH)
+app.include_router(earnings_research.router, dependencies=_AUTH)
 app.include_router(paper_auto_policy.router, dependencies=_AUTH)
 app.include_router(monitoring.router, dependencies=_AUTH)
 app.include_router(event_backtests.router, dependencies=_AUTH)

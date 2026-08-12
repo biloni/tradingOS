@@ -46,3 +46,9 @@ class TokenBucketRateLimiter:
 # generous for interactive single-user use, tight enough to stop a buggy
 # client loop from burning through Anthropic spend unattended.
 ask_rate_limiter = TokenBucketRateLimiter(capacity=5, refill_per_second=1 / 12)
+
+# Tighter than ask_rate_limiter: each request can trigger several real web
+# searches (up to `MAX_SEARCH_USES` in services/earnings_research.py), so a
+# single call costs meaningfully more than a /ask round trip. 3-request
+# burst, 1 per 20 seconds steady state.
+earnings_research_rate_limiter = TokenBucketRateLimiter(capacity=3, refill_per_second=1 / 20)
