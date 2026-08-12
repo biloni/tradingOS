@@ -3431,3 +3431,22 @@ requesting tools, blank-question 422, rate-limit 429, and no-API-key
 clean, `eslint` clean, `next build` clean (24 routes now), full vitest
 suite 75/75 passing. OpenAPI path/method snapshot regenerated at 139
 paths (the new `POST /api/v1/ask`).
+
+**Live verification (real Anthropic call, via the browser UI, logged in
+as the seeded user):** asked the exercise's own worked example —
+"Which symbols on my watchlist have earnings reports coming up in the
+next 14 days?" The model correctly called `get_upcoming_earnings`,
+returned real evidence-grounded data (AMD, report date 2026-08-13, EPS
+estimate $1.15), and — notably — stated plainly that it has no
+watchlist-scoping tool available and offered to check specific tickers
+individually, rather than fabricating a watchlist-filtered answer. This
+is the grounding rule ("state plainly what's missing rather than
+filling a gap") working exactly as designed against a real model, and
+also a real, honest finding: the "minimal" three-tool set doesn't
+include a `Watchlist`/`WatchlistItem`-aware tool, so a strictly
+watchlist-scoped version of the exercise's example can't be answered
+today — a known limitation of "minimal," not a bug. Response:
+`{"iterations": 2, "model_call_record_ids": [2 UUIDs]}`; both
+`ModelCallRecord` rows verified in the database afterward
+(`model="claude-sonnet-5"`, `stop_reason` `tool_use` then `end_turn`,
+real non-zero token counts and cost — $0.0145 total for this exchange).
