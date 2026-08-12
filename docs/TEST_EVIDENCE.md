@@ -3528,3 +3528,169 @@ proven to reliably complete a full report within one attempt for every
 company. No real Anthropic spend was wasted silently: `ModelCallRecord`
 correctly stays empty for a request that never received a response, so
 cost tracking isn't polluted by failed attempts.
+
+## Order-authority chain against real Alpaca paper trading (2026-08-12)
+
+**Setup.** `apps/api/.env` had no `OPERATING_MODE` set, so the app
+defaulted to `RESEARCH_ONLY` (`core/config.py`'s documented default) —
+no order-authority action was reachable in the UI at all ("No order
+proposal exists yet" on every recommendation, no Approve/Submit
+anywhere). Added `OPERATING_MODE=PAPER_MANUAL_APPROVAL` and restarted
+the API process; `GET /api/v1/settings/operating-mode` then correctly
+reported `{"mode": "PAPER_MANUAL_APPROVAL", "environment_label":
+"PAPER", "can_submit_orders": true}`, and the dashboard's mode banner
+updated to match. Real Alpaca paper credentials were already present
+(`ALPACA_API_KEY_ID`/`ALPACA_API_SECRET_KEY`/`ALPACA_BASE_URL=
+https://paper-api.alpaca.markets`).
+
+**Process-management note:** discovered mid-session that two separate
+uvicorn processes existed — one on port 8000 (stray, started by
+mistake this session) and the real one on port 8001, which is what
+`apps/web/.env.local`'s `NEXT_PUBLIC_API_URL` actually points at. Killed
+the stray 8000 process; all subsequent testing went through 8001.
+
+**Finding architecture, not a gap:** there is no "create order
+proposal" button anywhere in the UI, by design — `Recommendation` to
+`OrderProposal` is the decision pipeline's job (P7), not a manual user
+action; the UI's job (P15) is strictly Approve/Submit on proposals that
+already exist. Confirmed via `apps/web/app/approvals/page.tsx`'s own
+doc comment: "Approve/reject/submit still only happen on the per-approval
+detail page; this is the queue view that links there." Since no
+current recommendation had crossed into a BUY/SELL actionable gate
+state in the seeded data, the propose, policy-evaluation, and
+create-approval steps were driven directly against the API (a real
+MRVL BUY recommendation from task #133's live committee run,
+`action: "BUY"`, `recommendation_version_id a8e57081-...`) —
+architecturally correct, not a UI bypass. The **Approve** and
+**Submit** steps, which are the steps that actually have UI, were
+driven entirely through the real `/approvals/[id]` page: step-up
+password re-entry, immutable-summary double-confirm, then Approve;
+fresh quote/buying-power/position refresh, bracket-emulation
+acknowledgment, double-confirm, then Submit.
+
+**Real bug found: client-side step-up cache doesn't track server-side
+expiry.** First submit attempt failed with a `403` ("This action
+requires a fresh step-up confirmation... within the last 5 minutes"),
+even though `StepUpGate` (`apps/web/components/ui/StepUpGate.tsx`)
+rendered the live Submit button with no password prompt. Root cause:
+`useSession()`'s react-query cache holds `session.stepped_up = true`
+from the earlier Approve step-up (`useStepUp()`'s `onSuccess` calls
+`queryClient.setQueryData`), and nothing invalidates or refetches that
+cached value when a later gated mutation 403s — so the gate keeps
+showing the live button past the server's actual 5-minute grant
+window. Confirmed directly: `GET /api/v1/auth/session` returned
+`stepped_up: false` immediately after the 403, proving the server was
+correct and only the client's cache was stale. The error text itself
+was shown correctly via `ErrorBanner` (not a silent failure), and a
+manual page reload does force a fresh session fetch and correctly
+re-shows the password prompt — but nothing in the app does that reload
+automatically. **Impact:** low-severity UX papercut, not a security
+issue (the server-side check is what actually blocks the order — this
+is purely "the button looked clickable when it wasn't"). **Recommended
+fix, not applied in this pass:** have the gated mutations invalidate
+`SESSION_QUERY_KEY` on a `403`, or have `StepUpGate` itself distrust a
+`stepped_up: true` older than 5 minutes by tracking the timestamp
+client-side too.
+
+**Real gate found working correctly: price-staleness protection.**
+The first full approve-to-submit cycle was itself blocked, correctly,
+by `GET /api/v1/order-approvals/{id}/refresh`'s pre-submission check:
+the quote moved from $221.60 (at approval) to $217.03 (-2.06%) during
+the few minutes spent investigating the step-up bug above, and the
+refresh endpoint returned `requires_reapproval: true` with the reason
+"quote moved... outside tolerance, a fresh approval is required" —
+rendered correctly in the UI as a blocking message, no submit button
+offered. This is exactly the intended behavior (an approval's bound
+fields are an immutable snapshot; a stale price must not be executed
+against). Recovered by creating a fresh proposal, evaluation, and
+approval cycle and moving through approve then submit quickly enough
+that the quote hadn't drifted ($217.025 at both approval and
+submission).
+
+**Result: real order reached Alpaca's paper API.** `POST
+/api/v1/order-approvals/{id}/submit` returned `200` with `{"attempt":
+{"outcome": "SUCCEEDED"}, "order_status": "SUBMITTED", "used_native_bracket":
+false}`, rendered correctly on the confirmation page. Verified two ways
+beyond the UI's own success message: (1) `GET /api/v1/orders` shows a
+real `Order` row (`id 9d3c42e3-...`, `status: SUBMITTED`, a populated
+`submitted_at`) that didn't exist before the submit call; (2) the
+submit request's server-side duration was **1077ms**, roughly 20-200x
+every other request logged in the same session (typical local-DB-only
+calls: 5-56ms) — consistent with a real outbound HTTPS round trip to
+`paper-api.alpaca.markets` rather than a local-only write. BUY 1 share
+MRVL, MARKET, DAY, against the "Alpaca Paper Sandbox" account
+(`719452ed-...`, `account_type: PAPER_ALPACA`) — simulated money only,
+no real funds at risk. `apps/web/app/orders/page.tsx` is still the
+Revision Prompt R2 scaffold (a hardcoded example lifecycle, "No
+submit... behavior is wired yet") and does not reflect this real
+order — a known, pre-existing scaffold gap, not something this
+verification pass introduced or was expected to fix.
+
+## Reconciliation and ops pages (2026-08-12)
+
+`/portfolio`'s reconciliation panel loads real, non-empty data with no
+console errors: holdings for the default "Personal Journal" account
+(JPM/AAPL/MRVL with real quantities and avg costs), a real order
+history table, and a reconciliation run ("Latest run: 8/8/2026 ...
+overall MATCHED", per-ticker internal-vs-broker-reported quantities all
+`MATCHED`, including MRVL's 90 = 90). No account switcher exists on
+this page — it is hardcoded to one account — a UX limitation worth
+noting but not a correctness bug.
+
+`/ops` loads real data cleanly across all three panels described in
+its own header: LLM cost budget ($3.937890 spent of $5.00, correctly
+reflecting real committee-run spend from earlier in this session),
+process metrics (uptime, request count, avg/p95 latency, 2xx/4xx
+breakdown — all live, in-process, reset-on-restart as documented), and
+the morning-plan job-run history table (6 real rows, correct
+statuses/durations). One row shows a plan dated 2026-08-17 `RUNNING`
+since a `worker-demo`-triggered run on that same future date — this is
+pre-existing seed/demo fixture data from the P9 scheduler-demo work,
+not a bug introduced or discovered by this pass.
+
+`/journal` and `/performance` are confirmed, as expected going in, to
+still be Revision Prompt R2 placeholder scaffolds — "Synthetic
+placeholder content only," explicitly labeled as such in their own
+page headers, empty states throughout. Not tested as if real, per
+scope.
+
+## Shallow pass over remaining pages (2026-08-12)
+
+Every remaining page was loaded once and checked for console errors
+and gross rendering failures. Result: nothing broke.
+
+- **Real, working pages** (live API data, no errors): `/symbols` (42
+  real instruments), `/agent-review` (loaded a real committee session
+  from task #133 by ID, including a `FAILED` role from before the P16
+  schema-reliability fix — expected historical data, not a new bug),
+  `/backtests` (empty-but-functional "past runs" list, form renders),
+  `/legacy-dashboard` (the pre-P15 landing page, still functional as a
+  nav hub), `/settings` (correctly reflects the real
+  `PAPER_MANUAL_APPROVAL` mode set earlier — but only renders the
+  "Operating mode" block; the "provider status, and risk-policy
+  configuration" promised in its own header text never renders,
+  consistent with its "Scaffold page" labeling, not a new bug).
+- **Confirmed R2 scaffolds** (synthetic example content only, as
+  labeled): `/investment`, `/tactical`, `/earnings`, `/watchlists`,
+  `/alerts`.
+- **Loads cleanly, no seeded data yet**: `/strategy-versions` ("All
+  versions" list is empty — no strategy version has been proposed
+  through this page in this environment; not an error state).
+
+No new console errors surfaced beyond ones already attributed to
+investigation done earlier in this session (the step-up-expiry 403s
+above, an early unauthenticated `curl` probe, and a couple of 404s from
+manual API exploration).
+
+## Summary: what this session's E2E testing produced
+
+Two real, previously-undiscovered bugs were found: the
+earnings-research unbounded-timeout hang (found and fixed with a
+regression test) and the step-up client-cache staleness papercut
+(found and documented above, not yet fixed). Two safety gates were
+proven to work correctly under real conditions rather than just unit
+tests: the 90-second LLM timeout, and the order-approval
+price-staleness check. A real order reached Alpaca's paper-trading API
+end-to-end through the actual approve/submit UI. Every other page in
+the app was confirmed to either serve real data without error or be a
+clearly-labeled, pre-existing scaffold — no silent breakage anywhere.
