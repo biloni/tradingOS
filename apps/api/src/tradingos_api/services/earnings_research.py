@@ -33,7 +33,14 @@ from tradingos_api.services.llm_cost import estimate_cost_usd
 
 PROMPT_VERSION = "earnings-research-v1"
 MAX_PAUSE_CONTINUATIONS = 3
-MAX_SEARCH_USES = 6
+MAX_SEARCH_USES = 4
+# Discovered via live verification: with no explicit timeout, the shared
+# provider falls back to the Anthropic SDK's own 10-minute default, and a
+# report demanding this much web research can genuinely approach it — the
+# SDK's own retry-on-timeout then compounds a single slow attempt into a
+# 20+ minute hang with no visible progress. A shorter, explicit timeout
+# fails fast into the graceful-degradation path below instead.
+CALL_TIMEOUT_SECONDS = 90.0
 
 SYSTEM_PROMPT = """You are the "Earnings Research" assistant inside a personal, \
 paper-trading-only decision-support tool. You research one company at a time, \
@@ -59,6 +66,8 @@ you can't find a reliable current source, say the figure is unavailable \
 rather than guessing.
 - Cite your sources. When you state a fact from a search result, the citation \
 should be attached to that sentence.
+- Search efficiently. A good report typically needs 3-4 targeted searches, not \
+many more — prefer a well-chosen query over repeated broad ones.
 
 Structure every report as:
 1. A one-line identification: company name, ticker, which index/indices it \
@@ -143,12 +152,19 @@ def research_company(db: Session, llm: LLMProvider, company: str) -> EarningsRes
     calls_made = 0
     for _ in range(MAX_PAUSE_CONTINUATIONS + 1):
         calls_made += 1
-        response = llm.complete(
-            prompt_version=PROMPT_VERSION,
-            system_prompt=SYSTEM_PROMPT,
-            messages=messages,
-            tools=tools,
-        )
+        try:
+            response = llm.complete(
+                prompt_version=PROMPT_VERSION,
+                system_prompt=SYSTEM_PROMPT,
+                messages=messages,
+                tools=tools,
+                timeout_seconds=CALL_TIMEOUT_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 - a provider failure (timeout, connection
+            # error, rate limit) degrades to an honest answer below, never a raw 500
+            response = None
+            break
+
         record = _log_call(
             db,
             model=response.model,
@@ -162,9 +178,21 @@ def research_company(db: Session, llm: LLMProvider, company: str) -> EarningsRes
         if response.stop_reason != "pause_turn":
             break
         messages.append({"role": "assistant", "content": response.raw_content})
-    assert response is not None  # loop runs at least once
 
     db.commit()
+
+    if response is None:
+        return EarningsResearchResponse(
+            answer=(
+                "The research agent couldn't reach Anthropic in time to finish this "
+                "report (the request timed out or failed). Please try again — a "
+                "narrower company name or ticker sometimes helps."
+            ),
+            sources=[],
+            model_call_record_ids=model_call_record_ids,
+            iterations=calls_made,
+        )
+
     sources = _extract_sources(response.raw_content)
     answer = response.text or (
         "The research agent's web search loop did not finish within its "

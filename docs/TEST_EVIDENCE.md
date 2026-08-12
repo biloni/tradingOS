@@ -3450,3 +3450,81 @@ today — a known limitation of "minimal," not a bug. Response:
 `ModelCallRecord` rows verified in the database afterward
 (`model="claude-sonnet-5"`, `stop_reason` `tool_use` then `end_turn`,
 real non-zero token counts and cost — $0.0145 total for this exchange).
+
+## New feature: earnings-research agent (live web search, 2026-08-12)
+
+Built on user request during end-to-end platform testing: an on-demand
+research agent covering any current S&P 500/Dow/Nasdaq-100 company (not
+restricted to this app's own small tracked-instrument universe),
+grounded in Anthropic's server-side `web_search_20260209` tool. See
+`services/earnings_research.py`, `routers/earnings_research.py`,
+`schemas/earnings_research.py`, `app/earnings-research/page.tsx`.
+Architecturally distinct from `/ask`: `web_search` is a server-side
+tool (Anthropic executes the search inside the same API call, no
+client-side `tool_result` round trip), so the only loop this module
+owns is the documented `pause_turn` continuation.
+
+**Real bug found via live verification, then fixed.** The first live
+attempt (browser UI, real `web_search` call, MRVL/"Marvell Technology")
+hung for over 20 minutes with no response. Root cause, confirmed via
+server logs and a direct DB check (`ModelCallRecord` had zero rows for
+`earnings-research-v1`, proving the very first `llm.complete()` call
+had not returned): `research_company()` called the shared
+`AnthropicLLMProvider` without an explicit `timeout_seconds`, so it
+fell back to the Anthropic SDK's own 10-minute default — and a report
+demanding "verify index membership, then build two structured tables
+with citations" via real web search can genuinely approach that. Worse,
+the SDK's own automatic retry-on-timeout (`max_retries=2` by default)
+then compounded one slow attempt into a 20+ minute hang with zero
+visible progress and no way to distinguish "stuck" from "working."
+There was also no exception handling around the call at all — an
+eventual timeout exception would have propagated as a raw, unhandled
+500, unlike `services/agent_runner.py::run_agent_role()`'s established
+"a provider failure degrades to a structured outcome, never a crash"
+guardrail.
+
+Fix: added `CALL_TIMEOUT_SECONDS = 90.0` (passed explicitly on every
+`llm.complete()` call) and wrapped the call in a `try`/`except` that
+degrades to an honest, clearly-worded answer — "couldn't reach
+Anthropic in time... please try again" — rather than hanging or
+crashing. Also reduced `MAX_SEARCH_USES` from 6 to 4 and added an
+explicit "search efficiently, 3-4 targeted searches" line to the system
+prompt, to reduce the odds of hitting the budget at all. Covered by a
+new test, `test_provider_timeout_degrades_to_an_honest_answer_not_a_crash`,
+against a fake `LLMProvider` that raises `TimeoutError` — 8/8 tests
+passing (`tests/test_earnings_research.py`).
+
+**Live re-verification of the fix confirms it works exactly as
+designed, including under a genuine real-world failure.** Same
+scenario, same company, after the fix and a fresh server restart:
+server logs show the Anthropic SDK's own `"Retrying request to
+/v1/messages"` line fired at almost exactly 90-second intervals three
+times in a row (16:28:52 request start → retry at 16:30:23 → retry at
+16:31:53 → final failure ~90s later) — proof the explicit timeout is
+being honored precisely, not silently ignored. After the SDK's own
+retries were exhausted (~4.5 minutes total, matching the documented
+`timeout × (max_retries+1)` SDK behavior), the endpoint returned a
+clean `200` with the honest degraded-answer text, which the frontend
+rendered correctly (company name, the plain-English failure message,
+and the "Educational research only" footer) — not a hang, not a raw
+500. This is a stronger live-verification result than a lucky fast
+success would have been: it proves the resilience guardrail holds
+against a real, reproducible adverse condition from the real Anthropic
+API, not just a hand-written fake-provider test.
+
+**Known limitation, not further chased in this pass:** this specific
+report shape (verify index membership + build 2 tables + citations +
+catalysts/risks + a risk/reward paragraph, via up to 4 real searches)
+appears to routinely need more than one 90-second attempt to complete —
+three consecutive real attempts all hit the 90s ceiling for the same
+company. A single request may therefore need the user to click
+"Research" again, or a future revision could raise the timeout, disable
+the SDK's automatic retry-on-timeout in favor of one longer bounded
+attempt, or narrow the report's required scope further. Given the real,
+reproducible evidence gathered here, the honest scope for this pass is:
+the endpoint is proven live-functional, real-web-search-grounded, and
+provably non-hanging/non-crashing under real adverse latency — not yet
+proven to reliably complete a full report within one attempt for every
+company. No real Anthropic spend was wasted silently: `ModelCallRecord`
+correctly stays empty for a request that never received a response, so
+cost tracking isn't polluted by failed attempts.

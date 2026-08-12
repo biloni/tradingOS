@@ -107,6 +107,19 @@ class _AlwaysPauseLLM:
         )
 
 
+class _TimeoutLLM:
+    """Discovered via live verification: with no explicit timeout, a
+    deep-research call can approach the Anthropic SDK's own 10-minute
+    default, and the SDK's automatic retry-on-timeout can then compound
+    one slow attempt into a 20+ minute hang. `research_company()` now
+    passes an explicit `timeout_seconds` and catches whatever the
+    provider raises when it's exceeded, degrading to an honest answer
+    rather than a raw 500."""
+
+    def complete(self, *args: Any, **kwargs: Any) -> LLMResponse:
+        raise TimeoutError("Request timed out.")
+
+
 class _NoCitationsLLM:
     def complete(self, *args: Any, **kwargs: Any) -> LLMResponse:
         return LLMResponse(
@@ -149,6 +162,14 @@ class TestResearchCompanyService:
         result = research_company(db_session, _NoCitationsLLM(), "Not A Real Company")
         assert result.sources == []
         assert "Could not verify" in result.answer
+
+    def test_provider_timeout_degrades_to_an_honest_answer_not_a_crash(
+        self, db_session: Session
+    ) -> None:
+        result = research_company(db_session, _TimeoutLLM(), "Marvell Technology")
+        assert result.sources == []
+        assert result.model_call_record_ids == []
+        assert "try again" in result.answer.lower()
 
 
 def _override_llm(fake_llm: Any) -> None:
