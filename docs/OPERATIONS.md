@@ -80,16 +80,87 @@ config` (validates syntax) and a full `up --build` on a machine that
 has Docker, and fix whatever that surfaces — tracked as a release-gate
 item (task: final gate check, below), not assumed done here.
 
-### What's still not decided
+### Hosting choice: Railway (decided 2026-08-12)
 
-No hosting target, CI pipeline, or actual deployed instance exists —
-this is still a personal local-dev/local-Docker project. When a real
-deployment is scoped, this section grows to cover: hosting choice,
-environment variable management in that host, and how the Alpaca
-paper-account credentials and Anthropic key are provisioned there
-without ever appearing in a repo or CI log. Database backup/restore
-*tooling* already exists (below) — what's not yet decided is *where a
-deployed copy of that tooling runs on a schedule*.
+Picked over Fly.io and a bare VPS for three reasons specific to this
+app's shape:
+
+- **Matches the existing per-service Dockerfiles as-is.** Railway
+  builds each service from its own Dockerfile (Root Directory
+  `apps/api` / `apps/web`) — no docker-compose translation needed
+  beyond replacing the `postgres` + `migrate` containers in
+  `infra/docker-compose.yml` with Railway's managed Postgres plugin
+  and a per-service "Pre-Deploy Command" (`alembic upgrade head`).
+- **Genuinely always-on**, unlike a free-tier PaaS with idle sleep
+  (e.g. Render's free web services), which would silently break
+  `core/scheduler.py`'s in-process worker — a scheduler that sleeps
+  with the container defeats the entire point of "Real always-on
+  scheduler/worker process" (Revision Prompt 16).
+- **A public URL exists the moment a service is created**, before the
+  first deploy — this resolves `NEXT_PUBLIC_API_URL` /
+  `CORS_ALLOWED_ORIGINS`'s mutual dependency (the api needs the web's
+  origin for CORS; the web needs the api's origin baked in at build
+  time) without a chicken-and-egg problem.
+
+Cost is usage-based, not flat — a small always-on Postgres plus two
+lightweight services realistically lands in the $5-15/month range for
+this app's traffic.
+
+Both existing Dockerfiles work unmodified: `apps/web/Dockerfile`
+already reads `$PORT` at runtime (Next's standalone `server.js`);
+`apps/api/Dockerfile` hardcodes port 8000 in its `CMD`, but Railway's
+per-service "Networking → Target Port" setting works against any fixed
+port regardless of what the container's `EXPOSE`/`CMD` says, so no
+Dockerfile change is needed for that either.
+
+### Deploy checklist — steps that require your own account/billing/secrets
+
+These are the only steps in this process that touch a payment method or
+a real credential, so they're yours to do, not something to hand off:
+
+1. Create a Railway account at railway.app and attach a payment method
+   (required for always-on — the free tier sleeps).
+2. This repo has no GitHub remote yet (see the CI section above) — push
+   it to GitHub first, since Railway deploys from a connected repo.
+3. New Project → "Provision PostgreSQL" (becomes available to other
+   services as `${{Postgres.DATABASE_URL}}`).
+4. Add a service → "Deploy from GitHub repo" → **Root Directory:
+   `apps/api`** (Railway auto-detects the Dockerfile).
+   - Settings → Networking → enable Public Networking, note the
+     generated URL (e.g. `tradingos-api-production.up.railway.app`).
+   - Variables: `ENVIRONMENT=production`,
+     `DATABASE_URL=${{Postgres.DATABASE_URL}}`,
+     `CORS_ALLOWED_ORIGINS=<the web service's URL from step 5>`,
+     `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY`,
+     `ALPACA_BASE_URL=https://paper-api.alpaca.markets`,
+     `ANTHROPIC_API_KEY` — paste your real paper-trading and Anthropic
+     credentials into these fields yourself.
+   - Settings → Deploy → **Pre-Deploy Command**: `alembic upgrade head`
+     (this replaces the `migrate` container — runs before every
+     deploy, same as the compose file's dependency ordering).
+5. Add a second service the same way → **Root Directory: `apps/web`**.
+   - Build → add a Build Argument:
+     `NEXT_PUBLIC_API_URL=<the api service's URL from step 4>`.
+   - Settings → Networking → enable Public Networking, note this
+     service's URL.
+6. Go back to the api service's Variables and fill in
+   `CORS_ALLOWED_ORIGINS` with the web URL from step 5.
+7. Trigger both deploys (Railway auto-deploys on every push once
+   connected, or click "Deploy" manually).
+
+**What I can help with once the services exist:** reading build/deploy
+logs you paste in to debug a failed build, verifying `/health` and
+`/ready` respond correctly post-deploy, adjusting the Dockerfiles or
+`alembic` config if Railway's builder surfaces something local Docker
+never would have. **What I won't do, ever, regardless of how this
+conversation goes:** create the account, enter payment details, or
+type the Alpaca/Anthropic credentials into Railway's dashboard myself
+— entering financial or API credentials into any third-party form is
+outside what I'll do on a user's behalf, full stop.
+
+Database backup/restore *tooling* already exists (below) — what's not
+yet decided is *where a deployed copy of that tooling runs on a
+schedule* once this deployment exists.
 
 ### Database backup/restore (Revision Prompt 16, task: backup/restore tooling)
 
