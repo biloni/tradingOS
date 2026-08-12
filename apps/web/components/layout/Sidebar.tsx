@@ -25,6 +25,7 @@ const SECONDARY_LINKS = [
   { href: "/portfolio", label: "Portfolio" },
   { href: "/symbols", label: "Symbols" },
   { href: "/ask", label: "Ask" },
+  { href: "/earnings-research", label: "Earnings Research" },
   { href: "/backtests", label: "Backtests" },
   { href: "/strategy-versions", label: "Strategy" },
   { href: "/ops", label: "Operations" },

@@ -41,6 +41,7 @@ describe("Sidebar navigation", () => {
       ["Portfolio", "/portfolio"],
       ["Symbols", "/symbols"],
       ["Ask", "/ask"],
+      ["Earnings Research", "/earnings-research"],
       ["Backtests", "/backtests"],
       ["Strategy", "/strategy-versions"],
     ] as const) {
