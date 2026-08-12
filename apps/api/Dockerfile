@@ -4,10 +4,17 @@
 # `uv sync --frozen` installs exactly what `uv.lock` pins, the same
 # dependency set local dev and CI use.
 
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
 WORKDIR /app
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+# UV_PYTHON_DOWNLOADS=never: this base image already ships the exact
+# Python `uv sync` needs, so there is no reason for it to reach out to
+# astral-sh/python-build-standalone's GitHub releases for a managed
+# interpreter during the build — that outbound fetch is both
+# unnecessary and a real source of build flakiness on hosts with
+# unreliable egress to GitHub's release CDN (seen failing on Railway's
+# builder with an http2 "refused stream" error).
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 
 # Dependencies first, cached separately from the source copy below so an
 # app code change doesn't invalidate the (slow) dependency-install layer.
@@ -17,7 +24,7 @@ RUN uv sync --frozen --no-install-project --no-dev
 COPY . .
 RUN uv sync --frozen --no-dev
 
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 WORKDIR /app
 RUN useradd --create-home --shell /bin/bash appuser
 COPY --from=builder --chown=appuser:appuser /app /app
