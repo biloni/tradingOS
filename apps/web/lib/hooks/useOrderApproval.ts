@@ -2,17 +2,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   approveOrderApproval,
   getOrderApproval,
+  listOrderApprovals,
   refreshOrderApproval,
   rejectOrderApproval,
   submitOrderApproval,
 } from "@/lib/api/orderApprovals";
-import type { OrderSubmitResult } from "@/lib/api/orderApprovals";
+import type { OrderApprovalStatus, OrderSubmitResult } from "@/lib/api/orderApprovals";
 
 export function useOrderApproval(id: string | undefined) {
   return useQuery({
     queryKey: ["order-approvals", id],
     queryFn: () => getOrderApproval(id as string),
     enabled: Boolean(id),
+  });
+}
+
+/** The approval queue (`/approvals`) — defaults to `PENDING`, polled like
+ * the rest of this app's operational views. */
+export function useOrderApprovals(status?: OrderApprovalStatus) {
+  return useQuery({
+    queryKey: ["order-approvals", "list", status ?? "PENDING"],
+    queryFn: () => listOrderApprovals(status),
+    refetchInterval: 15_000,
   });
 }
 

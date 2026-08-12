@@ -5,13 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import InvestmentPage from "@/app/investment/page";
 import TacticalPage from "@/app/tactical/page";
 import EarningsCenterPage from "@/app/earnings/page";
-import ApprovalQueuePage from "@/app/approvals/page";
 import OrdersAndFillsPage from "@/app/orders/page";
 import JournalPage from "@/app/journal/page";
 import PerformancePage from "@/app/performance/page";
 import WatchlistsPage from "@/app/watchlists/page";
 import AlertsPage from "@/app/alerts/page";
-import AgentReviewPage from "@/app/agent-review/page";
 import SettingsPage from "@/app/settings/page";
 
 function renderWithQueryClient(ui: React.ReactElement) {
@@ -40,19 +38,20 @@ function mockOperatingMode() {
   );
 }
 
-// Every new Revision Prompt R2 route must render its own synthetic
+// Every remaining Revision Prompt R2 route must render its own synthetic
 // placeholder content and a scaffold notice, without crashing and
 // without needing any live data beyond the operating-mode endpoint.
+// /approvals and /agent-review were R2 placeholders too, until being
+// wired to real backends (end-to-end platform testing pass) — they have
+// their own dedicated test files now, not this shared scaffold table.
 const ROUTES: Array<{ label: string; heading: string; Component: () => React.JSX.Element }> = [
   { label: "/investment", heading: "Investment", Component: InvestmentPage },
   { label: "/tactical", heading: "Tactical Trades", Component: TacticalPage },
   { label: "/earnings", heading: "Earnings Center", Component: EarningsCenterPage },
-  { label: "/approvals", heading: "Approval Queue", Component: ApprovalQueuePage },
   { label: "/journal", heading: "Journal", Component: JournalPage },
   { label: "/performance", heading: "Performance", Component: PerformancePage },
   { label: "/watchlists", heading: "Watchlists", Component: WatchlistsPage },
   { label: "/alerts", heading: "Alerts", Component: AlertsPage },
-  { label: "/agent-review", heading: "Agent Review", Component: AgentReviewPage },
 ];
 
 describe.each(ROUTES)("scaffold route $label", ({ heading, Component }) => {

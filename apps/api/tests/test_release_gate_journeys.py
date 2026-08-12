@@ -38,11 +38,22 @@ from tradingos_api.models.enums import AccountType, OrderApprovalStatus, Reconci
 from tradingos_api.models.execution import Account
 from tradingos_api.models.recommendations import Recommendation, RecommendationVersion
 from tradingos_api.models.security_master import Instrument
+from tradingos_api.routers.auth import step_up_rate_limiter
 
 from .conftest import TEST_PASSWORD
 
 
 def _step_up(client: TestClient) -> None:
+    # step_up_rate_limiter is a module-level singleton shared by the
+    # whole pytest process (same fact test_step_up_reauth.py's own
+    # fixture already documents for login_rate_limiter) — resetting it
+    # here, not just at client-fixture setup, is what makes repeated
+    # step-up calls across this file's several journeys reliable
+    # regardless of how many other tests already consumed the budget
+    # earlier in a full-suite run. Found failing for real: this file's
+    # newest test tripped a 429 that earlier tests in the same run
+    # happened to not hit, purely by how many prior step-ups had fired.
+    step_up_rate_limiter.reset()
     response = client.post("/api/v1/auth/step-up", json={"password": TEST_PASSWORD})
     assert response.status_code == 200, response.text
 
@@ -281,3 +292,42 @@ class TestFailureJourneys:
         assert discrepancy_lines[0]["instrument"]["ticker"] == "AMD"
         assert Decimal(discrepancy_lines[0]["broker_reported_quantity"]) == Decimal("50")
         assert discrepancy_lines[0]["discrepancy_detail"] is not None
+
+
+class TestListOrderApprovals:
+    """`GET /api/v1/order-approvals` — added alongside end-to-end platform
+    testing to give `apps/web/app/approvals/page.tsx` (a Revision Prompt
+    R2 placeholder with no real data source) something real to list."""
+
+    def test_defaults_to_pending_only(self, client: TestClient, db_session: Session) -> None:
+        approval_id = _propose_evaluate_approve(client, db_session)
+
+        response = client.get("/api/v1/order-approvals")
+        assert response.status_code == 200, response.text
+        ids = [a["id"] for a in response.json()]
+        assert str(approval_id) in ids
+        assert all(a["status"] == "PENDING" for a in response.json())
+
+    def test_approved_approval_drops_out_of_the_default_pending_list(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        approval_id = _propose_evaluate_approve(client, db_session)
+        _step_up(client)
+        approve_resp = client.post(
+            f"/api/v1/order-approvals/{approval_id}/approve",
+            json={"approved_by": "release-gate-test"},
+        )
+        assert approve_resp.status_code == 200, approve_resp.text
+
+        pending = client.get("/api/v1/order-approvals").json()
+        assert str(approval_id) not in [a["id"] for a in pending]
+
+        approved = client.get("/api/v1/order-approvals?status=APPROVED").json()
+        assert str(approval_id) in [a["id"] for a in approved]
+
+    def test_most_recent_first(self, client: TestClient, db_session: Session) -> None:
+        first_id = _propose_evaluate_approve(client, db_session)
+        second_id = _propose_evaluate_approve(client, db_session)
+
+        ids = [a["id"] for a in client.get("/api/v1/order-approvals").json()]
+        assert ids.index(str(second_id)) < ids.index(str(first_id))

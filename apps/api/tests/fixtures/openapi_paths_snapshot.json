@@ -393,6 +393,7 @@
   [
     "/api/v1/order-approvals",
     [
+      "get",
       "post"
     ]
   ],

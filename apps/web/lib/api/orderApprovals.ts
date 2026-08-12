@@ -45,6 +45,14 @@ export function getOrderApproval(id: string): Promise<OrderApproval> {
   return apiGet<OrderApproval>(`/api/v1/order-approvals/${id}`);
 }
 
+/** The approval queue's real data source (`apps/app/approvals/page.tsx`).
+ * Defaults server-side to `PENDING` only, matching what a human actually
+ * needs to act on. */
+export function listOrderApprovals(status?: OrderApprovalStatus): Promise<OrderApproval[]> {
+  const query = status ? `?status=${status}` : "";
+  return apiGet<OrderApproval[]>(`/api/v1/order-approvals${query}`);
+}
+
 export type PreSubmissionSnapshot = {
   quote_price: string | null;
   quote_observed_at: string | null;

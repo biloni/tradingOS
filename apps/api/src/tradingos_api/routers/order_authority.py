@@ -18,7 +18,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -376,6 +376,26 @@ def create_order_approval(
     db.commit()
     db.refresh(approval)
     return _approval_response(db, approval)
+
+
+@approvals_router.get("", response_model=list[OrderApprovalResponse])
+def list_order_approvals(
+    db: Session = Depends(get_db),
+    status_filter: OrderApprovalStatus | None = Query(
+        default=OrderApprovalStatus.PENDING, alias="status"
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> list[OrderApprovalResponse]:
+    """The approval queue's read model — defaults to `PENDING` only (the
+    actual queue a human needs to act on); pass `?status=` empty or
+    another value to see a different slice. `apps/web/app/approvals/page.tsx`
+    was a Revision Prompt R2 placeholder with no real data source until
+    this endpoint existed."""
+    stmt = select(OrderApproval).order_by(OrderApproval.requested_at.desc())
+    if status_filter is not None:
+        stmt = stmt.where(OrderApproval.status == status_filter)
+    approvals = db.scalars(stmt.limit(limit)).all()
+    return [_approval_response(db, a) for a in approvals]
 
 
 @approvals_router.get("/{approval_id}", response_model=OrderApprovalResponse)

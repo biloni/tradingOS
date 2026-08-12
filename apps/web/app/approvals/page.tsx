@@ -1,44 +1,74 @@
+"use client";
+
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { ScaffoldNotice } from "@/components/layout/ScaffoldNotice";
 import { Card } from "@/components/ui/Card";
-import { ApprovalRequiredBadge } from "@/components/ui/ApprovalRequiredBadge";
-import { DecisionLaneBadge } from "@/components/ui/DecisionLaneBadge";
-import { OrderStateTimeline } from "@/components/ui/OrderStateTimeline";
+import { ErrorBanner } from "@/components/ui/ErrorBanner";
 import { PageState } from "@/components/ui/PageState";
+import { StatusPill } from "@/components/ui/StatusPill";
+import { Table, Tbody, Td, Th, Thead, Tr } from "@/components/ui/Table";
+import { useOrderApprovals } from "@/lib/hooks/useOrderApproval";
 
 /**
  * docs/ORDER_AUTHORITY_MODEL.md — every order in APPROVAL_REQUIRED,
- * awaiting a human decision. Route placeholder only; approving/rejecting
- * is not wired (no submission behavior exists in this revision).
+ * awaiting a human decision. Wired to the real GET /api/v1/order-approvals
+ * list endpoint (added alongside end-to-end platform testing) — this
+ * page was a Revision Prompt R2 placeholder with hardcoded example data
+ * until now. Approve/reject/submit still only happen on the per-approval
+ * detail page (`/approvals/[id]`); this is the queue view that links
+ * there.
  */
 export default function ApprovalQueuePage() {
+  const approvals = useOrderApprovals();
+
   return (
     <div className="flex flex-col gap-6 p-8">
       <PageHeader
         title="Approval Queue"
         description="Orders that passed every deterministic gate but need an explicit confirmation before anything happens (OA-3/OA-5)."
       />
-      <ScaffoldNotice>
-        Approve/reject actions are not implemented this pass — no order can be submitted from
-        this page.
-      </ScaffoldNotice>
-      <Card className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">JPM (example)</span>
-          <DecisionLaneBadge lane="TACTICAL" />
-          <ApprovalRequiredBadge expiresAt="06:40 (example)" />
-        </div>
-        <OrderStateTimeline
-          steps={[
-            { label: "Draft", status: "done" },
-            { label: "Approval Required", status: "current" },
-            { label: "Approved", status: "pending" },
-            { label: "Submitted", status: "pending" },
-            { label: "Filled", status: "pending" },
-          ]}
-        />
+      <Card>
+        {approvals.isLoading && <PageState variant="loading" />}
+        {approvals.isError && <ErrorBanner error={approvals.error} />}
+        {approvals.data && approvals.data.length === 0 && (
+          <PageState variant="no-action" title="No orders awaiting approval right now" />
+        )}
+        {approvals.data && approvals.data.length > 0 && (
+          <Table>
+            <Thead>
+              <Tr>
+                <Th>Side</Th>
+                <Th>Quantity</Th>
+                <Th>Order type</Th>
+                <Th>Status</Th>
+                <Th>Requested</Th>
+                <Th>Expires</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {approvals.data.map((approval) => (
+                <Tr key={approval.id}>
+                  <Td>
+                    <Link
+                      href={`/approvals/${approval.id}`}
+                      className="text-blue-700 hover:underline dark:text-blue-400"
+                    >
+                      {approval.bound_fields.side}
+                    </Link>
+                  </Td>
+                  <Td>{approval.bound_fields.quantity}</Td>
+                  <Td>{approval.bound_fields.order_type}</Td>
+                  <Td>
+                    <StatusPill status={approval.status} />
+                  </Td>
+                  <Td>{new Date(approval.requested_at).toLocaleString()}</Td>
+                  <Td>{new Date(approval.expires_at).toLocaleString()}</Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        )}
       </Card>
-      <PageState variant="no-action" title="No other orders awaiting approval (example)" />
     </div>
   );
 }
