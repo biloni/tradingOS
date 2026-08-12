@@ -213,6 +213,108 @@ class TestSingleKeyWrappedPayloadIsUnwrapped:
         assert outcome.output.payload == {"nested": "value"}
 
 
+class TestStringValuedListFieldIsCoerced:
+    def test_a_bare_string_for_a_list_of_strings_field_is_wrapped_not_rejected(self) -> None:
+        """Discovered via live verification against the real Anthropic
+        API: under a large forced-tool schema, the model sometimes answers
+        a `list[str]` field with a single string instead of a JSON array,
+        while every other field in the same call is shaped correctly.
+        This is corrected, not treated as a validation failure."""
+
+        class _ListFieldOutput(BaseModel):
+            verdict: str
+            risks: list[str]
+
+        class _StringForListLLM:
+            def complete(
+                self,
+                prompt_version: str,
+                system_prompt: str,
+                messages: list[dict[str, Any]],
+                tools: list[dict[str, Any]] | None = None,
+                *,
+                tool_choice: dict[str, Any] | None = None,
+                timeout_seconds: float | None = None,
+            ) -> LLMResponse:
+                return LLMResponse(
+                    prompt_version=prompt_version,
+                    model="claude-sonnet-5",
+                    stop_reason="tool_use",
+                    text=None,
+                    tool_calls=[
+                        LLMToolCall(
+                            tool_use_id="t1",
+                            tool_name="submit_agent_output",
+                            arguments={"verdict": "bullish", "risks": "Sector cyclicality."},
+                        )
+                    ],
+                    raw_content=[],
+                    input_tokens=100,
+                    output_tokens=20,
+                )
+
+        outcome = run_agent_role(
+            prompt_version="v1",
+            system_prompt="be a good analyst",
+            user_content="analyze this",
+            output_schema=_ListFieldOutput,
+            llm=_StringForListLLM(),
+            cost_ceiling_usd=Decimal("1.00"),
+            spent_so_far_usd=Decimal("0"),
+            timeout_seconds=30,
+        )
+        assert outcome.status == "SUCCEEDED"
+        assert isinstance(outcome.output, _ListFieldOutput)
+        assert outcome.output.risks == ["Sector cyclicality."]
+
+    def test_a_list_valued_field_that_is_already_correct_is_left_alone(self) -> None:
+        class _ListFieldOutput(BaseModel):
+            verdict: str
+            risks: list[str]
+
+        class _CorrectListLLM:
+            def complete(
+                self,
+                prompt_version: str,
+                system_prompt: str,
+                messages: list[dict[str, Any]],
+                tools: list[dict[str, Any]] | None = None,
+                *,
+                tool_choice: dict[str, Any] | None = None,
+                timeout_seconds: float | None = None,
+            ) -> LLMResponse:
+                return LLMResponse(
+                    prompt_version=prompt_version,
+                    model="claude-sonnet-5",
+                    stop_reason="tool_use",
+                    text=None,
+                    tool_calls=[
+                        LLMToolCall(
+                            tool_use_id="t1",
+                            tool_name="submit_agent_output",
+                            arguments={"verdict": "bullish", "risks": ["A", "B"]},
+                        )
+                    ],
+                    raw_content=[],
+                    input_tokens=100,
+                    output_tokens=20,
+                )
+
+        outcome = run_agent_role(
+            prompt_version="v1",
+            system_prompt="be a good analyst",
+            user_content="analyze this",
+            output_schema=_ListFieldOutput,
+            llm=_CorrectListLLM(),
+            cost_ceiling_usd=Decimal("1.00"),
+            spent_so_far_usd=Decimal("0"),
+            timeout_seconds=30,
+        )
+        assert outcome.status == "SUCCEEDED"
+        assert isinstance(outcome.output, _ListFieldOutput)
+        assert outcome.output.risks == ["A", "B"]
+
+
 class TestRunMetadataIsExcludedFromTheModelFacingSchema:
     def test_tool_schema_does_not_ask_the_model_to_supply_run_metadata(self) -> None:
         """`run_metadata` (model, tokens, latency, cost) is filled in by

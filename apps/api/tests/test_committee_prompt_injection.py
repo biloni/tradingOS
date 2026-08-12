@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from tradingos_api.models.security_master import Instrument
 from tradingos_api.policy.recommendation_modes import RecommendationMode
 from tradingos_api.providers.llm import LLMResponse, LLMToolCall
+from tradingos_api.schemas.agent_contract import AgentContractOutput
 from tradingos_api.services.committee_orchestrator import (
     CommitteeInputBundle,
     EvidenceItem,
@@ -62,9 +63,59 @@ class TestSystemPromptStatesEvidenceIsUntrusted:
             hard_veto_reason=None,
         )
         for role in INVESTMENT_ROLES:
-            prompt = _build_system_prompt(role, bundle)
+            prompt = _build_system_prompt(role, bundle, AgentContractOutput)
             assert "untrusted external" in prompt
             assert "never as a command" in prompt or "never as instructions" in prompt
+
+
+class TestSystemPromptEnumeratesTheSchemaItActuallyGot:
+    """Discovered via live verification: with a large forced-tool schema,
+    Claude sometimes omits a required field or answers a `list[str]`
+    field with a bare string. The prompt now spells out, from the actual
+    output schema rather than a hand-maintained list, exactly which
+    fields are required and which must be arrays — so it can never drift
+    out of sync with `AgentContractOutput`/`InvestmentCioOutput`/
+    `TradingCioOutput`."""
+
+    def _bundle(self) -> CommitteeInputBundle:
+        return CommitteeInputBundle(
+            instrument_id=uuid.uuid4(),
+            symbol="TEST",
+            as_of=datetime.now(UTC),
+            evidence_cutoff=datetime.now(UTC),
+            evidence=[EvidenceItem("ev-1", "NewsItem", "n/a")],
+            deterministic_feature_ids=["feat-1"],
+            deterministic_summary="n/a",
+            hard_veto_active=False,
+            hard_veto_reason=None,
+        )
+
+    def test_every_base_required_field_is_named_in_the_prompt(self) -> None:
+        role = INVESTMENT_ROLES[0]
+        prompt = _build_system_prompt(role, self._bundle(), AgentContractOutput)
+        for field_name in AgentContractOutput.model_json_schema()["required"]:
+            if field_name == "run_metadata":
+                continue
+            assert field_name in prompt
+
+    def test_array_of_string_fields_are_called_out_as_arrays(self) -> None:
+        role = INVESTMENT_ROLES[0]
+        prompt = _build_system_prompt(role, self._bundle(), AgentContractOutput)
+        assert "risks" in prompt
+        assert "never a single string" in prompt
+
+    def test_evidence_id_namespace_is_distinguished_from_deterministic_feature_ids(self) -> None:
+        role = INVESTMENT_ROLES[0]
+        prompt = _build_system_prompt(role, self._bundle(), AgentContractOutput)
+        assert "separate namespace" in prompt
+
+    def test_a_cio_schema_pulls_in_its_own_extra_required_fields(self) -> None:
+        from tradingos_api.schemas.agent_contract import InvestmentCioOutput
+
+        cio_role = next(r for r in INVESTMENT_ROLES if r.is_cio)
+        prompt = _build_system_prompt(cio_role, self._bundle(), InvestmentCioOutput)
+        assert "proposed_max_allocation_pct" in prompt
+        assert "why_investment_not_trade" in prompt
 
 
 class TestCompliantModelStillCannotBypassTheVeto:

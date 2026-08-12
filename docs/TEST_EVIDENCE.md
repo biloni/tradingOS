@@ -3224,3 +3224,137 @@ unchanged. `pip-audit` and `pnpm audit` both re-verified clean after
 this revision's dependency changes (`apscheduler` added to the backend;
 `next` 16.3.0 already fixed the frontend findings from task: secret/
 dependency scanning).
+
+## End-to-end platform testing (post-`paper-beta-v1`, 2026-08-11/12)
+
+After tagging `paper-beta-v1`, a live browser pass exercised the golden
+path end to end (login → dashboard/morning-plan → real Investment
+Committee run → real Alpaca paper order → portfolio/ops → `/ask`),
+deliberately including real Anthropic API calls and real Alpaca paper
+orders rather than staying on synthetic fixtures, to prove the deployed
+system rather than its test doubles. The full pass (scope, every page
+exercised, remaining scaffolds) is written up separately once the pass
+completes; this entry covers the one item from it with real code
+changes so far: closing the gap the earlier Revision Prompt 6 entry
+above flagged and left open ("real Claude calls against a 15-field
+forced-tool schema do not succeed 100% of the time").
+
+### Committee schema-validation reliability — root cause and fix
+
+A real 8-role Investment Committee + 9-role Tactical Trading Desk run
+against MRVL (`python -m tradingos_api.scripts.demo_prompt6`, live
+Anthropic calls) reproduced the known imperfection at higher volume: 5
+of 8 Investment roles and most of the Tactical roles failed schema
+validation. Reading the persisted `AgentRun.error_detail` for every
+failure (not just the printed summary) surfaced three distinct,
+reproducible patterns, in order of frequency:
+
+1. **A required field silently missing** — always the field declared
+   immediately after the long free-text `thesis` field in
+   `AgentContractOutput`. Confirmed across four consecutive live runs:
+   whichever field held that position was the one dropped
+   (`strongest_supporting_evidence`, then `risks`, tracking the field
+   as its declared position changed) — never a field ahead of `thesis`.
+2. **A `list[str]` field answered with a bare string** instead of a
+   JSON array (`risks`, `missing_information`, `invalidation_conditions`
+   each observed at least once) — a shape error, not a missing-content
+   error.
+3. **A factual claim citing a `deterministic_feature_id`** (e.g.
+   `feat-tactical-score-1`) as if it were an `evidence_id` — the CIO
+   roles restating the deterministic score in a `factual_claims` entry
+   and citing the feature id instead of a real evidence id, tripping
+   `AgentContractOutput._reject_unsupported_factual_claims`.
+
+None of these were parsing bugs — confirmed by reading `agent_runner.py`
+end to end: tool-call arguments come straight from the Anthropic SDK's
+own parsed `ToolUseBlock.input`, never custom text parsing. All three
+are genuine live-model behavior under a large forced single-tool-call
+schema (the same category of issue Revision Prompt 6's own
+`_model_facing_schema()`/`_unwrap_single_key_payload()` already
+document). Four fixes landed, verified with four successive live
+re-runs of the same MRVL scenario rather than trusting a single
+non-deterministic call:
+
+- **`agent_runner._coerce_string_list_fields()`** (new): before
+  validation, wraps a bare string in a single-element list for any
+  field the schema declares as an array of strings. Deterministic,
+  zero additional API cost, covers failure pattern 2 unconditionally —
+  tested in `test_agent_runner.py::TestStringValuedListFieldIsCoerced`
+  against a fake `LLMProvider`, no live call needed to prove it.
+- **`AgentContractOutput` field reordering** (`schemas/agent_contract.py`):
+  `thesis` moved to be the last required field, immediately before
+  `calibration_status` (has a default, so a drop there cannot fail
+  validation) and `run_metadata` (already stripped from the model-facing
+  schema). This turns failure pattern 1 from "a required field is
+  sometimes missing" into "a field with a safe fallback is sometimes
+  missing" — the class docstring records the empirical basis for the
+  ordering so a future edit doesn't undo it by accident.
+- **System prompt: explicit, schema-derived field checklist**
+  (`_build_system_prompt()` now takes the resolved output schema and
+  lists every required field and every array-of-string field by name,
+  generated from `output_schema.model_json_schema()` rather than
+  hand-maintained — so it can't drift out of sync with the schema).
+- **System prompt: evidence-id vs. deterministic-feature-id namespace
+  clarified**, with a concrete negative example ("a statement built
+  entirely from DETERMINISTIC_INPUTS is not a `factual_claims` entry"),
+  targeting failure pattern 3.
+
+Live verification, same MRVL scenario, `cost_ceiling_usd=$0.75` per
+lane, across four runs as fixes landed incrementally:
+
+| Run | Investment (of 8) | Tactical (of 9) | Change applied before this run |
+|---|---|---|---|
+| 1 (baseline) | 3 succeeded | 1 succeeded | — (reproduces the known gap) |
+| 2 | 6 succeeded | 5 succeeded | XML-tag prohibition (already in the prompt from initial diagnosis) |
+| 3 | 7 succeeded | 5 succeeded | List-coercion + schema-derived checklist + citation-namespace note |
+| 4 | 8 succeeded | 9 succeeded | `thesis` field reordering + concrete citation counter-example |
+
+Run 4: both sessions `COMPLETED`, both CIOs produced valid,
+schema-passing recommendations (`INVEST_WATCH` / `TRADE_WAIT`), 17 of
+17 role calls succeeded, total real spend across all four verification
+runs ≈ $1.45. `test_committee_prompt_injection.py`'s new
+`TestSystemPromptEnumeratesTheSchemaItActuallyGot` class asserts the
+checklist is generated from the live schema (so it can never silently
+go stale) without spending on a live call to prove it.
+
+**What this does and does not prove.** Four consecutive full-reliability
+runs is meaningful evidence at real API cost, not a formal guarantee —
+Claude's structured-output behavior under a large forced-tool schema is
+inherently non-deterministic, and a future run could still see an
+isolated field drop. The defense is layered on purpose: the coercion
+fix and the safe-fallback field position are deterministic, zero-cost
+mitigations that hold regardless of prompt compliance; the prompt
+changes reduce the *rate* of the underlying model behavior but are not
+relied upon alone. A single held-out failure in a 17-call run
+degrades that one role's `AgentRunOutcome` to `FAILED` and is visible
+in the audit trail — it does not corrupt the run or silently drop the
+failure, by the same guardrail contract Revision Prompt 6 established
+for every other provider-level failure mode.
+
+The separate, one-time-observed `proposed_max_allocation_pct` (`gt=0`)
+validation failure noted during initial diagnosis did not recur across
+any of the four verification runs and was not chased further —
+insufficient reproduction to diagnose confidently, tracked as a
+watch-item rather than a fix.
+
+### A note on the full suite after this many live runs
+
+Running the full backend suite immediately after the four live
+verification runs above shows 9 failures, all in
+`test_cost_budget.py`/`test_morning_plan_scheduler.py`/`test_scheduler.py`/
+`test_release_gate_journeys.py::TestSyntheticGoldenJourney` — none of
+them touching committee/agent code. Confirmed as dev-database
+pollution, not a regression: the same 9 tests fail identically against
+the unmodified pre-fix code run against the same dev database (verified
+by stashing this entry's code changes and re-running just those files).
+These tests assume "today" has no `ModelCallRecord`/`MorningPlanVersion`
+rows yet; hours of real live E2E testing against this shared dev
+Postgres instance — including the four committee runs and earlier
+scheduler/dashboard testing — left real rows dated today, which these
+tests read without any scoping to their own fixtures. Not fixed here:
+it's a pre-existing test-isolation gap (assumes a pristine "today" in a
+shared, non-ephemeral dev DB) that only a sustained live-testing session
+surfaces, and reproducing it depends on session history rather than
+code; a clean reset of the dev database before the next full-suite run
+makes it disappear. Tracked as a known limitation of testing against a
+persistent shared dev database rather than filed as a code fix.

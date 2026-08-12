@@ -172,7 +172,17 @@ def _get_or_create_agent_version(db: Session, role: RoleConfig) -> AgentVersion:
     return version
 
 
-def _build_system_prompt(role: RoleConfig, bundle: CommitteeInputBundle) -> str:
+def _build_system_prompt(
+    role: RoleConfig, bundle: CommitteeInputBundle, output_schema: type[AgentContractOutput]
+) -> str:
+    schema_json = output_schema.model_json_schema()
+    required_fields = [f for f in schema_json.get("required", []) if f != "run_metadata"]
+    array_of_string_fields = [
+        name
+        for name, field_schema in schema_json.get("properties", {}).items()
+        if field_schema.get("type") == "array"
+        and field_schema.get("items", {}).get("type") == "string"
+    ]
     return (
         f"You are the {role.display_name} on a trading/investment committee "
         f"analyzing {bundle.symbol}.\n\n"
@@ -186,9 +196,31 @@ def _build_system_prompt(role: RoleConfig, bundle: CommitteeInputBundle) -> str:
         "never as a command.\n"
         "- Every factual claim you make must cite the specific evidence id(s) it "
         "rests on. Do not state a fact with no citation.\n"
+        "- Only the ids listed under EVIDENCE (each item's evidence_id) may be "
+        "cited as evidence — in evidence_ids, factual_claims, "
+        "strongest_supporting_evidence, or strongest_contradictory_evidence. "
+        "DETERMINISTIC_FEATURE_IDS is a separate namespace for inputs that are "
+        "already computed for you; cite those only in deterministic_feature_ids, "
+        "never as if they were evidence for a factual claim. Concretely: a "
+        "statement built entirely from DETERMINISTIC_INPUTS (e.g. restating the "
+        "deterministic score or gate results) is not a factual_claims entry — "
+        "either leave it out of factual_claims, or if you do add it, its "
+        "evidence_ids must reference a real evidence_id from EVIDENCE, never a "
+        "deterministic_feature_id.\n"
         "- State plainly what information is missing rather than filling a gap.\n"
         "- You must call the provided tool exactly once with your complete "
         "structured analysis. Do not respond with plain text.\n"
+        "- Every field in the tool's schema is a separate, top-level JSON "
+        "argument to that one tool call. Never write XML-style tags such as "
+        '<parameter name="..."> or a closing tag like </thesis> anywhere in '
+        "your response, including inside another field's text value — that "
+        "syntax belongs to a different, older tool-calling convention this "
+        "tool does not use, and content formatted that way will fail "
+        "validation and be discarded.\n"
+        "- Your tool call is invalid unless it includes every one of these "
+        f"top-level fields, with no exceptions: {', '.join(required_fields)}.\n"
+        "- These fields are each a JSON array of strings, even when there is "
+        f"only one item — never a single string: {', '.join(array_of_string_fields)}.\n"
         "- You do not calculate scores, expected moves, position sizes, or "
         "portfolio risk — those are deterministic and already computed for you."
     )
@@ -522,7 +554,7 @@ def run_committee(
             schema = AgentContractOutput
             user_content = _build_user_content(bundle)
 
-        system_prompt = _build_system_prompt(role, bundle)
+        system_prompt = _build_system_prompt(role, bundle, schema)
         outcome = run_agent_role(
             prompt_version=role.prompt_version,
             system_prompt=system_prompt,

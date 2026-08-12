@@ -75,7 +75,19 @@ class AgentContractOutput(BaseModel):
     evidence_ids: list[str]
     factual_claims: list[FactualClaim] = Field(default_factory=list)
     deterministic_feature_ids: list[str] = Field(default_factory=list)
-    thesis: str = Field(min_length=1)
+    # Field order below is not just documentation — three rounds of live
+    # verification against the real Anthropic API traced every remaining
+    # schema-validation failure to exactly one pattern: under this
+    # schema's size, whichever required field is declared *immediately
+    # after* the long free-text `thesis` field is occasionally dropped
+    # from the tool call entirely (never a field ahead of `thesis`, and
+    # never more than the one). `thesis` is therefore placed last among
+    # the required fields, immediately before `calibration_status` (which
+    # has a default and so cannot fail validation if dropped) and
+    # `run_metadata` (stripped from the model-facing schema entirely —
+    # see `agent_runner._model_facing_schema`). A drop still costs a
+    # field, but it always lands on a field with a safe fallback instead
+    # of a required one.
     strongest_supporting_evidence: str = Field(min_length=1)
     strongest_contradictory_evidence: str = Field(min_length=1)
     risks: list[str]
@@ -83,6 +95,7 @@ class AgentContractOutput(BaseModel):
     invalidation_conditions: list[str]
     categorical_stance: CategoricalStance
     evidence_completeness: EvidenceCompleteness
+    thesis: str = Field(min_length=1)
     calibration_status: CalibrationStatus = "UNCALIBRATED"
     run_metadata: RunMetadata
 

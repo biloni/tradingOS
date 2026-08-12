@@ -92,6 +92,31 @@ def _unwrap_single_key_payload(
     return arguments
 
 
+def _coerce_string_list_fields(
+    arguments: dict[str, Any], output_schema: type[BaseModel]
+) -> dict[str, Any]:
+    """Discovered via live verification: under the same large forced-tool
+    schema, Claude sometimes answers a `list[str]` field (e.g. `risks`)
+    with a single string instead of a JSON array, while every other field
+    in the same call is shaped correctly. Wrapping a non-empty string in
+    a single-element list is a lossless, unambiguous correction — the
+    alternative is discarding an otherwise well-formed answer over one
+    field's container shape. Only applies to fields the schema declares
+    as an array of strings; anything else is left untouched and falls
+    through to normal validation."""
+    properties = output_schema.model_json_schema().get("properties", {})
+    coerced = dict(arguments)
+    for field_name, field_schema in properties.items():
+        if field_schema.get("type") != "array":
+            continue
+        if field_schema.get("items", {}).get("type") != "string":
+            continue
+        value = coerced.get(field_name)
+        if isinstance(value, str) and value:
+            coerced[field_name] = [value]
+    return coerced
+
+
 def _output_tool(output_schema: type[BaseModel]) -> dict[str, object]:
     return {
         "name": _OUTPUT_TOOL_NAME,
@@ -189,6 +214,7 @@ def run_agent_role(
     raw_arguments = _unwrap_single_key_payload(
         dict(response.tool_calls[0].arguments), output_schema
     )
+    raw_arguments = _coerce_string_list_fields(raw_arguments, output_schema)
     raw_arguments["run_metadata"] = {
         "model": response.model,
         "input_tokens": response.input_tokens,
