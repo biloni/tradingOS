@@ -12,6 +12,12 @@
     ]
   ],
   [
+    "/api/v1/ask",
+    [
+      "post"
+    ]
+  ],
+  [
     "/api/v1/auth/login",
     [
       "post"

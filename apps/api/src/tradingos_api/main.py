@@ -14,6 +14,7 @@ from tradingos_api.core.scheduler import start_scheduler, stop_scheduler
 from tradingos_api.core.security_headers import SecurityHeadersMiddleware
 from tradingos_api.routers import (
     alerts,
+    ask,
     auth,
     backtests,
     committee,
@@ -137,6 +138,7 @@ app.include_router(order_authority.approvals_router, dependencies=_AUTH)
 app.include_router(provider_diagnostics.router, dependencies=_AUTH)
 app.include_router(feature_diagnostics.router, dependencies=_AUTH)
 app.include_router(committee.router, dependencies=_AUTH)
+app.include_router(ask.router, dependencies=_AUTH)
 app.include_router(paper_auto_policy.router, dependencies=_AUTH)
 app.include_router(monitoring.router, dependencies=_AUTH)
 app.include_router(event_backtests.router, dependencies=_AUTH)

@@ -3358,3 +3358,76 @@ surfaces, and reproducing it depends on session history rather than
 code; a clean reset of the dev database before the next full-suite run
 makes it disappear. Tracked as a known limitation of testing against a
 persistent shared dev database rather than filed as a code fix.
+
+### Rebuilding `/api/v1/ask` (the NL-query feature) against the current schema
+
+The E2E golden-path pass found `/ask`'s frontend page fully built and
+its own unit test green, but the endpoint it called returned a real
+404 — `services/ask.py`/`routers/ask.py`/`services/llm_tools.py` were
+deleted in the "Phase 8: replace domain model, schema, migrations, seed
+data, and API" migration and never rebuilt; the frontend page (last
+touched in Phase 7) was never updated or removed, and its test mocks
+`fetch` entirely, so nothing caught the drift — the same "tests mock a
+phantom contract" shape as the Revision Prompt 15 root cause. A
+dedicated structural test even existed asserting `/ask` stayed deleted
+(`tests/test_read_only_boundary.py::TestAskEndpointIsRetiredNotJustUnrouted`,
+Revision Prompt 16) — correct for the retirement decision at the time,
+now superseded.
+
+Given the retired `services/ask.py` (ADR-019: tool-use loop, capped at
+`MAX_ITERATIONS = 5`, one Anthropic call → execute requested tools →
+feed results back → repeat) was well-designed and still directly
+compatible with the current `LLMProvider.complete()` signature (the
+same interface `services/committee_orchestrator.py` already uses), the
+rebuild kept ADR-019's loop verbatim and rewrote only what had to
+change against the current schema:
+
+- **`services/ask_tools.py`** (replaces the deleted `services/llm_tools.py`):
+  three read-only tools — `query_instruments`, `get_recommendations`
+  (reads existing `Recommendation`/`RecommendationVersion` rows, most of
+  them now real committee output; never generates one, unlike the old
+  MVP's `compute_recommendation`), `get_upcoming_earnings` (the
+  exercise's own worked example: "which symbols on my watchlist have
+  earnings coming up in the next 14 days"). Every query mirrors an
+  existing router's own SQLAlchemy pattern verbatim (`db.scalars(stmt).all()`
+  then `db.get(Instrument, id)` per row) rather than inventing a new one.
+- **`services/ask.py`**: same loop shape as the deleted original, logging
+  every call to `ModelCallRecord` (`agent_run_id=None` — the committee
+  path's own audit table, confirmed nullable for exactly this case)
+  instead of the retired `LLMCallLog`.
+- **`routers/ask.py`**: `POST /api/v1/ask`, gated by
+  `core/rate_limit.py::ask_rate_limiter` — a 5-request-burst,
+  1-per-12-second token bucket that had been sitting unused in the
+  codebase since before the Phase 8 migration, already anticipating
+  this exact rebuild (`core/dependencies.py::get_llm_provider`'s own
+  docstring already referenced a `tests/test_ask_endpoint.py` that
+  didn't exist yet).
+- **`tests/test_read_only_boundary.py`**: `TestAskEndpointIsRetiredNotJustUnrouted`
+  (asserted the module files must not exist) replaced with
+  `TestAskEndpointHasNoWriteCapability` — the same AST-based import/
+  name-reference proof already used for the Cowork brief path, now
+  proving all three `/ask` files never import from or reference any
+  order-mutating module or function, rather than proving `/ask` doesn't
+  exist at all. `docs/SECURITY.md`'s OA-7 discussion and
+  `docs/PROVIDER_MATRIX.md`'s cost-tracking history both updated to stop
+  asserting `/ask` is permanently gone.
+- **Frontend**: `lib/api/ask.ts`'s types swapped from the old MVP shape
+  (`recommendation_id: number`, `symbol_ticker`, `llm_call_log_ids`) to
+  the current one (`recommendation_id`/`model_call_record_ids` as UUID
+  strings, `ticker`, `mode`, `lane_action`). `app/ask/page.tsx` updated
+  to render the new field names. `__tests__/ask.test.tsx`'s mocked
+  response bodies updated to match — still mocks `fetch` (unavoidable
+  for a component test), but now mocks the *real* contract instead of a
+  dead one.
+
+**Tests, no live call:** `tests/test_ask_tools.py` (12 tests, fixtures
+built inside each test's own rolled-back transaction rather than
+depending on seed/live data) and `tests/test_ask_endpoint.py` (6 tests
+against a fake `LLMProvider` via `app.dependency_overrides`, covering:
+a real tool-result round trip, an answer with no tool call, the
+`MAX_ITERATIONS` cap actually terminating an LLM that never stops
+requesting tools, blank-question 422, rate-limit 429, and no-API-key
+503) — 18 new backend tests, all passing. Frontend: `tsc --noEmit`
+clean, `eslint` clean, `next build` clean (24 routes now), full vitest
+suite 75/75 passing. OpenAPI path/method snapshot regenerated at 139
+paths (the new `POST /api/v1/ask`).

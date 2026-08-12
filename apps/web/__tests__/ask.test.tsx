@@ -37,7 +37,7 @@ describe("AskPage", () => {
     mockAskResponse({
       answer: "There are no symbols matching that filter right now.",
       recommendations: [],
-      llm_call_log_ids: [1],
+      model_call_record_ids: ["11111111-1111-1111-1111-111111111111"],
       iterations: 1,
     });
     const user = userEvent.setup();
@@ -58,14 +58,15 @@ describe("AskPage", () => {
       answer: "AAPL and MSFT look aligned for a swing entry.",
       recommendations: [
         {
-          recommendation_id: 1,
-          symbol_ticker: "AAPL",
+          recommendation_id: "22222222-2222-2222-2222-222222222222",
+          ticker: "AAPL",
+          mode: "TACTICAL",
+          lane_action: "TRADE_ENTER",
           score: "0.72",
           confidence: "HIGH",
-          signal_breakdown: { trend: 1, momentum: 1 },
         },
       ],
-      llm_call_log_ids: [1],
+      model_call_record_ids: ["11111111-1111-1111-1111-111111111111"],
       iterations: 2,
     });
     const user = userEvent.setup();

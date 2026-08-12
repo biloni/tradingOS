@@ -35,7 +35,10 @@ non-intro `claude-sonnet-5` pricing, re-verified via the `claude-api`
 skill) and `models.operations.ModelCallRecord` (one row per `AgentRun`,
 ADR-043's deliberately narrower successor to `LLMCallLog` — no full
 request/response payload, just token counts/cost/latency/a short
-excerpt).
+excerpt). (`services/ask.py` itself was later rebuilt from scratch
+against the current schema during end-to-end platform testing — logging
+through `ModelCallRecord`, not a resurrected `LLMCallLog` — see
+docs/TEST_EVIDENCE.md's end-to-end platform testing entry.)
 
 ---
 

@@ -1,17 +1,18 @@
 import { apiPost } from "./client";
 
 export type RecommendationSummary = {
-  recommendation_id: number;
-  symbol_ticker: string;
-  score: string;
+  recommendation_id: string;
+  ticker: string;
+  mode: string;
+  lane_action: string | null;
   confidence: string;
-  signal_breakdown: Record<string, number>;
+  score: string | null;
 };
 
 export type AskResponse = {
   answer: string;
   recommendations: RecommendationSummary[];
-  llm_call_log_ids: number[];
+  model_call_record_ids: string[];
   iterations: number;
 };
 

@@ -80,8 +80,9 @@ export default function AskPage() {
                 <div className="mt-3 flex flex-col gap-2 border-t border-zinc-300 pt-3 dark:border-zinc-700">
                   {message.recommendations.map((rec) => (
                     <div key={rec.recommendation_id} className="flex items-center gap-2 text-xs">
-                      <span className="font-medium">{rec.symbol_ticker}</span>
-                      <span>score {rec.score}</span>
+                      <span className="font-medium">{rec.ticker}</span>
+                      {rec.lane_action && <span>{rec.lane_action}</span>}
+                      {rec.score && <span>score {rec.score}</span>}
                       <StatusPill status={rec.confidence} />
                     </div>
                   ))}

@@ -79,7 +79,8 @@
 - Server-side only; the model never receives raw DB credentials or executes
   SQL directly (tool-use pattern, not text-to-SQL).
 - Tool allow-list with schema-validated parameters — **implemented,
-  Phase 4** (`services/llm_tools.py`).
+  Phase 4, rebuilt against the current schema during end-to-end platform
+  testing** (`services/ask_tools.py`).
 - Responses grounded in tool results only — the system prompt instructs the
   model to refuse to speculate beyond what tools returned (principle 4/7).
 - Rate-limited endpoint — **implemented, Phase 4**
@@ -134,9 +135,16 @@ of everything above:
   order-fill function (`_apply_fill`) and every order-mutating endpoint
   (`propose_order`/`confirm_order`/`cancel_order`/`import_fills`) are
   defined only in `routers/orders.py`, nowhere else under `src/`. This is
-  a real, checked invariant today, not just a stated goal — Phase 8
-  already retired the one component (`services/ask.py`'s LLM tool-use
-  loop) that could have been a text-to-action risk.
+  a real, checked invariant today, not just a stated goal. `services/ask.py`'s
+  LLM tool-use loop (the one component that could plausibly be a
+  text-to-action risk) was retired in Phase 8 and rebuilt during
+  end-to-end platform testing against the current schema (ADR-019) —
+  its tool set is deliberately read-only (`query_instruments`/
+  `get_recommendations`/`get_upcoming_earnings`, none of which write),
+  and `tests/test_read_only_boundary.py::TestAskEndpointHasNoWriteCapability`
+  proves structurally that none of `routers/ask.py`/`services/ask.py`/
+  `services/ask_tools.py` import from or reference any order-mutating
+  module or function name, the same way the Cowork brief path is proven.
 - **Four-tier order authority (OA-1..OA-6).** `RESEARCH_ONLY`,
   `PAPER_MANUAL_APPROVAL`, `PAPER_AUTO_POLICY`, `LIVE_CONFIRM_EACH_ORDER`
   — implemented as a standalone, tested policy module

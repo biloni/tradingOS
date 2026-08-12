@@ -9,16 +9,21 @@ Two read-only surfaces exist in the current codebase:
   the Cowork scheduled-task delivery contract (SS-5, ADR-049): read-only
   by design, and the one channel PROJECT_INSTRUCTIONS.md's v2 amendment
   names explicitly as non-exempt from this rule.
-- The `/ask` LLM tool-use endpoint was retired in the "Phase 8" commit
-  (docs/SECURITY.md's v2 amendment section already documents this) —
-  there is no backend route left to check; noted here so a future
-  re-introduction of an `/ask`-equivalent NL-query feature knows to add
-  itself to this test, not skip it.
+- `POST /api/v1/ask` (`routers/ask.py`/`services/ask.py`/
+  `services/ask_tools.py`) — the LLM tool-use endpoint originally
+  retired in the "Phase 8" commit and rebuilt during end-to-end platform
+  testing against the current schema (ADR-019). Its own design already
+  makes it read-only (`services/ask_tools.py`'s docstring: "none of
+  these tools write anything ... `/ask` only ever reads"), but the
+  original retirement note here said exactly this — "so a future
+  re-introduction ... knows to add itself to this test, not skip it" —
+  so it's proven the same structural way the Cowork path is, not just
+  asserted in a docstring.
 
-These are import-level and text-level checks on `routers/morning_plan.py`
-specifically (not the whole `src/` tree) — the broader "only orders.py
-defines the mutating entrypoints" fact is already proven elsewhere;
-this file proves the read-only router never reaches for them.
+These are import-level and text-level checks on the specific files named
+above (not the whole `src/` tree) — the broader "only orders.py defines
+the mutating entrypoints" fact is already proven elsewhere; this file
+proves each read-only surface never reaches for them.
 """
 
 from __future__ import annotations
@@ -26,9 +31,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-MORNING_PLAN_ROUTER = (
-    Path(__file__).resolve().parent.parent / "src" / "tradingos_api" / "routers" / "morning_plan.py"
-)
+_ROUTERS_DIR = Path(__file__).resolve().parent.parent / "src" / "tradingos_api" / "routers"
+_SERVICES_DIR = Path(__file__).resolve().parent.parent / "src" / "tradingos_api" / "services"
+
+MORNING_PLAN_ROUTER = _ROUTERS_DIR / "morning_plan.py"
+ASK_ROUTER = _ROUTERS_DIR / "ask.py"
+ASK_SERVICE = _SERVICES_DIR / "ask.py"
+ASK_TOOLS_SERVICE = _SERVICES_DIR / "ask_tools.py"
 
 # Modules that own state-changing order/approval/kill-switch/mode-change
 # capability — a read-only delivery router must never import from any
@@ -112,15 +121,53 @@ class TestCoworkDeliveryPathHasNoWriteCapability:
         assert found, "get_cowork_brief not found in routers/morning_plan.py"
 
 
-class TestAskEndpointIsRetiredNotJustUnrouted:
-    """`/ask` (services/ask.py, routers/ask.py) was deleted in Phase 8 —
-    confirmed absent here so this fact stays structurally checked rather
-    than only asserted in a docs comment that can drift."""
+class TestAskEndpointHasNoWriteCapability:
+    """`/ask` was rebuilt during end-to-end platform testing (ADR-019) —
+    this proves it stayed read-only the same structural way
+    `TestCoworkDeliveryPathHasNoWriteCapability` proves it for the
+    Cowork brief, across all three files the request actually touches
+    (`routers/ask.py` → `services/ask.py` → `services/ask_tools.py`)."""
 
-    def test_no_ask_router_module_exists(self) -> None:
-        routers_dir = MORNING_PLAN_ROUTER.parent
-        assert not (routers_dir / "ask.py").exists()
+    def test_ask_modules_import_no_state_changing_module(self) -> None:
+        for path in (ASK_ROUTER, ASK_SERVICE, ASK_TOOLS_SERVICE):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            imported = _imported_module_names(tree)
+            offending = [
+                module
+                for module in imported
+                if any(module.startswith(prefix) for prefix in _FORBIDDEN_MODULE_PREFIXES)
+            ]
+            assert offending == [], (
+                f"{path.name} (the /ask read-only NL-query path) imports from "
+                f"state-changing module(s): {offending}"
+            )
 
-    def test_no_ask_service_module_exists(self) -> None:
-        services_dir = MORNING_PLAN_ROUTER.parent.parent / "services"
-        assert not (services_dir / "ask.py").exists()
+    def test_ask_modules_never_reference_a_mutating_function_name(self) -> None:
+        for path in (ASK_ROUTER, ASK_SERVICE, ASK_TOOLS_SERVICE):
+            text = path.read_text(encoding="utf-8")
+            offending = sorted(name for name in _FORBIDDEN_NAMES if name in text)
+            assert offending == [], (
+                f"{path.name} references order/approval/kill-switch mutating "
+                f"function name(s): {offending}"
+            )
+
+    def test_ask_endpoint_is_a_post_route(self) -> None:
+        """`/ask` is intentionally a POST (it's an LLM call with a request
+        body, not a bare resource fetch) — that alone doesn't make it
+        state-changing; the two checks above are what actually prove
+        that. This just pins the route's shape so a future change is
+        deliberate, not accidental."""
+        tree = ast.parse(ASK_ROUTER.read_text(encoding="utf-8"))
+        found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "ask":
+                found = True
+                for decorator in node.decorator_list:
+                    if isinstance(decorator, ast.Call) and isinstance(
+                        decorator.func, ast.Attribute
+                    ):
+                        assert decorator.func.attr == "post", (
+                            f"ask() is decorated with @router.{decorator.func.attr}, "
+                            "not @router.post."
+                        )
+        assert found, "ask() not found in routers/ask.py"
