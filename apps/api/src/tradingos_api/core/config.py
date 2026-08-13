@@ -3,6 +3,7 @@ from functools import lru_cache
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 
 class Settings(BaseSettings):
@@ -38,14 +39,16 @@ class Settings(BaseSettings):
         default driver resolution for the bare `postgresql` dialect
         (`psycopg2`) fails at engine-creation time with `ModuleNotFoundError`,
         crashing both the app (`db/session.py`) and migrations
-        (`alembic/env.py`) on startup. A URL that already names a driver
-        (`postgresql+psycopg://`, as local dev's own default above does)
-        is left untouched."""
-        if value.startswith("postgres://"):
-            return "postgresql+psycopg://" + value[len("postgres://") :]
-        if value.startswith("postgresql://"):
-            return "postgresql+psycopg://" + value[len("postgresql://") :]
-        return value
+        (`alembic/env.py`) on startup. Parsed via SQLAlchemy's own
+        `make_url()` rather than a manual string-prefix check — that
+        correctly handles drivername casing and leaves user/password/host/
+        query untouched, so a value that already names a driver
+        (`postgresql+psycopg://`, as local dev's own default above does,
+        or an explicit `+psycopg2`/`+asyncpg`) is never rewritten."""
+        url = make_url(value)
+        if url.drivername.lower() in ("postgres", "postgresql"):
+            url = url.set(drivername="postgresql+psycopg")
+        return url.render_as_string(hide_password=False)
 
     # Revision Prompt 16 — comma-separated allow-list, so a real
     # deployment (task: Dockerfiles + deployment docs) can point this at
