@@ -1,6 +1,7 @@
 from decimal import Decimal
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +27,25 @@ class Settings(BaseSettings):
     operating_mode: str = "RESEARCH_ONLY"
 
     database_url: str = "postgresql+psycopg://tradingos_app:@localhost:5432/tradingos"
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_database_url_driver(cls, value: str) -> str:
+        """Managed-Postgres hosts (Railway, Heroku, etc.) hand out a bare
+        `postgres://` or `postgresql://` connection string with no driver
+        suffix. This project only installs `psycopg` (v3) — never the
+        classic `psycopg2` — so without this normalization, SQLAlchemy's
+        default driver resolution for the bare `postgresql` dialect
+        (`psycopg2`) fails at engine-creation time with `ModuleNotFoundError`,
+        crashing both the app (`db/session.py`) and migrations
+        (`alembic/env.py`) on startup. A URL that already names a driver
+        (`postgresql+psycopg://`, as local dev's own default above does)
+        is left untouched."""
+        if value.startswith("postgres://"):
+            return "postgresql+psycopg://" + value[len("postgres://") :]
+        if value.startswith("postgresql://"):
+            return "postgresql+psycopg://" + value[len("postgresql://") :]
+        return value
 
     # Revision Prompt 16 — comma-separated allow-list, so a real
     # deployment (task: Dockerfiles + deployment docs) can point this at
