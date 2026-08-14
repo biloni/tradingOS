@@ -10,13 +10,19 @@
 # not a container-runtime env var — changing it means rebuilding the
 # image, not just restarting the container.
 
-FROM node:20-alpine AS deps
+# node:22 (not 20): the pnpm version pinned in package.json's
+# `packageManager` field requires Node >=22.13 to run at all (it uses
+# the `node:sqlite` built-in, added in 22.5) -- corepack downloads and
+# executes that exact pnpm version regardless of which Node image it's
+# running on, so the base image has to satisfy pnpm's own floor, not
+# just this app's.
+FROM node:22-alpine AS deps
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
@@ -26,7 +32,7 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 RUN pnpm build
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 nextjs
