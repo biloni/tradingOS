@@ -41,7 +41,12 @@ ENV PORT=8000
 # platform-level "Application failed to respond", not an app crash).
 # `apps/web/Dockerfile`'s Next.js server already reads $PORT itself;
 # this makes the api container equally portable across hosts.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\", \"8000\")}/health', timeout=3)" || exit 1
+#
+# HEALTHCHECK deliberately removed (temporary, per Railway support
+# troubleshooting a live "Application failed to respond" case,
+# 2026-08-13/14): testing whether Railway's own routing treats a
+# Docker-level HEALTHCHECK's status as a gate on whether to route
+# traffic to the container at all, independent of Railway's own
+# platform-level health checks. Re-add once confirmed either way.
 
 CMD uvicorn tradingos_api.main:app --host 0.0.0.0 --port "$PORT"
