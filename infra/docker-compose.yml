@@ -54,6 +54,13 @@ services:
       # not — this needs the origin the browser actually loads the web
       # app from, not the internal service hostname.
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Was missing from this file entirely (found via live E2E testing,
+      # 2026-08-17) -- setting OPERATING_MODE in infra/.env silently had
+      # no effect since docker-compose never passed it into the
+      # container. Defaults to RESEARCH_ONLY, matching Settings' own
+      # code-level default (core/config.py) -- safe-by-default even if
+      # this line is somehow skipped.
+      OPERATING_MODE: ${OPERATING_MODE:-RESEARCH_ONLY}
       ALPACA_API_KEY_ID: ${ALPACA_API_KEY_ID:-}
       ALPACA_API_SECRET_KEY: ${ALPACA_API_SECRET_KEY:-}
       ALPACA_BASE_URL: ${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}
