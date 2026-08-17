@@ -673,7 +673,7 @@ def _seed_committee_and_recommendations(
     db.flush()
 
     prompt_versions: dict[AgentRole, PromptVersion] = {}
-    for role in AgentRole:
+    for role in AGENT_ROLE_NAMES:
         template = PromptTemplate(agent_role=role, name=f"{AGENT_ROLE_NAMES[role]} system prompt")
         db.add(template)
         db.flush()
@@ -688,7 +688,7 @@ def _seed_committee_and_recommendations(
     db.flush()
 
     agent_versions: dict[AgentRole, AgentVersion] = {}
-    for role in AgentRole:
+    for role in AGENT_ROLE_NAMES:
         av = AgentVersion(
             agent_definition_id=agent_defs[role].id,
             version_label=f"committee-{role.value.lower()}-v1",
@@ -720,7 +720,7 @@ def _seed_committee_and_recommendations(
         AgentRole.PORTFOLIO_MANAGER: None,
         AgentRole.CIO: None,
     }
-    for role in AgentRole:
+    for role in AGENT_ROLE_NAMES:
         run = AgentRun(
             committee_session_id=session_.id,
             agent_version_id=agent_versions[role].id,
