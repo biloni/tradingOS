@@ -41,6 +41,7 @@ from tradingos_api.models.enums import (
     AlertDeliveryStatus,
     AlertSeverity,
     AlertStatus,
+    AlertType,
     AssetType,
     BacktestTradeExitReason,
     CashLedgerEntryType,
@@ -1208,6 +1209,7 @@ def _seed_operations(db: Session, user: UserProfile, instruments: dict[str, Inst
     alert = Alert(
         owner_user_id=user.id,
         instrument_id=instruments["TSLA"].id,
+        alert_type=AlertType.EARNINGS_APPROACHING,
         severity=AlertSeverity.WARNING,
         status=AlertStatus.OPEN,
         title="TSLA earnings inside the swing window",
