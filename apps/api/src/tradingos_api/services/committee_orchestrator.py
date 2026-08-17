@@ -550,9 +550,21 @@ def run_committee(
                 else TradingCioOutput
             )
             user_content = _build_user_content(bundle, analyst_summaries=analyst_summaries)
+            # The CIO call is structurally heavier than any single analyst
+            # call — it synthesizes every other role's summary and produces
+            # a larger structured contract — so the same per-call budget
+            # that's reasonable for one analyst is tight for it (observed
+            # live: a 30s default timed out the CIO call after 8/8 analyst
+            # calls had already succeeded). Doubling the caller's requested
+            # budget, capped at the schema's own 120s ceiling
+            # (`CommitteeRunRequest.per_call_timeout_seconds`'s `le=120`),
+            # gives CIO proportionally more room without silently raising
+            # every analyst call's timeout too.
+            role_timeout_seconds = min(per_call_timeout_seconds * 2, 120.0)
         else:
             schema = AgentContractOutput
             user_content = _build_user_content(bundle)
+            role_timeout_seconds = per_call_timeout_seconds
 
         system_prompt = _build_system_prompt(role, bundle, schema)
         outcome = run_agent_role(
@@ -563,7 +575,7 @@ def run_committee(
             llm=llm,
             cost_ceiling_usd=cost_ceiling_usd,
             spent_so_far_usd=spent,
-            timeout_seconds=per_call_timeout_seconds,
+            timeout_seconds=role_timeout_seconds,
         )
         spent += outcome.cost_usd
         agent_run_id = _persist_agent_run(db, session, role, bundle, outcome)

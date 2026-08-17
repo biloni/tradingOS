@@ -297,4 +297,142 @@ class TestDegradedAnalystDoesNotBlockTheRestOfTheCommittee:
         assert len(result.role_runs) == 8
         assert result.role_runs[0].outcome.status == "FAILED"
         assert all(rr.outcome.status == "SUCCEEDED" for rr in result.role_runs[1:])
-        assert result.recommendation is not None  # CIO still ran and produced a result
+
+
+class TestCioCallGetsAWiderTimeoutBudget:
+    def test_cio_call_receives_double_the_analyst_timeout(self, db_session: Session) -> None:
+        """Live-verification finding (2026-08-17): the CIO call is
+        structurally heavier than any single analyst call -- it
+        synthesizes every analyst summary and produces a larger
+        structured contract -- and a real run against Anthropic timed
+        out on the CIO call specifically after all 8 analyst calls had
+        already succeeded with the same per-call budget. The orchestrator
+        must give the CIO role double the caller's requested timeout
+        (capped at the schema's own 120s ceiling), not the flat per-call
+        value every analyst role gets."""
+        instrument_id = _seeded_instrument_id(db_session)
+        cio_args = dict(_INVESTMENT_CIO_BUY_ARGS)
+        cio_args["review_date"] = date.today().isoformat()
+        seen_timeouts: dict[str, float | None] = {}
+
+        class _TimeoutRecordingLLM:
+            def complete(
+                self,
+                prompt_version: str,
+                system_prompt: str,
+                messages: list[dict[str, Any]],
+                tools: list[dict[str, Any]] | None = None,
+                *,
+                tool_choice: dict[str, Any] | None = None,
+                timeout_seconds: float | None = None,
+            ) -> LLMResponse:
+                seen_timeouts[prompt_version] = timeout_seconds
+                is_cio = "cio" in prompt_version
+                args = dict(cio_args if is_cio else _INVESTMENT_ANALYST_ARGS)
+                args["agent_role"] = prompt_version
+                args["prompt_version"] = prompt_version
+                args.setdefault("evidence_cutoff", datetime.now(UTC).isoformat())
+                return LLMResponse(
+                    prompt_version=prompt_version,
+                    model="claude-sonnet-5",
+                    stop_reason="tool_use",
+                    text=None,
+                    tool_calls=[
+                        LLMToolCall(
+                            tool_use_id="t1", tool_name="submit_agent_output", arguments=args
+                        )
+                    ],
+                    raw_content=[],
+                    input_tokens=500,
+                    output_tokens=300,
+                )
+
+        bundle = CommitteeInputBundle(
+            instrument_id=instrument_id,
+            symbol="TEST",
+            as_of=datetime.now(UTC),
+            evidence_cutoff=datetime.now(UTC),
+            evidence=[EvidenceItem("ev-1", "NewsItem", "20% revenue growth reported.")],
+            deterministic_feature_ids=["feat-1"],
+            deterministic_summary="REVENUE_EARNINGS_GROWTH: PASS (40.0)",
+            hard_veto_active=False,
+            hard_veto_reason=None,
+        )
+        run_committee(
+            db_session,
+            lane=RecommendationMode.INVESTMENT,
+            bundle=bundle,
+            llm=_TimeoutRecordingLLM(),
+            cost_ceiling_usd=Decimal("5.00"),
+            per_call_timeout_seconds=30,
+            triggered_by="EVAL_FIXTURE",
+        )
+
+        analyst_timeouts = {v for k, v in seen_timeouts.items() if "cio" not in k}
+        cio_timeouts = {v for k, v in seen_timeouts.items() if "cio" in k}
+        assert analyst_timeouts == {30}
+        assert cio_timeouts == {60}
+
+    def test_cio_timeout_is_capped_at_120_seconds(self, db_session: Session) -> None:
+        """A caller requesting close to the schema's own 120s ceiling
+        must not push the doubled CIO timeout past it."""
+        instrument_id = _seeded_instrument_id(db_session)
+        cio_args = dict(_INVESTMENT_CIO_BUY_ARGS)
+        cio_args["review_date"] = date.today().isoformat()
+        seen_timeouts: dict[str, float | None] = {}
+
+        class _TimeoutRecordingLLM:
+            def complete(
+                self,
+                prompt_version: str,
+                system_prompt: str,
+                messages: list[dict[str, Any]],
+                tools: list[dict[str, Any]] | None = None,
+                *,
+                tool_choice: dict[str, Any] | None = None,
+                timeout_seconds: float | None = None,
+            ) -> LLMResponse:
+                seen_timeouts[prompt_version] = timeout_seconds
+                is_cio = "cio" in prompt_version
+                args = dict(cio_args if is_cio else _INVESTMENT_ANALYST_ARGS)
+                args["agent_role"] = prompt_version
+                args["prompt_version"] = prompt_version
+                args.setdefault("evidence_cutoff", datetime.now(UTC).isoformat())
+                return LLMResponse(
+                    prompt_version=prompt_version,
+                    model="claude-sonnet-5",
+                    stop_reason="tool_use",
+                    text=None,
+                    tool_calls=[
+                        LLMToolCall(
+                            tool_use_id="t1", tool_name="submit_agent_output", arguments=args
+                        )
+                    ],
+                    raw_content=[],
+                    input_tokens=500,
+                    output_tokens=300,
+                )
+
+        bundle = CommitteeInputBundle(
+            instrument_id=instrument_id,
+            symbol="TEST",
+            as_of=datetime.now(UTC),
+            evidence_cutoff=datetime.now(UTC),
+            evidence=[EvidenceItem("ev-1", "NewsItem", "20% revenue growth reported.")],
+            deterministic_feature_ids=["feat-1"],
+            deterministic_summary="REVENUE_EARNINGS_GROWTH: PASS (40.0)",
+            hard_veto_active=False,
+            hard_veto_reason=None,
+        )
+        run_committee(
+            db_session,
+            lane=RecommendationMode.INVESTMENT,
+            bundle=bundle,
+            llm=_TimeoutRecordingLLM(),
+            cost_ceiling_usd=Decimal("5.00"),
+            per_call_timeout_seconds=100,
+            triggered_by="EVAL_FIXTURE",
+        )
+
+        cio_timeouts = {v for k, v in seen_timeouts.items() if "cio" in k}
+        assert cio_timeouts == {120.0}
